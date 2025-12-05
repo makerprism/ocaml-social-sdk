@@ -141,8 +141,8 @@ The SDK follows a runtime-agnostic design:
 | LinkedIn | ✅ | ✅ | ✅ | - | - | - | ⚠️ | ⚠️ |
 | Mastodon | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
 | Twitter v1 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | - | - | ⚠️ | ⚠️ |
-| Facebook | ⚠️ | ⚠️ | ⚠️ | - | ❌ | ⚠️ | ⚠️ | ⚠️ |
-| Instagram | ⚠️ | ⚠️ | ⚠️ | - | ❌ | ⚠️ | ⚠️ | ⚠️ |
+| Facebook | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| Instagram | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 | YouTube | ⚠️ | - | - | - | - | ⚠️ | ⚠️ | ⚠️ |
 | Pinterest | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | ⚠️ |
 | TikTok | ⚠️ | - | - | - | - | ⚠️ | ⚠️ | ⚠️ |

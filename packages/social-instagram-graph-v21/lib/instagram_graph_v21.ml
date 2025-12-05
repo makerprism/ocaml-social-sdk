@@ -72,6 +72,7 @@ module OAuth = struct
       | Post_video
       | Post_carousel
       | Post_reel
+      | Post_story
       | Read_profile
       | Read_insights
       | Manage_comments
@@ -80,7 +81,7 @@ module OAuth = struct
     let for_operations ops =
       let base = ["instagram_basic"; "pages_show_list"; "pages_read_engagement"] in
       let needs_publish = List.exists (fun o -> 
-        o = Post_image || o = Post_video || o = Post_carousel || o = Post_reel
+        o = Post_image || o = Post_video || o = Post_carousel || o = Post_reel || o = Post_story
       ) ops in
       let needs_comments = List.exists (fun o -> o = Manage_comments) ops in
       let needs_insights = List.exists (fun o -> o = Read_insights) ops in
@@ -983,6 +984,202 @@ module Make (Config : CONFIG) = struct
               on_error)
           on_error)
       on_error
+  
+  (** {1 Instagram Stories} *)
+  
+  (** Create story container for image
+      
+      Instagram Stories use a separate media_type "STORIES".
+      Stories are full-screen vertical content (9:16 aspect ratio recommended).
+      Stories expire after 24 hours.
+      
+      @param ig_user_id Instagram Business Account ID
+      @param access_token Valid access token
+      @param image_url Publicly accessible URL of the image
+      @param on_success Continuation receiving container ID
+      @param on_error Continuation receiving error message
+  *)
+  let create_story_image_container ~ig_user_id ~access_token ~image_url on_success on_error =
+    let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
+    
+    let params = [
+      ("media_type", ["STORIES"]);
+      ("image_url", [image_url]);
+    ] @
+    (* Add app secret proof if available *)
+    (match compute_app_secret_proof ~access_token with
+     | Some proof -> [("appsecret_proof", [proof])]
+     | None -> [])
+    in
+    
+    let body = Uri.encoded_of_query params in
+    let headers = [
+      ("Content-Type", "application/x-www-form-urlencoded");
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+    
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          try
+            let open Yojson.Basic.Util in
+            let json = Yojson.Basic.from_string response.body in
+            let container_id = json |> member "id" |> to_string in
+            on_success container_id
+          with e ->
+            on_error (Printf.sprintf "Failed to parse story container response: %s" (Printexc.to_string e))
+        else
+          on_error (parse_error_response response.body response.status))
+      on_error
+  
+  (** Create story container for video
+      
+      Video stories must be:
+      - MP4 or MOV format
+      - 1-60 seconds duration
+      - Recommended: 9:16 aspect ratio (1080x1920)
+      
+      @param ig_user_id Instagram Business Account ID
+      @param access_token Valid access token
+      @param video_url Publicly accessible URL of the video
+      @param on_success Continuation receiving container ID
+      @param on_error Continuation receiving error message
+  *)
+  let create_story_video_container ~ig_user_id ~access_token ~video_url on_success on_error =
+    let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
+    
+    let params = [
+      ("media_type", ["STORIES"]);
+      ("video_url", [video_url]);
+    ] @
+    (* Add app secret proof if available *)
+    (match compute_app_secret_proof ~access_token with
+     | Some proof -> [("appsecret_proof", [proof])]
+     | None -> [])
+    in
+    
+    let body = Uri.encoded_of_query params in
+    let headers = [
+      ("Content-Type", "application/x-www-form-urlencoded");
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+    
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          try
+            let open Yojson.Basic.Util in
+            let json = Yojson.Basic.from_string response.body in
+            let container_id = json |> member "id" |> to_string in
+            on_success container_id
+          with e ->
+            on_error (Printf.sprintf "Failed to parse story video container response: %s" (Printexc.to_string e))
+        else
+          on_error (parse_error_response response.body response.status))
+      on_error
+  
+  (** Post image story to Instagram
+      
+      Posts an image as an Instagram Story. Stories are full-screen vertical
+      content that expires after 24 hours.
+      
+      Requirements:
+      - Image must be publicly accessible via HTTPS
+      - Recommended: 9:16 aspect ratio (1080x1920 pixels)
+      - Supported formats: JPEG, PNG
+      - Maximum file size: 8 MB
+      
+      @param account_id Internal account identifier
+      @param image_url Publicly accessible URL of the image
+      @param on_success Continuation receiving the media ID
+      @param on_error Continuation receiving error message
+  *)
+  let post_story_image ~account_id ~image_url on_success on_error =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_ig_user_id ~account_id
+          (fun ig_user_id ->
+            (* Create story container with image *)
+            create_story_image_container ~ig_user_id ~access_token ~image_url
+              (fun container_id ->
+                (* Poll and publish *)
+                poll_container_status ~container_id ~access_token ~ig_user_id 
+                  ~attempt:1 ~max_attempts:5 on_success on_error)
+              on_error)
+          on_error)
+      on_error
+  
+  (** Post video story to Instagram
+      
+      Posts a video as an Instagram Story. Stories are full-screen vertical
+      content that expires after 24 hours.
+      
+      Requirements:
+      - Video must be publicly accessible via HTTPS
+      - Duration: 1-60 seconds
+      - Recommended: 9:16 aspect ratio (1080x1920 pixels)
+      - Supported formats: MP4, MOV
+      - Supported codecs: H.264 video, AAC audio
+      - Maximum file size: 100 MB (varies by duration)
+      
+      @param account_id Internal account identifier
+      @param video_url Publicly accessible URL of the video
+      @param on_success Continuation receiving the media ID
+      @param on_error Continuation receiving error message
+  *)
+  let post_story_video ~account_id ~video_url on_success on_error =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_ig_user_id ~account_id
+          (fun ig_user_id ->
+            (* Create story container with video *)
+            create_story_video_container ~ig_user_id ~access_token ~video_url
+              (fun container_id ->
+                (* Poll and publish - videos need more time to process *)
+                poll_container_status ~container_id ~access_token ~ig_user_id 
+                  ~attempt:1 ~max_attempts:10 on_success on_error)
+              on_error)
+          on_error)
+      on_error
+  
+  (** Post story to Instagram (auto-detect media type)
+      
+      Automatically detects whether the media is an image or video based on
+      the file extension and posts it as an Instagram Story.
+      
+      @param account_id Internal account identifier
+      @param media_url Publicly accessible URL of the image or video
+      @param on_success Continuation receiving the media ID
+      @param on_error Continuation receiving error message
+  *)
+  let post_story ~account_id ~media_url on_success on_error =
+    let media_type = detect_media_type media_url in
+    match media_type with
+    | "VIDEO" -> post_story_video ~account_id ~video_url:media_url on_success on_error
+    | _ -> post_story_image ~account_id ~image_url:media_url on_success on_error
+  
+  (** Validate story media
+      
+      Validates that the media URL is appropriate for Instagram Stories.
+      
+      @param media_url The URL to validate
+      @return Ok () if valid, Error message otherwise
+  *)
+  let validate_story ~media_url =
+    let url_lower = String.lowercase_ascii media_url in
+    (* Check if URL is accessible (starts with http/https) *)
+    if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
+      Error "Story media URL must be a publicly accessible HTTP(S) URL"
+    else
+      (* Check for valid image or video extension *)
+      let is_image = Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\|gif\\)$") url_lower 0 in
+      let is_video = Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") url_lower 0 in
+      if not (is_image || is_video) then
+        Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
+      else
+        Ok ()
   
   (** Post thread (Instagram doesn't support threads, posts only first item) *)
   let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) on_success on_error =

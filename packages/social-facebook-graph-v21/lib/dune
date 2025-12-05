@@ -8,4 +8,5 @@
   uri
   ptime
   ptime.clock.os
-  digestif))
+  digestif
+  str))

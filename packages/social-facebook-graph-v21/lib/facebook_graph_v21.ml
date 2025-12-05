@@ -51,6 +51,7 @@ module OAuth = struct
       | Post_text
       | Post_media
       | Post_video
+      | Post_story
       | Read_profile
       | Read_posts
       | Delete_post
@@ -59,7 +60,7 @@ module OAuth = struct
     (** Get scopes required for specific operations *)
     let for_operations ops =
       let base = ["public_profile"] in
-      if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Delete_post || o = Manage_pages) ops
+      if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Post_story || o = Delete_post || o = Manage_pages) ops
       then base @ write
       else if List.exists (fun o -> o = Read_profile || o = Read_posts) ops
       then base @ ["pages_read_engagement"; "pages_show_list"]
@@ -757,6 +758,291 @@ module Make (Config : CONFIG) = struct
               on_success on_error)
           on_error)
       on_error
+  
+  (** {1 Facebook Page Stories} *)
+  
+  (** Post photo story to Facebook Page
+      
+      Facebook Page Stories are full-screen vertical content that expires after 24 hours.
+      This function posts a photo as a Page story.
+      
+      Requirements:
+      - Page access token with pages_manage_posts permission
+      - Image must be publicly accessible via HTTPS
+      - Recommended: 9:16 aspect ratio (1080x1920 pixels)
+      
+      @see <https://developers.facebook.com/docs/graph-api/reference/page/photo_stories/>
+      
+      @param page_id Facebook Page ID
+      @param page_access_token Page access token
+      @param image_url Publicly accessible URL of the image
+      @param on_success Continuation receiving the story ID
+      @param on_error Continuation receiving error message
+  *)
+  let upload_photo_story ~page_id ~page_access_token ~image_url on_success on_error =
+    (* Download image first *)
+    Config.Http.get ~headers:[] image_url
+      (fun image_response ->
+        if image_response.status >= 200 && image_response.status < 300 then
+          let url = Printf.sprintf "%s/%s/photo_stories" graph_api_base page_id in
+          
+          (* Add app secret proof if available *)
+          let proof_params = match compute_app_secret_proof ~access_token:page_access_token with
+            | Some proof -> [("appsecret_proof", [proof])]
+            | None -> []
+          in
+          
+          let final_url = 
+            if List.length proof_params > 0 then
+              url ^ "?" ^ Uri.encoded_of_query proof_params
+            else url
+          in
+          
+          (* Create multipart form data with photo *)
+          let parts = [
+            {
+              name = "photo";
+              filename = Some "story.jpg";
+              content_type = Some "image/jpeg";
+              content = image_response.body;
+            };
+          ] in
+          
+          let headers = [
+            ("Authorization", Printf.sprintf "Bearer %s" page_access_token);
+          ] in
+          
+          Config.Http.post_multipart ~headers ~parts final_url
+            (fun response ->
+              update_rate_limits response;
+              if response.status >= 200 && response.status < 300 then
+                try
+                  let open Yojson.Basic.Util in
+                  let json = Yojson.Basic.from_string response.body in
+                  (* Response contains post_id for the story *)
+                  let story_id = 
+                    try json |> member "post_id" |> to_string
+                    with _ -> json |> member "id" |> to_string
+                  in
+                  on_success story_id
+                with e ->
+                  on_error (Printf.sprintf "Failed to parse photo story response: %s" (Printexc.to_string e))
+              else
+                match parse_facebook_error response.body with
+                | Some err ->
+                    let msg = Printf.sprintf "Photo story upload failed (%s): %s" err.error_type err.message in
+                    on_error msg
+                | None ->
+                    on_error (Printf.sprintf "Failed to upload photo story (%d): %s" response.status response.body))
+            on_error
+        else
+          on_error (Printf.sprintf "Failed to download image from %s (%d)" image_url image_response.status))
+      on_error
+  
+  (** Post video story to Facebook Page
+      
+      Facebook Page Stories are full-screen vertical content that expires after 24 hours.
+      This function posts a video as a Page story using the resumable upload API.
+      
+      Requirements:
+      - Page access token with pages_manage_posts permission
+      - Video must be publicly accessible via HTTPS
+      - Duration: 1-120 seconds
+      - Recommended: 9:16 aspect ratio (1080x1920 pixels)
+      - Supported formats: MP4, MOV
+      
+      @see <https://developers.facebook.com/docs/graph-api/reference/page/video_stories/>
+      
+      @param page_id Facebook Page ID
+      @param page_access_token Page access token
+      @param video_url Publicly accessible URL of the video
+      @param on_success Continuation receiving the story ID
+      @param on_error Continuation receiving error message
+  *)
+  let upload_video_story ~page_id ~page_access_token ~video_url on_success on_error =
+    (* Download video first *)
+    Config.Http.get ~headers:[] video_url
+      (fun video_response ->
+        if video_response.status >= 200 && video_response.status < 300 then
+          let video_content = video_response.body in
+          let video_size = String.length video_content in
+          
+          (* Step 1: Initialize the upload session for video story *)
+          let init_url = Printf.sprintf "%s/%s/video_stories" graph_api_base page_id in
+          
+          let init_params = [
+            ("upload_phase", ["start"]);
+            ("access_token", [page_access_token]);
+          ] @
+          (match compute_app_secret_proof ~access_token:page_access_token with
+           | Some proof -> [("appsecret_proof", [proof])]
+           | None -> [])
+          in
+          
+          let init_body = Uri.encoded_of_query init_params in
+          let headers = [
+            ("Content-Type", "application/x-www-form-urlencoded");
+          ] in
+          
+          Config.Http.post ~headers ~body:init_body init_url
+            (fun init_response ->
+              update_rate_limits init_response;
+              if init_response.status >= 200 && init_response.status < 300 then
+                try
+                  let open Yojson.Basic.Util in
+                  let json = Yojson.Basic.from_string init_response.body in
+                  let video_id = json |> member "video_id" |> to_string in
+                  let upload_url = json |> member "upload_url" |> to_string in
+                  
+                  (* Step 2: Upload video file to the upload_url *)
+                  let upload_headers = [
+                    ("Authorization", Printf.sprintf "OAuth %s" page_access_token);
+                    ("file_size", string_of_int video_size);
+                  ] in
+                  
+                  Config.Http.post ~headers:upload_headers ~body:video_content upload_url
+                    (fun upload_response ->
+                      if upload_response.status >= 200 && upload_response.status < 300 then
+                        (* Step 3: Finish the upload and publish the story *)
+                        let finish_url = Printf.sprintf "%s/%s/video_stories" graph_api_base page_id in
+                        
+                        let finish_params = [
+                          ("upload_phase", ["finish"]);
+                          ("video_id", [video_id]);
+                          ("access_token", [page_access_token]);
+                        ] @
+                        (match compute_app_secret_proof ~access_token:page_access_token with
+                         | Some proof -> [("appsecret_proof", [proof])]
+                         | None -> [])
+                        in
+                        
+                        let finish_body = Uri.encoded_of_query finish_params in
+                        Config.Http.post ~headers ~body:finish_body finish_url
+                          (fun finish_response ->
+                            update_rate_limits finish_response;
+                            if finish_response.status >= 200 && finish_response.status < 300 then
+                              try
+                                let open Yojson.Basic.Util in
+                                let json = Yojson.Basic.from_string finish_response.body in
+                                (* Check for success and extract post_id *)
+                                let success = 
+                                  try json |> member "success" |> to_bool 
+                                  with _ -> true
+                                in
+                                if success then
+                                  let story_id =
+                                    try json |> member "post_id" |> to_string
+                                    with _ -> video_id
+                                  in
+                                  on_success story_id
+                                else
+                                  on_error "Facebook video story upload failed: success=false"
+                              with _e ->
+                                (* If we can't parse but got 2xx, consider it a success *)
+                                on_success video_id
+                            else
+                              match parse_facebook_error finish_response.body with
+                              | Some err ->
+                                  on_error (Printf.sprintf "Video story finish failed (%s): %s" err.error_type err.message)
+                              | None ->
+                                  on_error (Printf.sprintf "Video story finish failed (%d): %s" finish_response.status finish_response.body))
+                          on_error
+                      else
+                        on_error (Printf.sprintf "Video story upload failed (%d): %s" upload_response.status upload_response.body))
+                    on_error
+                with e ->
+                  on_error (Printf.sprintf "Failed to parse video story init response: %s" (Printexc.to_string e))
+              else
+                match parse_facebook_error init_response.body with
+                | Some err ->
+                    on_error (Printf.sprintf "Video story init failed (%s): %s" err.error_type err.message)
+                | None ->
+                    on_error (Printf.sprintf "Video story init failed (%d): %s" init_response.status init_response.body))
+            on_error
+        else
+          on_error (Printf.sprintf "Failed to download video from %s (%d)" video_url video_response.status))
+      on_error
+  
+  (** Post photo story to Facebook Page (high-level)
+      
+      @param account_id Internal account identifier
+      @param image_url Publicly accessible URL of the image
+      @param on_success Continuation receiving the story ID
+      @param on_error Continuation receiving error message
+  *)
+  let post_story_photo ~account_id ~image_url on_success on_error =
+    ensure_valid_token ~account_id
+      (fun page_access_token ->
+        Config.get_page_id ~account_id
+          (fun page_id ->
+            upload_photo_story ~page_id ~page_access_token ~image_url
+              on_success on_error)
+          on_error)
+      on_error
+  
+  (** Post video story to Facebook Page (high-level)
+      
+      @param account_id Internal account identifier
+      @param video_url Publicly accessible URL of the video
+      @param on_success Continuation receiving the story ID
+      @param on_error Continuation receiving error message
+  *)
+  let post_story_video ~account_id ~video_url on_success on_error =
+    ensure_valid_token ~account_id
+      (fun page_access_token ->
+        Config.get_page_id ~account_id
+          (fun page_id ->
+            upload_video_story ~page_id ~page_access_token ~video_url
+              on_success on_error)
+          on_error)
+      on_error
+  
+  (** Detect media type from URL extension *)
+  let detect_media_type url =
+    let url_lower = String.lowercase_ascii url in
+    if Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\|avi\\)$") url_lower 0 then
+      "VIDEO"
+    else if Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\|gif\\)$") url_lower 0 then
+      "IMAGE"
+    else
+      "IMAGE" (* Default to image *)
+  
+  (** Post story to Facebook Page (auto-detect media type)
+      
+      Automatically detects whether the media is an image or video based on
+      the file extension and posts it as a Facebook Page Story.
+      
+      @param account_id Internal account identifier
+      @param media_url Publicly accessible URL of the image or video
+      @param on_success Continuation receiving the story ID
+      @param on_error Continuation receiving error message
+  *)
+  let post_story ~account_id ~media_url on_success on_error =
+    let media_type = detect_media_type media_url in
+    match media_type with
+    | "VIDEO" -> post_story_video ~account_id ~video_url:media_url on_success on_error
+    | _ -> post_story_photo ~account_id ~image_url:media_url on_success on_error
+  
+  (** Validate story media
+      
+      Validates that the media URL is appropriate for Facebook Page Stories.
+      
+      @param media_url The URL to validate
+      @return Ok () if valid, Error message otherwise
+  *)
+  let validate_story ~media_url =
+    let url_lower = String.lowercase_ascii media_url in
+    (* Check if URL is accessible (starts with http/https) *)
+    if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
+      Error "Story media URL must be a publicly accessible HTTP(S) URL"
+    else
+      (* Check for valid image or video extension *)
+      let is_image = Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\|gif\\)$") url_lower 0 in
+      let is_video = Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") url_lower 0 in
+      if not (is_image || is_video) then
+        Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
+      else
+        Ok ()
   
   (** Post to Facebook Page *)
   let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) on_success on_error =

@@ -469,6 +469,213 @@ let test_post_without_alt_text () =
       print_endline "✓ Post without alt-text (should work)")
     (fun err -> failwith ("Post without alt-text failed: " ^ err))
 
+(** {1 Stories Tests} *)
+
+(** Test: Create story image container *)
+let test_create_story_image_container () =
+  Mock_config.reset ();
+  
+  let response_body = {|{"id": "story_container_123"}|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  Instagram.create_story_image_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~image_url:"https://example.com/story.jpg"
+    (fun container_id ->
+      assert (container_id = "story_container_123");
+      (* Verify the request contained STORIES media_type *)
+      let requests = !Mock_http.requests in
+      let has_stories_type = List.exists (fun (_, _, _, body) ->
+        string_contains body "media_type" && string_contains body "STORIES"
+      ) requests in
+      assert has_stories_type;
+      print_endline "✓ Create story image container")
+    (fun err -> failwith ("Create story image container failed: " ^ err))
+
+(** Test: Create story video container *)
+let test_create_story_video_container () =
+  Mock_config.reset ();
+  
+  let response_body = {|{"id": "story_video_container_456"}|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  Instagram.create_story_video_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~video_url:"https://example.com/story.mp4"
+    (fun container_id ->
+      assert (container_id = "story_video_container_456");
+      print_endline "✓ Create story video container")
+    (fun err -> failwith ("Create story video container failed: " ^ err))
+
+(** Test: Post image story (full flow) *)
+let test_post_story_image () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_123";
+  
+  (* Set up mock responses: create container, check status, publish *)
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "story_container_789"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED", "status": "OK"}|}; headers = [] };
+    { status = 200; body = {|{"id": "story_media_789"}|}; headers = [] };
+  ];
+  
+  Instagram.post_story_image
+    ~account_id:"test_account"
+    ~image_url:"https://example.com/story.jpg"
+    (fun media_id ->
+      assert (media_id = "story_media_789");
+      print_endline "✓ Post image story (full flow)")
+    (fun err -> failwith ("Post image story failed: " ^ err))
+
+(** Test: Post video story (full flow) *)
+let test_post_story_video () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "video_story_container"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED", "status": "OK"}|}; headers = [] };
+    { status = 200; body = {|{"id": "video_story_media"}|}; headers = [] };
+  ];
+  
+  Instagram.post_story_video
+    ~account_id:"test_account"
+    ~video_url:"https://example.com/story.mp4"
+    (fun media_id ->
+      assert (media_id = "video_story_media");
+      print_endline "✓ Post video story (full flow)")
+    (fun err -> failwith ("Post video story failed: " ^ err))
+
+(** Test: Post story with auto-detect (image) *)
+let test_post_story_auto_image () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "auto_story_container"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED"}|}; headers = [] };
+    { status = 200; body = {|{"id": "auto_story_media"}|}; headers = [] };
+  ];
+  
+  Instagram.post_story
+    ~account_id:"test_account"
+    ~media_url:"https://example.com/story.png"
+    (fun media_id ->
+      assert (media_id = "auto_story_media");
+      print_endline "✓ Post story with auto-detect (image)")
+    (fun err -> failwith ("Post story auto-detect failed: " ^ err))
+
+(** Test: Post story with auto-detect (video) *)
+let test_post_story_auto_video () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "video_container"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED"}|}; headers = [] };
+    { status = 200; body = {|{"id": "video_story_id"}|}; headers = [] };
+  ];
+  
+  Instagram.post_story
+    ~account_id:"test_account"
+    ~media_url:"https://example.com/story.mov"
+    (fun media_id ->
+      assert (media_id = "video_story_id");
+      print_endline "✓ Post story with auto-detect (video)")
+    (fun err -> failwith ("Post story auto-detect video failed: " ^ err))
+
+(** Test: Story validation - valid image URL *)
+let test_validate_story_valid_image () =
+  match Instagram.validate_story ~media_url:"https://example.com/story.jpg" with
+  | Ok () -> print_endline "✓ Story validation - valid image URL"
+  | Error e -> failwith ("Story validation failed: " ^ e)
+
+(** Test: Story validation - valid video URL *)
+let test_validate_story_valid_video () =
+  match Instagram.validate_story ~media_url:"https://example.com/story.mp4" with
+  | Ok () -> print_endline "✓ Story validation - valid video URL"
+  | Error e -> failwith ("Story validation failed: " ^ e)
+
+(** Test: Story validation - invalid URL *)
+let test_validate_story_invalid_url () =
+  match Instagram.validate_story ~media_url:"not-a-url" with
+  | Error msg when string_contains msg "HTTP" -> 
+      print_endline "✓ Story validation - rejects invalid URL"
+  | _ -> failwith "Should reject invalid URL"
+
+(** Test: Story validation - invalid format *)
+let test_validate_story_invalid_format () =
+  match Instagram.validate_story ~media_url:"https://example.com/story.txt" with
+  | Error msg when string_contains msg "image" || string_contains msg "video" -> 
+      print_endline "✓ Story validation - rejects invalid format"
+  | _ -> failwith "Should reject invalid format"
+
 (** Run all tests *)
 let () =
   print_endline "\n=== Instagram Provider Tests ===\n";
@@ -487,4 +694,16 @@ let () =
   test_reel_with_alt_text ();
   test_post_without_alt_text ();
   
-  print_endline "\n=== All 12 tests passed! ===\n"
+  print_endline "\n--- Stories Tests ---";
+  test_create_story_image_container ();
+  test_create_story_video_container ();
+  test_post_story_image ();
+  test_post_story_video ();
+  test_post_story_auto_image ();
+  test_post_story_auto_video ();
+  test_validate_story_valid_image ();
+  test_validate_story_valid_video ();
+  test_validate_story_invalid_url ();
+  test_validate_story_invalid_format ();
+  
+  print_endline "\n=== All 22 tests passed! ===\n"

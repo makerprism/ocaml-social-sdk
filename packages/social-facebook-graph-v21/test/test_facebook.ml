@@ -826,6 +826,224 @@ let test_partial_alt_texts () =
       print_endline "✓ Post with partial alt-texts (3 images, 2 alt-texts)")
     (fun err -> failwith ("Post with partial alt-texts failed: " ^ err))
 
+(** {1 Stories Tests} *)
+
+(** Test: Upload photo story *)
+let test_upload_photo_story () =
+  Mock_config.reset ();
+  
+  Mock_http.set_responses [
+    { status = 200; body = "fake_image_data"; headers = [] };  (* GET image *)
+    { status = 200; body = {|{"post_id": "story_123"}|}; headers = [] };  (* POST multipart *)
+  ];
+  
+  Facebook.upload_photo_story
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~image_url:"https://example.com/story.jpg"
+    (fun story_id ->
+      assert (story_id = "story_123");
+      (* Verify the request went to photo_stories endpoint *)
+      let requests = !Mock_http.requests in
+      let has_photo_stories = List.exists (fun (_, url, _, _) ->
+        string_contains url "photo_stories"
+      ) requests in
+      assert has_photo_stories;
+      print_endline "✓ Upload photo story")
+    (fun err -> failwith ("Upload photo story failed: " ^ err))
+
+(** Test: Upload video story *)
+let test_upload_video_story () =
+  Mock_config.reset ();
+  
+  Mock_http.set_responses [
+    { status = 200; body = "fake_video_data"; headers = [] };  (* GET video *)
+    { status = 200; body = {|{"video_id": "vid_456", "upload_url": "https://upload.example.com"}|}; headers = [] };  (* POST init *)
+    { status = 200; body = {|{"success": true}|}; headers = [] };  (* POST upload *)
+    { status = 200; body = {|{"success": true, "post_id": "video_story_789"}|}; headers = [] };  (* POST finish *)
+  ];
+  
+  Facebook.upload_video_story
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~video_url:"https://example.com/story.mp4"
+    (fun story_id ->
+      assert (story_id = "video_story_789");
+      (* Verify the request went to video_stories endpoint *)
+      let requests = !Mock_http.requests in
+      let has_video_stories = List.exists (fun (_, url, _, _) ->
+        string_contains url "video_stories"
+      ) requests in
+      assert has_video_stories;
+      print_endline "✓ Upload video story")
+    (fun err -> failwith ("Upload video story failed: " ^ err))
+
+(** Test: Post photo story (high-level) *)
+let test_post_story_photo () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = "image_data"; headers = [] };
+    { status = 200; body = {|{"post_id": "photo_story_abc"}|}; headers = [] };
+  ];
+  
+  Facebook.post_story_photo
+    ~account_id:"test_account"
+    ~image_url:"https://example.com/story.jpg"
+    (fun story_id ->
+      assert (story_id = "photo_story_abc");
+      print_endline "✓ Post photo story (high-level)")
+    (fun err -> failwith ("Post photo story failed: " ^ err))
+
+(** Test: Post video story (high-level) *)
+let test_post_story_video () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = "video_data"; headers = [] };
+    { status = 200; body = {|{"video_id": "v123", "upload_url": "https://upload.example.com"}|}; headers = [] };
+    { status = 200; body = {|{"success": true}|}; headers = [] };
+    { status = 200; body = {|{"success": true, "post_id": "video_story_xyz"}|}; headers = [] };
+  ];
+  
+  Facebook.post_story_video
+    ~account_id:"test_account"
+    ~video_url:"https://example.com/story.mp4"
+    (fun story_id ->
+      assert (story_id = "video_story_xyz");
+      print_endline "✓ Post video story (high-level)")
+    (fun err -> failwith ("Post video story failed: " ^ err))
+
+(** Test: Post story with auto-detect (image) *)
+let test_post_story_auto_image () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = "image_data"; headers = [] };
+    { status = 200; body = {|{"post_id": "auto_story_img"}|}; headers = [] };
+  ];
+  
+  Facebook.post_story
+    ~account_id:"test_account"
+    ~media_url:"https://example.com/story.png"
+    (fun story_id ->
+      assert (story_id = "auto_story_img");
+      print_endline "✓ Post story with auto-detect (image)")
+    (fun err -> failwith ("Post story auto-detect failed: " ^ err))
+
+(** Test: Post story with auto-detect (video) *)
+let test_post_story_auto_video () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+  
+  Mock_http.set_responses [
+    { status = 200; body = "video_data"; headers = [] };
+    { status = 200; body = {|{"video_id": "v789", "upload_url": "https://upload.example.com"}|}; headers = [] };
+    { status = 200; body = {|{"success": true}|}; headers = [] };
+    { status = 200; body = {|{"success": true, "post_id": "auto_story_vid"}|}; headers = [] };
+  ];
+  
+  Facebook.post_story
+    ~account_id:"test_account"
+    ~media_url:"https://example.com/story.mov"
+    (fun story_id ->
+      assert (story_id = "auto_story_vid");
+      print_endline "✓ Post story with auto-detect (video)")
+    (fun err -> failwith ("Post story auto-detect video failed: " ^ err))
+
+(** Test: Story validation - valid image URL *)
+let test_validate_story_valid_image () =
+  match Facebook.validate_story ~media_url:"https://example.com/story.jpg" with
+  | Ok () -> print_endline "✓ Story validation - valid image URL"
+  | Error e -> failwith ("Story validation failed: " ^ e)
+
+(** Test: Story validation - valid video URL *)
+let test_validate_story_valid_video () =
+  match Facebook.validate_story ~media_url:"https://example.com/story.mp4" with
+  | Ok () -> print_endline "✓ Story validation - valid video URL"
+  | Error e -> failwith ("Story validation failed: " ^ e)
+
+(** Test: Story validation - invalid URL *)
+let test_validate_story_invalid_url () =
+  match Facebook.validate_story ~media_url:"not-a-url" with
+  | Error msg when string_contains msg "HTTP" -> 
+      print_endline "✓ Story validation - rejects invalid URL"
+  | _ -> failwith "Should reject invalid URL"
+
+(** Test: Story validation - invalid format *)
+let test_validate_story_invalid_format () =
+  match Facebook.validate_story ~media_url:"https://example.com/story.txt" with
+  | Error msg when string_contains msg "image" || string_contains msg "video" -> 
+      print_endline "✓ Story validation - rejects invalid format"
+  | _ -> failwith "Should reject invalid format"
+
 (** Run all tests *)
 let () =
   print_endline "\n=== Facebook Provider Tests ===\n";
@@ -864,5 +1082,17 @@ let () =
   test_alt_text_special_characters ();
   test_partial_alt_texts ();
   
-  print_endline "\n=== All 28 tests passed! ===\n"
+  print_endline "\n--- Stories Tests ---";
+  test_upload_photo_story ();
+  test_upload_video_story ();
+  test_post_story_photo ();
+  test_post_story_video ();
+  test_post_story_auto_image ();
+  test_post_story_auto_video ();
+  test_validate_story_valid_image ();
+  test_validate_story_valid_video ();
+  test_validate_story_invalid_url ();
+  test_validate_story_invalid_format ();
+  
+  print_endline "\n=== All 38 tests passed! ===\n"
 
