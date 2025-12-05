@@ -6,6 +6,288 @@
 
 open Social_core
 
+(** OAuth 2.0 module for Mastodon
+    
+    Mastodon uses standard OAuth 2.0 with PKCE support.
+    
+    IMPORTANT: Unlike other platforms, Mastodon is federated - each instance
+    requires separate app registration. The OAuth flow is:
+    
+    1. Register your app with each instance using register_app
+    2. Store the client_id and client_secret per instance
+    3. Generate authorization URL for that instance
+    4. Exchange code for tokens (tokens never expire unless revoked)
+    
+    Tokens do NOT expire on Mastodon - they remain valid until explicitly revoked.
+*)
+module OAuth = struct
+  (** Scope definitions for Mastodon API *)
+  module Scopes = struct
+    (** Scopes required for read-only operations *)
+    let read = ["read"]
+    
+    (** Scopes required for posting content (includes read and follow) *)
+    let write = ["read"; "write"; "follow"]
+    
+    (** All available Mastodon OAuth scopes *)
+    let all = ["read"; "write"; "follow"; "push"]
+    
+    (** Granular read scopes (optional, for fine-grained access) *)
+    let read_granular = [
+      "read:accounts"; "read:blocks"; "read:bookmarks"; "read:favourites";
+      "read:filters"; "read:follows"; "read:lists"; "read:mutes";
+      "read:notifications"; "read:search"; "read:statuses"
+    ]
+    
+    (** Granular write scopes (optional, for fine-grained access) *)
+    let write_granular = [
+      "write:accounts"; "write:blocks"; "write:bookmarks"; "write:conversations";
+      "write:favourites"; "write:filters"; "write:follows"; "write:lists";
+      "write:media"; "write:mutes"; "write:notifications"; "write:reports";
+      "write:statuses"
+    ]
+    
+    (** Operations that can be performed with Mastodon API *)
+    type operation = 
+      | Post_text
+      | Post_media
+      | Post_video
+      | Read_profile
+      | Read_posts
+      | Delete_post
+      | Manage_pages  (** Not applicable to Mastodon *)
+    
+    (** Get scopes required for specific operations
+        
+        Mastodon uses a simple scope model, so most operations just need
+        the standard read/write/follow scopes *)
+    let for_operations _ops = write
+  end
+  
+  (** Platform metadata for Mastodon OAuth *)
+  module Metadata = struct
+    (** Mastodon supports PKCE (S256 method) *)
+    let supports_pkce = true
+    
+    (** Mastodon tokens do NOT expire - no refresh needed *)
+    let supports_refresh = false
+    
+    (** Mastodon tokens never expire (None = infinite) *)
+    let token_lifetime_seconds = None
+    
+    (** No refresh buffer needed since tokens don't expire *)
+    let refresh_buffer_seconds = 0
+    
+    (** No refresh attempts since tokens don't expire *)
+    let max_refresh_attempts = 0
+    
+    (** Authorization endpoint template (prepend instance URL) *)
+    let authorization_path = "/oauth/authorize"
+    
+    (** Token endpoint template (prepend instance URL) *)
+    let token_path = "/oauth/token"
+    
+    (** App registration endpoint template (prepend instance URL) *)
+    let apps_path = "/api/v1/apps"
+    
+    (** Token revocation endpoint template (prepend instance URL) *)
+    let revoke_path = "/oauth/revoke"
+  end
+  
+  (** PKCE helpers for OAuth 2.0 with Proof Key for Code Exchange *)
+  module Pkce = struct
+    (** Generate a cryptographically random code verifier (128 chars)
+        
+        The code verifier uses characters [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
+        per RFC 7636.
+        
+        @return A 128-character random code verifier string
+    *)
+    let generate_code_verifier () =
+      let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~" in
+      let chars_len = String.length chars in
+      String.init 128 (fun _ -> String.get chars (Random.int chars_len))
+    
+    (** Generate code_challenge from code_verifier using SHA256 (S256 method)
+        
+        code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
+        
+        @param verifier The code_verifier string
+        @return Base64-URL encoded SHA256 hash without padding
+    *)
+    let generate_code_challenge verifier =
+      let hash = Digestif.SHA256.digest_string verifier in
+      let raw_hash = Digestif.SHA256.to_raw_string hash in
+      Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet raw_hash
+  end
+  
+  (** Generate authorization URL for Mastodon OAuth 2.0 flow
+      
+      IMPORTANT: instance_url is required because Mastodon is federated.
+      
+      @param instance_url The Mastodon instance URL (e.g., "https://mastodon.social")
+      @param client_id OAuth 2.0 Client ID (from register_app for this instance)
+      @param redirect_uri Registered callback URL
+      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @param state Optional CSRF protection state parameter
+      @param code_challenge Optional PKCE code challenge (generate with Pkce.generate_code_challenge)
+      @return Full authorization URL to redirect user to
+  *)
+  let get_authorization_url ~instance_url ~client_id ~redirect_uri ?(scopes=Scopes.write) ?state ?code_challenge () =
+    let scope_str = String.concat " " scopes in
+    let base_params = [
+      ("client_id", client_id);
+      ("redirect_uri", redirect_uri);
+      ("response_type", "code");
+      ("scope", scope_str);
+    ] in
+    let with_state = match state with
+      | Some s -> ("state", s) :: base_params
+      | None -> base_params
+    in
+    let with_pkce = match code_challenge with
+      | Some challenge -> 
+          ("code_challenge", challenge) :: ("code_challenge_method", "S256") :: with_state
+      | None -> with_state
+    in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) with_pkce) in
+    Printf.sprintf "%s%s?%s" instance_url Metadata.authorization_path query
+  
+  (** Make functor for OAuth operations that need HTTP client
+      
+      This separates the pure functions (URL generation, scope selection) from
+      functions that need to make HTTP requests (app registration, token exchange).
+  *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Register an application with a Mastodon instance
+        
+        IMPORTANT: Must be called once per instance before OAuth flow.
+        Store the returned client_id and client_secret securely.
+        
+        @param instance_url The Mastodon instance URL (e.g., "https://mastodon.social")
+        @param client_name Your application name
+        @param redirect_uris Space-separated list of redirect URIs
+        @param scopes Space-separated list of requested scopes (defaults to "read write follow")
+        @param website Optional website URL for your application
+        @param on_success Continuation receiving (client_id, client_secret)
+        @param on_error Continuation receiving error message
+    *)
+    let register_app ~instance_url ~client_name ~redirect_uris ?(scopes="read write follow") ?website on_success on_error =
+      let url = Printf.sprintf "%s%s" instance_url Metadata.apps_path in
+      
+      let base_fields = [
+        ("client_name", `String client_name);
+        ("redirect_uris", `String redirect_uris);
+        ("scopes", `String scopes);
+      ] in
+      let fields = match website with
+        | Some w -> ("website", `String w) :: base_fields
+        | None -> base_fields
+      in
+      
+      let body = Yojson.Basic.to_string (`Assoc fields) in
+      let headers = [("Content-Type", "application/json")] in
+      
+      Http.post ~headers ~body url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let client_id = json |> member "client_id" |> to_string in
+              let client_secret = json |> member "client_secret" |> to_string in
+              on_success (client_id, client_secret)
+            with e ->
+              on_error (Printf.sprintf "Failed to parse app registration: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "App registration failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Exchange authorization code for access token
+        
+        @param instance_url The Mastodon instance URL
+        @param client_id OAuth 2.0 Client ID (from register_app)
+        @param client_secret OAuth 2.0 Client Secret (from register_app)
+        @param redirect_uri Registered callback URL (must match authorization request)
+        @param code Authorization code from callback
+        @param code_verifier Optional PKCE code verifier (if PKCE was used in authorization)
+        @param on_success Continuation receiving credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_code ~instance_url ~client_id ~client_secret ~redirect_uri ~code ?code_verifier on_success on_error =
+      let url = Printf.sprintf "%s%s" instance_url Metadata.token_path in
+      
+      let base_fields = [
+        ("client_id", `String client_id);
+        ("client_secret", `String client_secret);
+        ("redirect_uri", `String redirect_uri);
+        ("grant_type", `String "authorization_code");
+        ("code", `String code);
+      ] in
+      
+      let fields = match code_verifier with
+        | Some verifier -> ("code_verifier", `String verifier) :: base_fields
+        | None -> base_fields
+      in
+      
+      let body = Yojson.Basic.to_string (`Assoc fields) in
+      let headers = [("Content-Type", "application/json")] in
+      
+      Http.post ~headers ~body url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let token_type = 
+                try json |> member "token_type" |> to_string 
+                with _ -> "Bearer" in
+              
+              (* Mastodon tokens don't expire *)
+              let creds : credentials = {
+                access_token;
+                refresh_token = None;
+                expires_at = None;  (* Never expires *)
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Revoke an access token
+        
+        @param instance_url The Mastodon instance URL
+        @param client_id OAuth 2.0 Client ID
+        @param client_secret OAuth 2.0 Client Secret
+        @param token The access token to revoke
+        @param on_success Continuation called on successful revocation
+        @param on_error Continuation receiving error message
+    *)
+    let revoke_token ~instance_url ~client_id ~client_secret ~token on_success on_error =
+      let url = Printf.sprintf "%s%s" instance_url Metadata.revoke_path in
+      
+      let body = Yojson.Basic.to_string (`Assoc [
+        ("client_id", `String client_id);
+        ("client_secret", `String client_secret);
+        ("token", `String token);
+      ]) in
+      let headers = [("Content-Type", "application/json")] in
+      
+      Http.post ~headers ~body url
+        (fun response ->
+          (* OAuth2 revocation returns 200 for both valid and invalid tokens *)
+          if response.status >= 200 && response.status < 300 then
+            on_success ()
+          else
+            on_error (Printf.sprintf "Token revocation failed (%d): %s" response.status response.body))
+        on_error
+  end
+end
+
 (** Mastodon-specific credentials with instance URL *)
 type mastodon_credentials = {
   access_token: string;
@@ -805,18 +1087,17 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "App registration failed (%d): %s" response.status response.body))
       on_error
   
-  (** Generate PKCE code verifier (43-128 characters) *)
-  let generate_code_verifier () =
-    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~" in
-    let chars_len = String.length chars in
-    String.init 128 (fun _ -> String.get chars (Random.int chars_len))
+  (** Generate PKCE code verifier (43-128 characters)
+      
+      @deprecated Use OAuth.Pkce.generate_code_verifier instead
+  *)
+  let generate_code_verifier = OAuth.Pkce.generate_code_verifier
   
-  (** Generate PKCE code challenge from verifier using SHA256 *)
-  let generate_code_challenge verifier =
-    let hash = Digestif.SHA256.digest_string verifier in
-    let raw_hash = Digestif.SHA256.to_raw_string hash in
-    (* Base64 URL encode without padding *)
-    Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet raw_hash
+  (** Generate PKCE code challenge from verifier using SHA256
+      
+      @deprecated Use OAuth.Pkce.generate_code_challenge instead
+  *)
+  let generate_code_challenge = OAuth.Pkce.generate_code_challenge
   
   (** Get OAuth authorization URL with PKCE support *)
   let get_oauth_url ~instance_url ~client_id ~redirect_uri ~scopes ?(state=None) ?(code_challenge=None) () =
