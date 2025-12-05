@@ -18,23 +18,29 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-        ocaml-compiler:
-          - 5.2.x
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Setup OCaml
-        uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+      - name: Install system dependencies (Linux)
+        run: sudo apt update && sudo apt-get install -y libev-dev libgmp-dev libssl-dev pkg-config
+        if: runner.os == 'Linux'
 
-      - name: Install dependencies
-        run: opam install . --deps-only --with-test
+      - name: Install system dependencies (macOS)
+        run: brew install libev gmp openssl@3 pkg-config
+        if: runner.os == 'macOS'
+
+      - name: Setup Dune
+        uses: ocaml-dune/setup-dune@v1
+        with:
+          version: latest
+
+      - name: Lock dependencies
+        run: dune pkg lock
 
       - name: Build project
-        run: opam exec -- dune build
+        run: dune build
 
       - name: Run tests
-        run: opam exec -- dune runtest
+        run: dune runtest
