@@ -3,7 +3,7 @@
  (modules test_linkedin)
  (libraries
   social-linkedin-v2
-  social-provider-core
+  social-core
   ptime
   ptime.clock.os
   str))

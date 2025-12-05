@@ -10,40 +10,40 @@ let contains_substring str sub =
   with Not_found -> false
 
 (** Mock HTTP client for testing *)
-module Mock_http : Social_provider_core.HTTP_CLIENT = struct
+module Mock_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success _on_error =
     (* Return different responses based on URL *)
     if String.contains url '/' && contains_substring url "stream" then
       (* Streaming endpoints *)
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"id_str": "123", "text": "Sample tweet from stream"}|};
       }
     else if String.contains url '/' && contains_substring url "oembed" then
       (* oEmbed endpoint *)
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"html": "<blockquote>Tweet embed</blockquote>", "width": 550}|};
       }
     else if String.contains url '/' && contains_substring url "geo" then
       (* Geo endpoint *)
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"result": {"places": [{"name": "San Francisco"}]}}|};
       }
     else if String.contains url '/' && contains_substring url "STATUS" then
       (* Media upload STATUS check *)
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"processing_info": {"state": "succeeded", "progress_percent": 100}}|};
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"data": {}}|};
       }
@@ -69,28 +69,28 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
         {|{"data": {"id": "result_12345"}}|}
     in
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [("content-type", "application/json")];
       body = response_body;
     }
   
   let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = {|{"media_id_string": "media_multipart_123"}|};
     }
   
   let put ?headers:_ ?body:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = {|{"data": {}}|};
     }
   
   let delete ?headers:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = {|{"data": {}}|};
     }
@@ -110,7 +110,7 @@ module Mock_config = struct
     let expires = Unix.time () +. 3600. |> Ptime.of_float_s |> Option.get in
     let expires_str = Ptime.to_rfc3339 expires in
     on_success {
-      Social_provider_core.access_token = "test_access_token";
+      Social_core.access_token = "test_access_token";
       refresh_token = Some "test_token_secret";
       expires_at = Some expires_str;
       token_type = "Bearer";

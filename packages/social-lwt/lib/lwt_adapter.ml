@@ -15,7 +15,7 @@ let cps_to_lwt f =
   | Error e -> Lwt.fail_with e
 
 (** Adapt HTTP_CLIENT to Lwt *)
-module Http_to_lwt (Client : Social_provider_core.HTTP_CLIENT) = struct
+module Http_to_lwt (Client : Social_core.HTTP_CLIENT) = struct
   let get ?headers url =
     cps_to_lwt (fun on_success on_error ->
       Client.get ?headers url on_success on_error)
@@ -38,7 +38,7 @@ module Http_to_lwt (Client : Social_provider_core.HTTP_CLIENT) = struct
 end
 
 (** Adapt STORAGE to Lwt *)
-module Storage_to_lwt (Storage : Social_provider_core.STORAGE) = struct
+module Storage_to_lwt (Storage : Social_core.STORAGE) = struct
   let download_media ~media_id =
     cps_to_lwt (fun on_success on_error ->
       Storage.download_media ~media_id on_success on_error)
@@ -49,7 +49,7 @@ module Storage_to_lwt (Storage : Social_provider_core.STORAGE) = struct
 end
 
 (** Adapt CONFIG to Lwt *)
-module Config_to_lwt (Config : Social_provider_core.CONFIG) = struct
+module Config_to_lwt (Config : Social_core.CONFIG) = struct
   let get_env = Config.get_env
 
   let get_credentials ~account_id =

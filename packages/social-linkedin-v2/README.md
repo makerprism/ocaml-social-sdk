@@ -811,7 +811,7 @@ This library uses:
 3. **HTTP Client Abstraction**: Works with any HTTP implementation
 4. **Storage Abstraction**: Pluggable media storage backend
 
-See `social-provider-core` for interface definitions and `social-provider-lwt` for Lwt adapters.
+See `social-core` for interface definitions and `social-lwt` for Lwt adapters.
 
 ## License
 
@@ -819,8 +819,8 @@ MIT
 
 ## Related Packages
 
-- `social-provider-core` - Core interfaces and types
-- `social-provider-lwt` - Lwt runtime adapters
+- `social-core` - Core interfaces and types
+- `social-lwt` - Lwt runtime adapters
 - `social-twitter-v2` - Twitter API v2
 - `social-bluesky-v1` - Bluesky AT Protocol
 - `social-mastodon-v1` - Mastodon API

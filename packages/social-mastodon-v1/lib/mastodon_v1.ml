@@ -4,7 +4,7 @@
     Each instance has its own URL and tokens typically don't expire unless revoked.
 *)
 
-open Social_provider_core
+open Social_core
 
 (** Mastodon-specific credentials with instance URL *)
 type mastodon_credentials = {

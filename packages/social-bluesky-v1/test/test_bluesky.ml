@@ -7,7 +7,7 @@ open Social_bluesky_v1
 let resolved_handles = ref []
 
 (** Mock HTTP client for testing *)
-module Mock_http : Social_provider_core.HTTP_CLIENT = struct
+module Mock_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success on_error =
     (* Mock handle resolution *)
     if String.contains url '?' && String.contains url '=' then
@@ -18,7 +18,7 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
         let did = Printf.sprintf "did:fake:%s" handle in
         resolved_handles := (handle, did) :: !resolved_handles;
         on_success {
-          Social_provider_core.status = 200;
+          Social_core.status = 200;
           headers = [("content-type", "application/json")];
           body = Printf.sprintf {|{"did":"%s"}|} did;
         }
@@ -40,14 +40,14 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
 </html>
 |} in
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "text/html")];
         body = html;
       }
     (* Mock image fetch for YouTube thumbnail *)
     else if String.length url >= 20 && String.sub url 0 20 = "https://i.ytimg.com/" then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "image/jpeg")];
         body = "mock_youtube_thumbnail_data";
       }
@@ -64,13 +64,13 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
 </html>
 |} in
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "text/html")];
         body = html;
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "image/png")];
         body = "mock_image_data";
       }
@@ -81,34 +81,34 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
        String.contains url 'o' && String.contains url 'a' && String.contains url 'd' then
       (* This is an uploadBlob request *)
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"blob": {"$type": "blob", "ref": {"$link": "bafkreimockblob123"}, "mimeType": "image/jpeg", "size": 12345}}|};
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"uri": "at://did:plc:test/app.bsky.feed.post/abc123", "cid": "bafytest"}|};
       }
   
   let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = "{}";
     }
   
   let put ?headers:_ ?body:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = "{}";
     }
   
   let delete ?headers:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = "{}";
     }
@@ -122,7 +122,7 @@ module Mock_config = struct
   
   let get_credentials ~account_id:_ on_success _on_error =
     on_success {
-      Social_provider_core.access_token = "test.handle";
+      Social_core.access_token = "test.handle";
       refresh_token = Some "test_app_password";
       expires_at = None;
       token_type = "Bearer";

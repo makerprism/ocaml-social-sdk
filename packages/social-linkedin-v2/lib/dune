@@ -3,7 +3,7 @@
  (public_name social-linkedin-v2)
  (modules social_linkedin_v2 linkedin_v2)
  (libraries
-  social-provider-core
+  social-core
   yojson
   uri
   ptime

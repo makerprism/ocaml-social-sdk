@@ -1,6 +1,6 @@
 (** Tests for Pinterest API v5 Provider *)
 
-open Social_provider_core
+open Social_core
 open Social_pinterest_v5
 
 (** Helper to check if string contains substring *)

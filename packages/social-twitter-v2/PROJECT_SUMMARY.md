@@ -253,7 +253,7 @@ The Twitter API v2 package has been successfully transformed from a basic tweet 
 - **Clear Data Flow**: Easy to trace execution
 
 #### 4. Platform Integration
-- **social-provider-core**: Consistent API across platforms
+- **social-core**: Consistent API across platforms
 - **Built-in Health Monitoring**: Automatic status tracking
 - **Credential Management**: Automatic token refresh
 - **Error Handling**: Comprehensive error reporting
@@ -347,11 +347,11 @@ The Twitter API v2 package has been successfully transformed from a basic tweet 
 - `uri` - URL encoding
 - `base64` - Encoding for media/auth
 - `ptime` - Time handling
-- `social-provider-core` - Platform abstraction
+- `social-core` - Platform abstraction
 
 **Optional:**
 - Any async runtime (Lwt, Async, custom)
-- Any HTTP client via social-provider-core
+- Any HTTP client via social-core
 
 ### Performance
 
@@ -372,7 +372,7 @@ The Twitter API v2 package has been successfully transformed from a basic tweet 
 - **OCaml**: 4.08+
 - **Platforms**: Linux, macOS, Windows (via OCaml)
 - **Runtime**: Lwt, Async, or custom
-- **HTTP Clients**: Any via social-provider-core
+- **HTTP Clients**: Any via social-core
 
 ## Testing
 

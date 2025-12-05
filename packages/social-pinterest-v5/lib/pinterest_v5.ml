@@ -8,7 +8,7 @@
     - Multipart image upload
 *)
 
-open Social_provider_core
+open Social_core
 
 (** Configuration module type for Pinterest provider *)
 module type CONFIG = sig

@@ -1,9 +1,9 @@
 (library
- (name social_provider_core)
- (public_name social-provider-core)
+ (name social_core)
+ (public_name social-core)
  (wrapped false)
  (modules
-  social_provider_core
+  social_core
   platform_types
   content_validator
   thread_splitter

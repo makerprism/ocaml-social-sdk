@@ -3,7 +3,7 @@
  (modules test_instagram)
  (libraries
   social-instagram-graph-v21
-  social-provider-core
+  social-core
   ptime
   ptime.clock.os
   str))

@@ -9,7 +9,7 @@
     This package is designed to complement v2, not replace it.
 *)
 
-open Social_provider_core
+open Social_core
 
 (** Configuration module type for Twitter v1.1 provider *)
 module type CONFIG = sig

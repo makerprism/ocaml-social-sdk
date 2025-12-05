@@ -3,7 +3,7 @@
  (public_name social-instagram-graph-v21)
  (modules social_instagram_graph_v21 instagram_graph_v21)
  (libraries
-  social-provider-core
+  social-core
   yojson
   uri
   ptime

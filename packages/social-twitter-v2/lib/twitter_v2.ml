@@ -4,7 +4,7 @@
     Tokens expire after 2 hours and need to be refreshed.
 *)
 
-open Social_provider_core
+open Social_core
 
 (** Configuration module type for Twitter provider *)
 module type CONFIG = sig
@@ -236,7 +236,7 @@ module Make (Config : CONFIG) = struct
     
     (* X API v2 expects raw binary data in multipart with proper filename *)
     let parts = [
-      { Social_provider_core.name = "media"; 
+      { Social_core.name = "media"; 
         content = media_data;  (* Raw binary, not base64 *)
         filename = Some "upload.jpg";  (* Filename may be required *)
         content_type = Some mime_type };

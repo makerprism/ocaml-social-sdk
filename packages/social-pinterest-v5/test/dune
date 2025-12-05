@@ -3,6 +3,6 @@
  (modules test_pinterest)
  (libraries
   social-pinterest-v5
-  social-provider-core
+  social-core
   str
   unix))

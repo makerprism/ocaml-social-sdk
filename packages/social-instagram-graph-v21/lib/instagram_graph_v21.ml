@@ -14,7 +14,7 @@
     - 25 posts/day
 *)
 
-open Social_provider_core
+open Social_core
 
 (** {1 Rate Limiting Types} *)
 

@@ -8,7 +8,7 @@
     - Resumable upload for videos
 *)
 
-open Social_provider_core
+open Social_core
 
 (** Configuration module type for YouTube provider *)
 module type CONFIG = sig

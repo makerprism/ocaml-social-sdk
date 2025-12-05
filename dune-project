@@ -11,7 +11,7 @@
 (bug_reports "https://github.com/makerprism/ocaml-social-sdk/issues")
 
 (package
- (name social-provider-core)
+ (name social-core)
  (synopsis "Core interfaces for social media API clients")
  (description "Runtime-agnostic, HTTP-client-agnostic core interfaces for building social media API clients. This package provides CPS-style interfaces that can be implemented with any async runtime (Lwt, Eio, synchronous) and any HTTP client library.")
  (depends
@@ -21,13 +21,13 @@
   re))
 
 (package
- (name social-provider-lwt)
- (synopsis "Lwt runtime adapter for social-provider-core")
- (description "Lwt runtime adapter for social-provider-core with Cohttp_lwt_unix HTTP client implementation.")
+ (name social-lwt)
+ (synopsis "Lwt runtime adapter for social-core")
+ (description "Lwt runtime adapter for social-core with Cohttp_lwt_unix HTTP client implementation.")
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   lwt
   (lwt_ppx (>= 2.0.0))
   cohttp-lwt-unix))
@@ -39,7 +39,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  social-provider-core
+  social-core
   yojson
   base64
   ptime
@@ -53,7 +53,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   base64
   digestif
@@ -67,7 +67,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   re
   ptime
@@ -80,7 +80,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   uri
   ptime
@@ -93,7 +93,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   digestif
   base64))
@@ -105,7 +105,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   uri
   ptime
@@ -118,7 +118,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   uri
   ptime
@@ -131,7 +131,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   uri
   ptime
@@ -145,7 +145,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   uri
   base64))
@@ -157,7 +157,7 @@
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
-  (social-provider-core (= :version))
+  (social-core (= :version))
   yojson
   uri
   ptime))

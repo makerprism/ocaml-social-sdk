@@ -109,7 +109,7 @@ This release transforms the package from a basic posting library into a feature-
 - CPS (Continuation Passing Style) implementation
 - Runtime agnostic
 - HTTP client agnostic
-- Integrated with social-provider-core
+- Integrated with social-core
 
 ---
 

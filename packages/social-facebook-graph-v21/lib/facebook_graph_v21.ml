@@ -4,7 +4,7 @@
     Page access tokens are long-lived (60 days) and require re-authentication to refresh.
 *)
 
-open Social_provider_core
+open Social_core
 
 (** {1 Error Types} *)
 

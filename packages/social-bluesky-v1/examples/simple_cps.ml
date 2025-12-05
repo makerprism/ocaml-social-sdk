@@ -5,11 +5,11 @@
 *)
 
 (** Synchronous mock HTTP client for demo *)
-module Sync_http : Social_provider_core.HTTP_CLIENT = struct
+module Sync_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success _on_error =
     Printf.printf "HTTP GET: %s\n%!" url;
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [("content-type", "application/json")];
       body = {|{"did":"did:plc:test","accessJwt":"test_jwt"}|};
     }
@@ -17,28 +17,28 @@ module Sync_http : Social_provider_core.HTTP_CLIENT = struct
   let post ?headers:_ ?body:_ url on_success _on_error =
     Printf.printf "HTTP POST: %s\n%!" url;
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [("content-type", "application/json")];
       body = {|{"uri":"at://test/post/123","cid":"abc"}|};
     }
   
   let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = "{}";
     }
   
   let put ?headers:_ ?body:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = "{}";
     }
   
   let delete ?headers:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = "{}";
     }
@@ -52,7 +52,7 @@ module Demo_config = struct
   
   let get_credentials ~account_id:_ on_success _on_error =
     on_success {
-      Social_provider_core.access_token = "test.handle";
+      Social_core.access_token = "test.handle";
       refresh_token = Some "test_app_password";
       expires_at = None;
       token_type = "Bearer";

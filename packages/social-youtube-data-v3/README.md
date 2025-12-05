@@ -133,7 +133,7 @@ MIT
 
 ## Related Packages
 
-- `social-provider-core` - Core interfaces and types
-- `social-provider-lwt` - Lwt runtime adapters
+- `social-core` - Core interfaces and types
+- `social-lwt` - Lwt runtime adapters
 - `social-twitter-v2` - Twitter API v2
 - `social-linkedin-v2` - LinkedIn API v2

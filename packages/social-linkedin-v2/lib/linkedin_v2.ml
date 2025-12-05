@@ -8,7 +8,7 @@
     have access to programmatic refresh - users must re-authorize through OAuth flow.
 *)
 
-open Social_provider_core
+open Social_core
 
 (** {1 Response Types} *)
 

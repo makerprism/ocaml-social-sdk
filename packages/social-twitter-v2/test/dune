@@ -2,7 +2,7 @@
  (name test_twitter)
  (modules test_twitter)
  (libraries
-  social-provider-core
+  social-core
   social-twitter-v2
   digestif
   base64

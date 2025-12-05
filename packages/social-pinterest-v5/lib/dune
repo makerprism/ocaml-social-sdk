@@ -3,7 +3,7 @@
  (public_name social-pinterest-v5)
  (modules social_pinterest_v5 pinterest_v5)
  (libraries
-  social-provider-core
+  social-core
   yojson
   uri
   base64))

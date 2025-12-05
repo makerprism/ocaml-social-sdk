@@ -1,6 +1,6 @@
 (** Tests for LinkedIn API v2 Provider *)
 
-open Social_provider_core
+open Social_core
 open Social_linkedin_v2
 
 (** Helper to check if string contains substring *)

@@ -3,7 +3,7 @@
  (public_name social-youtube-data-v3)
  (modules social_youtube_data_v3 youtube_data_v3)
  (libraries
-  social-provider-core
+  social-core
   yojson
   uri
   ptime

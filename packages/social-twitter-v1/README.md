@@ -377,8 +377,8 @@ Issues and pull requests welcome at: https://github.com/feedmansion/feedmansion.
 ## Related Packages
 
 - **social-twitter-v2**: Modern Twitter API v2 client (recommended default)
-- **social-provider-core**: Core types and interfaces
-- **social-provider-lwt**: Lwt-based provider implementations
+- **social-core**: Core types and interfaces
+- **social-lwt**: Lwt-based provider implementations
 
 ## Support
 

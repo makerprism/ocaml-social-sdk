@@ -17,7 +17,7 @@ let credentials_store = Hashtbl.create 10
 module Cps_config = struct
   (* We'll define CPS-style functions that work with Lwt under the hood *)
   
-  module type HTTP_CPS = Social_provider_core.HTTP_CLIENT
+  module type HTTP_CPS = Social_core.HTTP_CLIENT
   
   module Http : HTTP_CPS = struct
     (* TODO: This needs proper implementation *)
@@ -66,7 +66,7 @@ let example_post_simple () =
   
   (* Set up mock credentials *)
   Hashtbl.replace credentials_store "demo_account" {
-    Social_provider_core.access_token = "your.bsky.handle";
+    Social_core.access_token = "your.bsky.handle";
     refresh_token = Some "your-app-password";
     expires_at = None;
     token_type = "Bearer";

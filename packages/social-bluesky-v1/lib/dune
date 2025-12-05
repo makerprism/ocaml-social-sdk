@@ -3,7 +3,7 @@
  (public_name social-bluesky-v1)
  (modules social_bluesky_v1 bluesky_v1)
  (libraries
-  social-provider-core
+  social-core
   yojson
   re
   ptime

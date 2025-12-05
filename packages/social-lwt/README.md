@@ -1,6 +1,6 @@
-# social-provider-lwt
+# social-lwt
 
-Lwt adapters and HTTP client for social-provider-core.
+Lwt adapters and HTTP client for social-core.
 
 > **Warning:** This library is not production-ready. It was primarily built using LLMs and is under active development. Expect breaking changes.
 

@@ -20,8 +20,8 @@ OCaml SDK for social media APIs. Post content, manage media, handle threads acro
 
 | Package | Description |
 |---------|-------------|
-| `social-provider-core` | Core interfaces and types (runtime-agnostic) |
-| `social-provider-lwt` | Lwt runtime adapter with Cohttp |
+| `social-core` | Core interfaces and types (runtime-agnostic) |
+| `social-lwt` | Lwt runtime adapter with Cohttp |
 | `social-twitter-v1` | Twitter API v1.1 (OAuth 1.0a) |
 | `social-twitter-v2` | Twitter API v2 |
 | `social-bluesky-v1` | Bluesky/AT Protocol |
@@ -42,11 +42,11 @@ Add to your `dune-project`:
 ```scheme
 (pin
  (url "git+https://github.com/makerprism/ocaml-social-sdk")
- (package (name social-provider-core)))
+ (package (name social-core)))
 
 (pin
  (url "git+https://github.com/makerprism/ocaml-social-sdk")
- (package (name social-provider-lwt)))
+ (package (name social-lwt)))
 
 (pin
  (url "git+https://github.com/makerprism/ocaml-social-sdk")
@@ -121,8 +121,8 @@ let%lwt result = Lwt_adapter.post client ~text:"Hello!" ()
 
 The SDK follows a runtime-agnostic design:
 
-1. **Core** (`social-provider-core`): Pure OCaml types, interfaces, and utilities
-2. **Runtime Adapters** (`social-provider-lwt`): HTTP client implementations
+1. **Core** (`social-core`): Pure OCaml types, interfaces, and utilities
+2. **Runtime Adapters** (`social-lwt`): HTTP client implementations
 3. **Platform SDKs** (`social-*`): Platform-specific API implementations
 
 ### Features

@@ -214,7 +214,7 @@ The Twitter API v2 package is now **feature-complete** for all non-streaming ope
 - Clear data flow
 
 ### 4. Platform Integration ⭐
-- Integrates with social-provider-core
+- Integrates with social-core
 - Consistent API across platforms
 - Built-in health monitoring
 - Automatic credential management
@@ -322,7 +322,7 @@ The package is **production-ready** for:
 ### Code Efficiency
 - **2,048 lines** covering 54 features
 - **~38 lines per feature** (very efficient)
-- **Zero runtime dependencies** (besides social-provider-core)
+- **Zero runtime dependencies** (besides social-core)
 - **Small binary size** (compiled OCaml)
 
 ## Testing

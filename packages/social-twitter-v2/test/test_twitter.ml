@@ -1,19 +1,19 @@
 (** Tests for Twitter API v2 Provider *)
 
 (** Mock HTTP client for testing *)
-module Mock_http : Social_provider_core.HTTP_CLIENT = struct
+module Mock_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success _on_error =
     (* Return different responses based on URL *)
     if String.contains url '/' && (String.ends_with ~suffix:".jpg" url || String.ends_with ~suffix:".png" url) then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "image/png")];
         body = "mock_image_data";
       }
     else if String.contains url '/' && String.contains url 't' then
       (* API calls for tweets/users *)
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [
           ("content-type", "application/json");
           ("x-rate-limit-limit", "900");
@@ -27,7 +27,7 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = "{}";
       }
@@ -49,7 +49,7 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
         {|{"data": {"id": "result_12345"}}|}
     in
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [
         ("content-type", "application/json");
         ("x-rate-limit-limit", "15");
@@ -61,7 +61,7 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
   
   let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [
         ("x-rate-limit-limit", "15");
         ("x-rate-limit-remaining", "14");
@@ -78,7 +78,7 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
         {|{"data": {}}|}
     in
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = response_body;
     }
@@ -91,7 +91,7 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
         {|{"data": {}}|}
     in
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [];
       body = response_body;
     }
@@ -114,7 +114,7 @@ module Mock_config = struct
         | Some t -> Ptime.to_rfc3339 t
         | None -> Ptime.to_rfc3339 t in
     on_success {
-      Social_provider_core.access_token = "test_access_token";
+      Social_core.access_token = "test_access_token";
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       token_type = "Bearer";

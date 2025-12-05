@@ -1,7 +1,7 @@
 (** Cohttp Client - HTTP_CLIENT implementation using Cohttp *)
 
 open Lwt.Syntax
-open Social_provider_core
+open Social_core
 
 (** Cohttp-based HTTP client that implements the CPS interface *)
 module Make = struct

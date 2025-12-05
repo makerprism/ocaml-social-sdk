@@ -3,7 +3,7 @@
  (public_name social-tiktok-v1)
  (modules social_tiktok_v1 tiktok_v1)
  (libraries
-  social-provider-core
+  social-core
   yojson
   uri
   ptime

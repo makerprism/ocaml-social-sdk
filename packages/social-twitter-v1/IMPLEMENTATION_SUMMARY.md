@@ -93,7 +93,7 @@ Automatically handles:
 ```
 - ocaml >= 4.08
 - dune >= 3.7
-- social-provider-core (interfaces)
+- social-core (interfaces)
 - yojson (JSON parsing)
 - base64 (media encoding)
 - ptime (timestamp handling)

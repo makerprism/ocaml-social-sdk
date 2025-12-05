@@ -3,7 +3,7 @@
 open Social_bluesky_v1
 
 (** Mock HTTP client *)
-module Mock_http : Social_provider_core.HTTP_CLIENT = struct
+module Mock_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success _on_error =
     if String.length url >= 24 && String.sub url 0 24 = "https://www.youtube.com/" then
       let html = {|<html><head>
@@ -12,19 +12,19 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
 <meta property="og:image" content="https://i.ytimg.com/vi/test.jpg">
 </head></html>|} in
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "text/html")];
         body = html;
       }
     else if String.length url >= 20 && String.sub url 0 20 = "https://i.ytimg.com/" then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "image/jpeg")];
         body = "mock_image_bytes";
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "text/plain")];
         body = "ok";
       }
@@ -32,25 +32,25 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
   let post ?headers:_ ?body:_ url on_success _on_error =
     if String.contains url 'u' && String.contains url 'p' then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"blob": {"$type": "blob", "ref": {"$link": "bafytest"}, "mimeType": "image/jpeg", "size": 1000}}|};
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [];
         body = "{}";
       }
   
   let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
-    on_success { Social_provider_core.status = 200; headers = []; body = "{}" }
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
   
   let put ?headers:_ ?body:_ _url on_success _on_error =
-    on_success { Social_provider_core.status = 200; headers = []; body = "{}" }
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
   
   let delete ?headers:_ _url on_success _on_error =
-    on_success { Social_provider_core.status = 200; headers = []; body = "{}" }
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
 end
 
 module Mock_config = struct
@@ -58,7 +58,7 @@ module Mock_config = struct
   let get_env _key = Some "test"
   let get_credentials ~account_id:_ on_success _on_error =
     on_success {
-      Social_provider_core.access_token = "test";
+      Social_core.access_token = "test";
       refresh_token = Some "test";
       expires_at = None;
       token_type = "Bearer";

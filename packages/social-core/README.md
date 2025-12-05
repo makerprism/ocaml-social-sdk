@@ -1,4 +1,4 @@
-# social-provider-core
+# social-core
 
 Core interfaces for building social media API clients in OCaml.
 
@@ -32,7 +32,7 @@ This package provides the core interfaces and types that all social media provid
 
 This package is meant to be used as a dependency for provider implementations. End users should use:
 
-- Runtime adapters: `social-provider-lwt`, `social-provider-eio`
+- Runtime adapters: `social-lwt`, `social-provider-eio`
 - Provider packages: `social-twitter-v2`, `social-bluesky-v1`, etc.
 
 ## Example

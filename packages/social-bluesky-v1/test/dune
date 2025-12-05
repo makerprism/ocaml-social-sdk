@@ -2,5 +2,5 @@
  (name test_bluesky)
  (modules test_bluesky)
  (libraries
-  social-provider-core
+  social-core
   social-bluesky-v1))

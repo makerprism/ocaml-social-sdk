@@ -1,4 +1,4 @@
 (library
  (name social_twitter_v1)
  (public_name social-twitter-v1)
- (libraries social-provider-core yojson base64 ptime ptime.clock.os cryptokit))
+ (libraries social-core yojson base64 ptime ptime.clock.os cryptokit))

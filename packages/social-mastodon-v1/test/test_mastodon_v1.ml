@@ -8,10 +8,10 @@ let string_contains s sub =
   with Not_found -> false
 
 (** Mock HTTP client for testing *)
-module Mock_http : Social_provider_core.HTTP_CLIENT = struct
+module Mock_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [("content-type", "application/json")];
       body = {|{"id":"123","username":"testuser"}|};
     }
@@ -20,41 +20,41 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
     (* Check if this is a status post *)
     if String.ends_with ~suffix:"api/v1/statuses" url then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"id":"54321","created_at":"2024-01-01T00:00:00Z","content":"Test post","url":"https://mastodon.social/@user/54321"}|};
       }
     (* OAuth token exchange *)
     else if String.ends_with ~suffix:"oauth/token" url then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"access_token":"test_token_123","token_type":"Bearer","scope":"read write follow","created_at":1234567890}|};
       }
     (* App registration *)
     else if String.ends_with ~suffix:"api/v1/apps" url then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"client_id":"test_client_id","client_secret":"test_client_secret","name":"test_app"}|};
       }
     (* Favorite/boost/bookmark operations *)
     else if String.contains url '/' then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"id":"54321","favourited":true}|};
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [];
         body = "{}";
       }
   
   let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [("content-type", "application/json")];
       body = {|{"id":"12345","type":"image","url":"https://mastodon.social/media/12345.jpg"}|};
     }
@@ -63,20 +63,20 @@ module Mock_http : Social_provider_core.HTTP_CLIENT = struct
     (* Edit status *)
     if String.contains url '/' then
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"id":"54321","created_at":"2024-01-01T00:00:00Z","content":"Edited post","url":"https://mastodon.social/@user/54321","edited_at":"2024-01-01T01:00:00Z"}|};
       }
     else
       on_success {
-        Social_provider_core.status = 200;
+        Social_core.status = 200;
         headers = [];
         body = "{}";
       }
   
   let delete ?headers:_ _url on_success _on_error =
     on_success {
-      Social_provider_core.status = 200;
+      Social_core.status = 200;
       headers = [("content-type", "application/json")];
       body = {|{"id":"54321","text":"Test post"}|};
     }
@@ -90,7 +90,7 @@ module Mock_config = struct
   
   let get_credentials ~account_id:_ on_success _on_error =
     on_success {
-      Social_provider_core.access_token = "test_access_token";
+      Social_core.access_token = "test_access_token";
       refresh_token = None;
       expires_at = Some "https://mastodon.social"; (* Instance URL *)
       token_type = "Bearer";
@@ -299,7 +299,7 @@ let test_exchange_code () =
     ~code:"test_code"
     (fun credentials ->
       success_called := true;
-      Printf.printf "✓ (access_token: %s)\n" credentials.Social_provider_core.access_token)
+      Printf.printf "✓ (access_token: %s)\n" credentials.Social_core.access_token)
     (fun err ->
       Printf.printf "✗ Error: %s\n" err;
       assert false);

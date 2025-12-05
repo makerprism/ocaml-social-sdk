@@ -1,6 +1,6 @@
 (** Tests for YouTube Data API v3 Provider *)
 
-open Social_provider_core
+open Social_core
 open Social_youtube_data_v3
 
 (** Helper to check if string contains substring *)

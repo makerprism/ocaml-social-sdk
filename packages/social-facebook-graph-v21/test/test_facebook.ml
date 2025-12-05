@@ -1,6 +1,6 @@
 (** Tests for Facebook Graph API v21 Provider *)
 
-open Social_provider_core
+open Social_core
 open Social_facebook_graph_v21
 
 (** Helper to check if string contains substring *)

@@ -9,7 +9,7 @@
     @see <https://developers.tiktok.com/doc/content-posting-api-get-started>
 *)
 
-open Social_provider_core
+open Social_core
 
 (** {1 Types} *)
 

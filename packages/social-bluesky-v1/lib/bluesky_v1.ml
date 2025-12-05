@@ -4,7 +4,7 @@
     for each API call. No OAuth refresh tokens needed.
 *)
 
-open Social_provider_core
+open Social_core
 
 (** Configuration module type for Bluesky provider *)
 module type CONFIG = sig
