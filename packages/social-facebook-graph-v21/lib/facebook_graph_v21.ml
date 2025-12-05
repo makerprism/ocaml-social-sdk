@@ -6,6 +6,292 @@
 
 open Social_core
 
+(** OAuth 2.0 module for Facebook
+    
+    Facebook uses OAuth 2.0 WITHOUT PKCE support.
+    
+    Token types:
+    - Short-lived user tokens: ~1-2 hours (returned by code exchange)
+    - Long-lived user tokens: ~60 days (obtained by exchanging short-lived tokens)
+    - Page access tokens: Derived from user tokens, can be made permanent
+    
+    IMPORTANT: For posting to Facebook Pages, you need:
+    1. User authenticates with pages_manage_posts permission
+    2. Exchange short-lived token for long-lived token
+    3. Get Page access token via /me/accounts endpoint
+    
+    Required environment variables (or pass directly to functions):
+    - FACEBOOK_APP_ID: App ID from Facebook Developer Portal
+    - FACEBOOK_APP_SECRET: App Secret
+    - FACEBOOK_REDIRECT_URI: Registered callback URL
+*)
+module OAuth = struct
+  (** Scope definitions for Facebook Graph API *)
+  module Scopes = struct
+    (** Scopes required for basic read operations *)
+    let read = ["public_profile"; "email"]
+    
+    (** Scopes required for Facebook Page posting *)
+    let write = [
+      "pages_read_engagement";
+      "pages_manage_posts";
+      "pages_show_list";
+    ]
+    
+    (** All commonly used scopes for Pages management *)
+    let all = [
+      "public_profile"; "email";
+      "pages_read_engagement"; "pages_manage_posts";
+      "pages_show_list"; "pages_read_user_content";
+      "pages_manage_metadata"; "pages_manage_engagement";
+    ]
+    
+    (** Operations that can be performed with Facebook API *)
+    type operation = 
+      | Post_text
+      | Post_media
+      | Post_video
+      | Read_profile
+      | Read_posts
+      | Delete_post
+      | Manage_pages
+    
+    (** Get scopes required for specific operations *)
+    let for_operations ops =
+      let base = ["public_profile"] in
+      if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Delete_post || o = Manage_pages) ops
+      then base @ write
+      else if List.exists (fun o -> o = Read_profile || o = Read_posts) ops
+      then base @ ["pages_read_engagement"; "pages_show_list"]
+      else base
+  end
+  
+  (** Platform metadata for Facebook OAuth *)
+  module Metadata = struct
+    (** Facebook does NOT support PKCE *)
+    let supports_pkce = false
+    
+    (** Facebook doesn't use traditional refresh tokens - use long-lived token exchange *)
+    let supports_refresh = false
+    
+    (** Short-lived tokens last ~1-2 hours *)
+    let short_lived_token_seconds = Some 3600
+    
+    (** Long-lived tokens last ~60 days *)
+    let long_lived_token_seconds = Some 5184000
+    
+    (** Recommended buffer before expiry (7 days) *)
+    let refresh_buffer_seconds = 604800
+    
+    (** Maximum retry attempts *)
+    let max_refresh_attempts = 5
+    
+    (** Authorization endpoint *)
+    let authorization_endpoint = "https://www.facebook.com/v21.0/dialog/oauth"
+    
+    (** Token endpoint *)
+    let token_endpoint = "https://graph.facebook.com/v21.0/oauth/access_token"
+    
+    (** Graph API base URL *)
+    let api_base = "https://graph.facebook.com/v21.0"
+  end
+  
+  (** Generate authorization URL for Facebook OAuth 2.0 flow
+      
+      Note: Facebook does NOT support PKCE.
+      
+      @param client_id Facebook App ID
+      @param redirect_uri Registered callback URL
+      @param state CSRF protection state parameter
+      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @return Full authorization URL to redirect user to
+  *)
+  let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) () =
+    let scope_str = String.concat "," scopes in
+    let params = [
+      ("client_id", client_id);
+      ("redirect_uri", redirect_uri);
+      ("state", state);
+      ("scope", scope_str);
+      ("response_type", "code");
+      ("auth_type", "rerequest");
+    ] in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+  
+  (** Make functor for OAuth operations that need HTTP client *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Exchange authorization code for short-lived access token
+        
+        Note: The returned token is SHORT-LIVED (~1-2 hours).
+        Call exchange_for_long_lived_token to get a 60-day token.
+        
+        @param client_id Facebook App ID
+        @param client_secret Facebook App Secret
+        @param redirect_uri Registered callback URL
+        @param code Authorization code from callback
+        @param on_success Continuation receiving credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
+      let params = [
+        ("client_id", [client_id]);
+        ("client_secret", [client_secret]);
+        ("redirect_uri", [redirect_uri]);
+        ("code", [code]);
+      ] in
+      let query = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.token_endpoint query in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 3600 (* Default to 1 hour if not provided *)
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = None;  (* Facebook doesn't use refresh tokens *)
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Exchange short-lived token for long-lived token (60 days)
+        
+        IMPORTANT: Always call this after exchange_code to get a usable token.
+        
+        @param client_id Facebook App ID
+        @param client_secret Facebook App Secret
+        @param short_lived_token The short-lived token from exchange_code
+        @param on_success Continuation receiving long-lived credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_for_long_lived_token ~client_id ~client_secret ~short_lived_token on_success on_error =
+      let params = [
+        ("grant_type", ["fb_exchange_token"]);
+        ("client_id", [client_id]);
+        ("client_secret", [client_secret]);
+        ("fb_exchange_token", [short_lived_token]);
+      ] in
+      let query = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.token_endpoint query in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 5184000 (* Default to 60 days *)
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = None;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse long-lived token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Long-lived token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Page token information *)
+    type page_info = {
+      page_id: string;
+      page_name: string;
+      page_access_token: string;
+      page_category: string option;
+    }
+    
+    (** Get pages the user manages with their Page access tokens
+        
+        @param user_access_token Long-lived user access token
+        @param on_success Continuation receiving list of page info
+        @param on_error Continuation receiving error message
+    *)
+    let get_user_pages ~user_access_token on_success on_error =
+      let url = Printf.sprintf "%s/me/accounts?fields=id,name,access_token,category&access_token=%s"
+        Metadata.api_base user_access_token in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let pages_data = json |> member "data" |> to_list in
+              let pages = List.map (fun page ->
+                {
+                  page_id = page |> member "id" |> to_string;
+                  page_name = page |> member "name" |> to_string;
+                  page_access_token = page |> member "access_token" |> to_string;
+                  page_category = page |> member "category" |> to_string_option;
+                }
+              ) pages_data in
+              on_success pages
+            with e ->
+              on_error (Printf.sprintf "Failed to parse pages response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Get pages failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Debug/inspect a token to check its validity and permissions
+        
+        @param access_token The token to inspect
+        @param app_token App access token (client_id|client_secret)
+        @param on_success Continuation receiving token info as JSON
+        @param on_error Continuation receiving error message
+    *)
+    let debug_token ~access_token ~app_token on_success on_error =
+      let url = Printf.sprintf "%s/debug_token?input_token=%s&access_token=%s"
+        Metadata.api_base access_token app_token in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              on_success json
+            with e ->
+              on_error (Printf.sprintf "Failed to parse debug response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Debug token failed (%d): %s" response.status response.body))
+        on_error
+  end
+end
+
 (** {1 Error Types} *)
 
 (** Facebook error codes *)
