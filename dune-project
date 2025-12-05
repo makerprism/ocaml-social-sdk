@@ -147,7 +147,8 @@
   (social-core (= :version))
   yojson
   uri
-  base64))
+  base64
+  ptime))
 
 (package
  (name social-tiktok-v1)

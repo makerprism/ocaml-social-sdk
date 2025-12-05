@@ -6,4 +6,6 @@
   social-core
   yojson
   uri
-  base64))
+  base64
+  ptime
+  ptime.clock.os))
