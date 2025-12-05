@@ -225,44 +225,66 @@ module Make (Config : CONFIG) = struct
         (* Don't fail the entire upload if alt text update fails, but log it *)
         on_success ())
   
-  (** Upload media to X API v2 (requires S256 PKCE tokens) *)
+  (** Upload media to X API v2 (requires S256 PKCE tokens)
+      
+      Uses the new v2 endpoint at https://api.x.com/2/media/upload
+      
+      The X API v2 supports two content types:
+      1. application/json with base64-encoded media (recommended, more reliable)
+      2. multipart/form-data with raw binary
+      
+      Based on community feedback, JSON with base64 is more reliable.
+      
+      Required fields per X API v2 docs:
+      - media: base64 encoded file data (string<byte>)
+      - media_category: tweet_image, tweet_video, tweet_gif, etc.
+      - media_type: MIME type (image/jpeg, image/png, etc.)
+      
+      Note: 403 errors typically indicate:
+      - Missing OAuth scopes (need tweet.write, users.read)
+      - App permissions not set to "Read and Write" in Developer Portal
+      - Quota exhaustion on Free tier
+  *)
   let upload_media ~access_token ~media_data ~mime_type ?(alt_text=None) on_success on_error =
     let url = Printf.sprintf "%s/media/upload" twitter_upload_base in
     
-    (* Determine media category *)
+    (* Determine media category based on MIME type *)
     let media_category = 
       if String.starts_with ~prefix:"video/" mime_type then "tweet_video" 
+      else if mime_type = "image/gif" then "tweet_gif"
       else "tweet_image" in
     
-    (* X API v2 expects raw binary data in multipart with proper filename *)
-    let parts = [
-      { Social_core.name = "media"; 
-        content = media_data;  (* Raw binary, not base64 *)
-        filename = Some "upload.jpg";  (* Filename may be required *)
-        content_type = Some mime_type };
-      { name = "media_category"; 
-        content = media_category; 
-        filename = None; 
-        content_type = None };
+    (* Base64 encode the media data - this is more reliable per community feedback *)
+    let media_b64 = Base64.encode_exn media_data in
+    
+    (* Build JSON body per X API v2 docs *)
+    let body_json = `Assoc [
+      ("media", `String media_b64);
+      ("media_category", `String media_category);
+      ("media_type", `String mime_type);
     ] in
+    let body = Yojson.Basic.to_string body_json in
     
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
+      ("Content-Type", "application/json");
     ] in
     
-    Printf.printf "[Twitter] Uploading media to X API v2 (category=%s, mime=%s, size=%d)\n%!" media_category mime_type (String.length media_data);
+    Printf.printf "[Twitter] Uploading media to X API v2 (url=%s, category=%s, mime=%s, raw_size=%d, b64_size=%d)\n%!" 
+      url media_category mime_type (String.length media_data) (String.length media_b64);
     
-    Config.Http.post_multipart ~headers ~parts url
+    Config.Http.post ~headers ~body url
       (fun response ->
+        Printf.printf "[Twitter] Media upload response: status=%d, body=%s\n%!" response.status response.body;
         if response.status >= 200 && response.status < 300 then
           try
             let json = Yojson.Basic.from_string response.body in
-            (* X API v2 may return different field names - try both *)
+            (* X API v2 returns: { "data": { "id": "...", "media_key": "..." } } *)
             let media_id = 
-              try json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
+              try json |> Yojson.Basic.Util.member "data" |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
               with _ -> 
                 try json |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
-                with _ -> json |> Yojson.Basic.Util.member "data" |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
+                with _ -> json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
             in
             Printf.printf "[Twitter] Media upload succeeded: media_id=%s\n%!" media_id;
             (* If alt text provided, update media metadata *)
@@ -275,61 +297,73 @@ module Make (Config : CONFIG) = struct
           with e ->
             on_error (Printf.sprintf "Failed to parse media response: %s\nBody: %s" (Printexc.to_string e) response.body)
         else if response.status = 403 then
-          (* 403 Forbidden - likely using token from legacy PKCE flow. User needs to reconnect. *)
-          on_error (Printf.sprintf "Twitter media upload forbidden (403). Please disconnect and reconnect your Twitter account to refresh authentication. Details: %s" response.body)
+          (* 403 Forbidden - common causes:
+             1. OAuth scopes missing (need tweet.write, users.read)
+             2. App permissions not "Read and Write" in Developer Portal
+             3. Free tier quota exhausted
+             4. Token needs refresh - user should reconnect account *)
+          on_error (Printf.sprintf "Twitter media upload forbidden (403). Common causes: 1) App needs 'Read and Write' permissions in Developer Portal, 2) OAuth token missing required scopes (tweet.write), 3) Free tier quota exhausted, 4) Try reconnecting your Twitter account. Details: %s" response.body)
         else
           on_error (Printf.sprintf "Media upload error (%d): %s" response.status response.body))
       on_error
   
-  (** Chunked media upload for large files (videos) 
+  (** Chunked media upload for large files (videos) using X API v2
       
-      This implements the 3-phase upload process:
-      1. INIT - Initialize upload and get media_id
-      2. APPEND - Upload chunks of data
-      3. FINALIZE - Complete the upload
+      This implements the 3-phase upload process per X API v2 docs:
+      1. INIT - Initialize upload and get media_id (POST /2/media/upload with command=INIT)
+      2. APPEND - Upload chunks of data (POST /2/media/upload with command=APPEND)
+      3. FINALIZE - Complete the upload (POST /2/media/upload with command=FINALIZE)
+      
+      Reference: https://docs.x.com/x-api/media/quickstart/media-upload-chunked
   *)
   let upload_media_chunked ~access_token ~media_data ~mime_type ?(alt_text=None) () on_success on_error =
-    let url = Printf.sprintf "%s/media/upload.json" twitter_upload_base in
+    let url = Printf.sprintf "%s/media/upload" twitter_upload_base in
     let media_category = 
       if String.starts_with ~prefix:"video/" mime_type then "tweet_video" 
+      else if mime_type = "image/gif" then "tweet_gif"
       else "tweet_image" in
     let total_bytes = String.length media_data in
     
-    (* Phase 1: INIT *)
-    let init_params = [
-      ("command", ["INIT"]);
-      ("total_bytes", [string_of_int total_bytes]);
-      ("media_type", [mime_type]);
-      ("media_category", [media_category]);
+    Printf.printf "[Twitter] Starting chunked upload (url=%s, category=%s, mime=%s, total_bytes=%d)\n%!" url media_category mime_type total_bytes;
+    
+    (* Phase 1: INIT - use multipart/form-data per v2 docs *)
+    let init_parts = [
+      { Social_core.name = "command"; content = "INIT"; filename = None; content_type = None };
+      { name = "media_type"; content = mime_type; filename = None; content_type = None };
+      { name = "total_bytes"; content = string_of_int total_bytes; filename = None; content_type = None };
+      { name = "media_category"; content = media_category; filename = None; content_type = None };
     ] in
-    let init_body = Uri.encoded_of_query init_params in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
-      ("Content-Type", "application/x-www-form-urlencoded");
     ] in
     
-    Config.Http.post ~headers ~body:init_body url
+    Config.Http.post_multipart ~headers ~parts:init_parts url
       (fun init_response ->
+        Printf.printf "[Twitter] INIT response: status=%d, body=%s\n%!" init_response.status init_response.body;
         if init_response.status >= 200 && init_response.status < 300 then
           try
             let init_json = Yojson.Basic.from_string init_response.body in
-            let media_id_string = init_json
-              |> Yojson.Basic.Util.member "media_id_string"
-              |> Yojson.Basic.Util.to_string in
+            (* v2 returns { "data": { "id": "...", "media_key": "...", "expires_after_secs": ... } } *)
+            let media_id_string = 
+              try init_json |> Yojson.Basic.Util.member "data" |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
+              with _ -> init_json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
+            in
+            Printf.printf "[Twitter] INIT succeeded: media_id=%s\n%!" media_id_string;
             
-            (* Phase 2: APPEND chunks *)
+            (* Phase 2: APPEND chunks - use multipart with actual file data *)
             let chunk_size = 5 * 1024 * 1024 in (* 5MB chunks *)
             let rec upload_chunks offset segment_index =
-              if offset >= total_bytes then
+              if offset >= total_bytes then begin
                 (* Phase 3: FINALIZE *)
-                let finalize_params = [
-                  ("command", ["FINALIZE"]);
-                  ("media_id", [media_id_string]);
+                Printf.printf "[Twitter] All chunks uploaded, sending FINALIZE\n%!";
+                let finalize_parts = [
+                  { Social_core.name = "command"; content = "FINALIZE"; filename = None; content_type = None };
+                  { name = "media_id"; content = media_id_string; filename = None; content_type = None };
                 ] in
-                let finalize_body = Uri.encoded_of_query finalize_params in
                 
-                Config.Http.post ~headers ~body:finalize_body url
+                Config.Http.post_multipart ~headers ~parts:finalize_parts url
                   (fun finalize_response ->
+                    Printf.printf "[Twitter] FINALIZE response: status=%d, body=%s\n%!" finalize_response.status finalize_response.body;
                     if finalize_response.status >= 200 && finalize_response.status < 300 then
                       (* Optionally add alt text *)
                       (match alt_text with
@@ -342,33 +376,38 @@ module Make (Config : CONFIG) = struct
                       on_error (Printf.sprintf "Failed to finalize upload (%d): %s" 
                         finalize_response.status finalize_response.body))
                   on_error
-              else
+              end else begin
                 (* Upload next chunk *)
                 let remaining = total_bytes - offset in
                 let current_chunk_size = min chunk_size remaining in
                 let chunk = String.sub media_data offset current_chunk_size in
-                let chunk_b64 = Base64.encode_exn chunk in
                 
-                let append_params = [
-                  ("command", ["APPEND"]);
-                  ("media_id", [media_id_string]);
-                  ("media", [chunk_b64]);
-                  ("segment_index", [string_of_int segment_index]);
+                Printf.printf "[Twitter] Uploading chunk %d (offset=%d, size=%d)\n%!" segment_index offset current_chunk_size;
+                
+                (* v2 APPEND uses multipart with raw media data *)
+                let append_parts = [
+                  { Social_core.name = "command"; content = "APPEND"; filename = None; content_type = None };
+                  { name = "media_id"; content = media_id_string; filename = None; content_type = None };
+                  { name = "segment_index"; content = string_of_int segment_index; filename = None; content_type = None };
+                  { name = "media"; content = chunk; filename = Some "chunk"; content_type = Some "application/octet-stream" };
                 ] in
-                let append_body = Uri.encoded_of_query append_params in
                 
-                Config.Http.post ~headers ~body:append_body url
+                Config.Http.post_multipart ~headers ~parts:append_parts url
                   (fun append_response ->
+                    Printf.printf "[Twitter] APPEND response: status=%d\n%!" append_response.status;
                     if append_response.status >= 200 && append_response.status < 300 then
                       upload_chunks (offset + current_chunk_size) (segment_index + 1)
                     else
                       on_error (Printf.sprintf "Failed to append chunk %d (%d): %s" 
                         segment_index append_response.status append_response.body))
                   on_error
+              end
             in
             upload_chunks 0 0
           with e ->
             on_error (Printf.sprintf "Failed to parse INIT response: %s" (Printexc.to_string e))
+        else if init_response.status = 403 then
+          on_error (Printf.sprintf "Twitter chunked upload forbidden (403). Common causes: 1) App needs 'Read and Write' permissions in Developer Portal, 2) OAuth token missing required scopes (tweet.write), 3) Free API tier doesn't support media upload (upgrade to Basic). Details: %s" init_response.body)
         else
           on_error (Printf.sprintf "Failed to initialize upload (%d): %s" 
             init_response.status init_response.body))
