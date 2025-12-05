@@ -94,6 +94,7 @@ Required Facebook permissions:
 - `pages_read_engagement` - Read page insights
 - `pages_manage_posts` - Create and manage posts
 - `pages_show_list` - List user's pages
+- `publish_video` - Required for posting Reels
 
 ## Configuration
 
@@ -116,8 +117,12 @@ FACEBOOK_REDIRECT_URI=https://yourapp.com/callback
 - Multiple images supported via `attached_media` parameter
 - Multipart/form-data upload
 
-### Videos
-- Not yet implemented in this provider
+### Videos (Reels)
+- Facebook Reels supported via `post_reel` function
+- Uses three-step upload process: initialize, upload binary, publish
+- Maximum duration: 90 seconds
+- Recommended aspect ratio: 9:16 (vertical)
+- Supported formats: MP4, MOV
 
 ### Threading
 - Facebook doesn't support thread/chain posting
@@ -151,6 +156,16 @@ Validate post content length.
 
 #### `upload_photo`
 Upload photo to page (used internally).
+
+#### `post_reel`
+Post a Reel (short-form vertical video) to a Facebook Page.
+
+```ocaml
+Facebook.post_reel ~account_id ~text:"Check out this video!" 
+  ~video_url:"https://example.com/video.mp4"
+  (fun post_id -> Printf.printf "Reel posted: %s\n" post_id)
+  (fun err -> Printf.eprintf "Error: %s\n" err)
+```
 
 ### Generic API Methods
 
