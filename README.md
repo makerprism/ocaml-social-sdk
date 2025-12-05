@@ -134,18 +134,18 @@ The SDK follows a runtime-agnostic design:
 
 ## Supported Platforms
 
-| Platform | OAuth | Post | Media | Threads | Status |
-|----------|-------|------|-------|---------|--------|
-| Twitter v2 | ✅ | ✅ | ✅ | ✅ | Used |
-| Bluesky | ✅ | ✅ | ✅ | ✅ | Used |
-| LinkedIn | ✅ | ✅ | ✅ | - | Used |
-| Mastodon | ✅ | ✅ | ✅ | ✅ | Used |
-| Twitter v1 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Untested |
-| Facebook | ⚠️ | ⚠️ | ⚠️ | - | Untested |
-| Instagram | ⚠️ | ⚠️ | ⚠️ | - | Untested |
-| YouTube | ⚠️ | ⚠️ | ⚠️ | - | Untested |
-| Pinterest | ⚠️ | ⚠️ | ⚠️ | - | Untested |
-| TikTok | ⚠️ | ⚠️ | ⚠️ | - | Untested |
+| Platform | OAuth | Post | Media | Threads | Read | Analytics | Other |
+|----------|-------|------|-------|---------|------|-----------|-------|
+| Twitter v2 | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| Bluesky | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| LinkedIn | ✅ | ✅ | ✅ | - | ⚠️ | ⚠️ | ⚠️ |
+| Mastodon | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| Twitter v1 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| Facebook | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
+| Instagram | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
+| YouTube | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
+| Pinterest | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
+| TikTok | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
 
 ✅ = Used successfully, ⚠️ = Implemented but untested
 
