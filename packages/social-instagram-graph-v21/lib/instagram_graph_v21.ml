@@ -16,6 +16,379 @@
 
 open Social_core
 
+(** OAuth 2.0 module for Instagram Graph API
+    
+    Instagram uses Facebook's OAuth 2.0 infrastructure with some key differences:
+    
+    Token types:
+    - Short-lived user tokens: ~1-2 hours (from Facebook code exchange)
+    - Long-lived user tokens: ~60 days (via ig_exchange_token grant)
+    
+    Token refresh:
+    - Long-lived tokens can be refreshed using ig_refresh_token grant
+    - Must refresh before expiration (within 60 days)
+    - Cannot refresh short-lived tokens directly
+    
+    IMPORTANT: Instagram Business/Creator accounts ONLY.
+    Personal Instagram accounts cannot use the Graph API.
+    
+    Required environment variables (or pass directly to functions):
+    - FACEBOOK_APP_ID: App ID from Facebook Developer Portal
+    - FACEBOOK_APP_SECRET: App Secret (same app as Facebook)
+    - INSTAGRAM_REDIRECT_URI: Registered callback URL
+*)
+module OAuth = struct
+  (** Scope definitions for Instagram Graph API *)
+  module Scopes = struct
+    (** Scopes for basic Instagram profile information *)
+    let read = [
+      "instagram_basic";
+      "pages_show_list";
+      "pages_read_engagement";
+    ]
+    
+    (** Scopes required for Instagram posting *)
+    let write = [
+      "instagram_basic";
+      "instagram_content_publish";
+      "pages_show_list";
+      "pages_read_engagement";
+    ]
+    
+    (** All commonly used scopes for Instagram management *)
+    let all = [
+      "instagram_basic";
+      "instagram_content_publish";
+      "instagram_manage_comments";
+      "instagram_manage_insights";
+      "pages_show_list";
+      "pages_read_engagement";
+      "pages_manage_metadata";
+    ]
+    
+    (** Operations that can be performed with Instagram API *)
+    type operation = 
+      | Post_image
+      | Post_video
+      | Post_carousel
+      | Post_reel
+      | Read_profile
+      | Read_insights
+      | Manage_comments
+    
+    (** Get scopes required for specific operations *)
+    let for_operations ops =
+      let base = ["instagram_basic"; "pages_show_list"; "pages_read_engagement"] in
+      let needs_publish = List.exists (fun o -> 
+        o = Post_image || o = Post_video || o = Post_carousel || o = Post_reel
+      ) ops in
+      let needs_comments = List.exists (fun o -> o = Manage_comments) ops in
+      let needs_insights = List.exists (fun o -> o = Read_insights) ops in
+      base @
+      (if needs_publish then ["instagram_content_publish"] else []) @
+      (if needs_comments then ["instagram_manage_comments"] else []) @
+      (if needs_insights then ["instagram_manage_insights"] else [])
+  end
+  
+  (** Platform metadata for Instagram OAuth *)
+  module Metadata = struct
+    (** Instagram does NOT support PKCE (uses Facebook OAuth) *)
+    let supports_pkce = false
+    
+    (** Instagram supports token refresh via ig_refresh_token grant *)
+    let supports_refresh = true
+    
+    (** Short-lived tokens last ~1-2 hours *)
+    let short_lived_token_seconds = Some 3600
+    
+    (** Long-lived tokens last ~60 days *)
+    let long_lived_token_seconds = Some 5184000
+    
+    (** Recommended buffer before expiry (7 days) *)
+    let refresh_buffer_seconds = 604800
+    
+    (** Maximum retry attempts for token operations *)
+    let max_refresh_attempts = 5
+    
+    (** Authorization endpoint (Facebook's OAuth dialog) *)
+    let authorization_endpoint = "https://www.facebook.com/v21.0/dialog/oauth"
+    
+    (** Token endpoint for initial exchange (Facebook Graph API) *)
+    let token_endpoint = "https://graph.facebook.com/v21.0/oauth/access_token"
+    
+    (** Instagram Graph API token endpoint for long-lived exchange *)
+    let instagram_token_endpoint = "https://graph.instagram.com/access_token"
+    
+    (** Instagram Graph API endpoint for token refresh *)
+    let instagram_refresh_endpoint = "https://graph.instagram.com/refresh_access_token"
+    
+    (** Graph API base URL *)
+    let api_base = "https://graph.facebook.com/v21.0"
+  end
+  
+  (** Generate authorization URL for Instagram OAuth 2.0 flow
+      
+      Note: Instagram uses Facebook's OAuth dialog. The user will:
+      1. Log in to Facebook
+      2. Select which Instagram Business/Creator account to connect
+      3. Grant requested permissions
+      
+      @param client_id Facebook App ID
+      @param redirect_uri Registered callback URL
+      @param state CSRF protection state parameter
+      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @return Full authorization URL to redirect user to
+  *)
+  let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) () =
+    let scope_str = String.concat "," scopes in
+    let params = [
+      ("client_id", client_id);
+      ("redirect_uri", redirect_uri);
+      ("state", state);
+      ("scope", scope_str);
+      ("response_type", "code");
+      ("auth_type", "rerequest");
+    ] in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+  
+  (** Make functor for OAuth operations that need HTTP client *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Exchange authorization code for short-lived access token
+        
+        Note: This returns a SHORT-LIVED token (~1-2 hours).
+        Call exchange_for_long_lived_token to get a 60-day token.
+        
+        @param client_id Facebook App ID
+        @param client_secret Facebook App Secret
+        @param redirect_uri Registered callback URL
+        @param code Authorization code from callback
+        @param on_success Continuation receiving credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
+      let params = [
+        ("client_id", [client_id]);
+        ("client_secret", [client_secret]);
+        ("redirect_uri", [redirect_uri]);
+        ("code", [code]);
+      ] in
+      let query = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.token_endpoint query in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 3600 (* Default to 1 hour if not provided *)
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = None;  (* Instagram doesn't use separate refresh tokens *)
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Exchange short-lived token for long-lived token (60 days)
+        
+        IMPORTANT: Always call this after exchange_code to get a usable token.
+        Uses the ig_exchange_token grant type on the Instagram Graph API endpoint.
+        
+        @param client_secret Facebook App Secret
+        @param short_lived_token The short-lived token from exchange_code
+        @param on_success Continuation receiving long-lived credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_for_long_lived_token ~client_secret ~short_lived_token on_success on_error =
+      let params = [
+        ("grant_type", ["ig_exchange_token"]);
+        ("client_secret", [client_secret]);
+        ("access_token", [short_lived_token]);
+      ] in
+      let query = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.instagram_token_endpoint query in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 5184000 (* Default to 60 days *)
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = None;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse long-lived token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Long-lived token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Refresh a long-lived token to extend its validity
+        
+        Instagram long-lived tokens can be refreshed to get a new 60-day token.
+        You should refresh tokens before they expire (within the 60-day window).
+        Uses the ig_refresh_token grant type.
+        
+        @param access_token The current long-lived token to refresh
+        @param on_success Continuation receiving refreshed credentials
+        @param on_error Continuation receiving error message
+    *)
+    let refresh_token ~access_token on_success on_error =
+      let params = [
+        ("grant_type", ["ig_refresh_token"]);
+        ("access_token", [access_token]);
+      ] in
+      let query = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.instagram_refresh_endpoint query in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let refreshed_token = json |> member "access_token" |> to_string in
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 5184000 (* Default to 60 days *)
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token = refreshed_token;
+                refresh_token = None;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Instagram Business Account info from /me/accounts discovery *)
+    type instagram_account_info = {
+      ig_user_id: string;
+      ig_username: string;
+      page_id: string;
+      page_name: string;
+    }
+    
+    (** Discover Instagram Business accounts linked to user's Facebook Pages
+        
+        After OAuth, use this to find which Instagram accounts the user can manage.
+        Returns all Instagram Business/Creator accounts linked to Facebook Pages
+        the user has admin access to.
+        
+        @param user_access_token Long-lived user access token
+        @param on_success Continuation receiving list of Instagram accounts
+        @param on_error Continuation receiving error message
+    *)
+    let get_instagram_accounts ~user_access_token on_success on_error =
+      let url = Printf.sprintf "%s/me/accounts?fields=id,name,instagram_business_account{id,username}&access_token=%s"
+        Metadata.api_base user_access_token in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let pages_data = json |> member "data" |> to_list in
+              let accounts = List.filter_map (fun page ->
+                let page_id = page |> member "id" |> to_string in
+                let page_name = page |> member "name" |> to_string in
+                let ig_account = page |> member "instagram_business_account" in
+                if ig_account = `Null then None
+                else
+                  try
+                    let ig_user_id = ig_account |> member "id" |> to_string in
+                    let ig_username = 
+                      try ig_account |> member "username" |> to_string
+                      with _ -> "unknown" in
+                    Some {
+                      ig_user_id;
+                      ig_username;
+                      page_id;
+                      page_name;
+                    }
+                  with _ -> None
+              ) pages_data in
+              on_success accounts
+            with e ->
+              on_error (Printf.sprintf "Failed to parse accounts response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Get Instagram accounts failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Debug/inspect a token to check its validity and permissions
+        
+        @param access_token The token to inspect
+        @param app_token App access token (client_id|client_secret)
+        @param on_success Continuation receiving token info as JSON
+        @param on_error Continuation receiving error message
+    *)
+    let debug_token ~access_token ~app_token on_success on_error =
+      let url = Printf.sprintf "%s/debug_token?input_token=%s&access_token=%s"
+        Metadata.api_base access_token app_token in
+      
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              on_success json
+            with e ->
+              on_error (Printf.sprintf "Failed to parse debug response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Debug token failed (%d): %s" response.status response.body))
+        on_error
+  end
+end
+
 (** {1 Rate Limiting Types} *)
 
 (** Rate limit usage information from X-App-Usage header *)
