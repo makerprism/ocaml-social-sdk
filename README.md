@@ -134,20 +134,20 @@ The SDK follows a runtime-agnostic design:
 
 ## Supported Platforms
 
-| Platform | OAuth | Post | Media | Threads | Read | Analytics | Other |
-|----------|-------|------|-------|---------|------|-----------|-------|
-| Twitter v2 | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
-| Bluesky | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
-| LinkedIn | ✅ | ✅ | ✅ | - | ⚠️ | ⚠️ | ⚠️ |
-| Mastodon | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
-| Twitter v1 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| Facebook | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
-| Instagram | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
-| YouTube | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
-| Pinterest | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
-| TikTok | ⚠️ | ⚠️ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ |
+| Platform | OAuth | Post | Media | Threads | Stories | Shorts/Reels | Read | Analytics |
+|----------|-------|------|-------|---------|---------|--------------|------|-----------|
+| Twitter v2 | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
+| Bluesky | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
+| LinkedIn | ✅ | ✅ | ✅ | - | - | - | ⚠️ | ⚠️ |
+| Mastodon | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
+| Twitter v1 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | - | - | ⚠️ | ⚠️ |
+| Facebook | ⚠️ | ⚠️ | ⚠️ | - | ❌ | ⚠️ | ⚠️ | ⚠️ |
+| Instagram | ⚠️ | ⚠️ | ⚠️ | - | ❌ | ⚠️ | ⚠️ | ⚠️ |
+| YouTube | ⚠️ | - | - | - | - | ⚠️ | ⚠️ | ⚠️ |
+| Pinterest | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | ⚠️ |
+| TikTok | ⚠️ | - | - | - | - | ⚠️ | ⚠️ | ⚠️ |
 
-✅ = Used successfully, ⚠️ = Implemented but untested
+✅ = Used successfully, ⚠️ = Implemented but untested, ❌ = Not implemented (API available), - = Not applicable
 
 ## License
 
