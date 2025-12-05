@@ -6,6 +6,163 @@
 
 open Social_core
 
+(** Authentication module for Bluesky
+    
+    IMPORTANT: Bluesky does NOT use OAuth. Instead, it uses app passwords
+    with the AT Protocol's session management.
+    
+    Authentication flow:
+    1. User creates an app password at https://bsky.app/settings/app-passwords
+    2. Application calls create_session with identifier (handle/DID) and app password
+    3. Session returns access_jwt and refresh_jwt
+    4. Access JWT expires but can be refreshed with refresh_jwt
+    
+    App passwords do not expire and can be revoked by the user at any time.
+*)
+module Auth = struct
+  (** Platform metadata for Bluesky authentication *)
+  module Metadata = struct
+    (** Bluesky does NOT use OAuth *)
+    let uses_oauth = false
+    
+    (** Bluesky uses app passwords for authentication *)
+    let uses_app_password = true
+    
+    (** App passwords do not expire (until user revokes them) *)
+    let app_password_expires = false
+    
+    (** Access JWTs expire after a short period (typically minutes) *)
+    let access_jwt_lifetime_seconds = Some 300  (* ~5 minutes *)
+    
+    (** Refresh JWTs can be used to get new access JWTs *)
+    let supports_session_refresh = true
+    
+    (** Default PDS URL (Personal Data Server) *)
+    let default_pds_url = "https://bsky.social"
+    
+    (** Session creation endpoint *)
+    let create_session_path = "/xrpc/com.atproto.server.createSession"
+    
+    (** Session refresh endpoint *)
+    let refresh_session_path = "/xrpc/com.atproto.server.refreshSession"
+    
+    (** Session deletion endpoint *)
+    let delete_session_path = "/xrpc/com.atproto.server.deleteSession"
+  end
+  
+  (** Session information returned by Bluesky *)
+  type session = {
+    did: string;           (** User's DID (decentralized identifier) *)
+    handle: string;        (** User's handle (e.g., user.bsky.social) *)
+    access_jwt: string;    (** JWT for API authentication *)
+    refresh_jwt: string;   (** JWT for session refresh *)
+  }
+  
+  (** Make functor for Auth operations that need HTTP client *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Create a new session using app password
+        
+        @param pds_url Optional PDS URL (defaults to https://bsky.social)
+        @param identifier User's handle (e.g., user.bsky.social) or DID
+        @param app_password App password from https://bsky.app/settings/app-passwords
+        @param on_success Continuation receiving session info
+        @param on_error Continuation receiving error message
+    *)
+    let create_session ?(pds_url=Metadata.default_pds_url) ~identifier ~app_password on_success on_error =
+      let url = Printf.sprintf "%s%s" pds_url Metadata.create_session_path in
+      let body = Yojson.Basic.to_string (`Assoc [
+        ("identifier", `String identifier);
+        ("password", `String app_password);
+      ]) in
+      let headers = [("Content-Type", "application/json")] in
+      
+      Http.post ~headers ~body url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let session = {
+                did = json |> member "did" |> to_string;
+                handle = json |> member "handle" |> to_string;
+                access_jwt = json |> member "accessJwt" |> to_string;
+                refresh_jwt = json |> member "refreshJwt" |> to_string;
+              } in
+              on_success session
+            with e ->
+              on_error (Printf.sprintf "Failed to parse session: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Session creation failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Refresh an existing session
+        
+        @param pds_url Optional PDS URL (defaults to https://bsky.social)
+        @param refresh_jwt The refresh JWT from a previous session
+        @param on_success Continuation receiving new session info
+        @param on_error Continuation receiving error message
+    *)
+    let refresh_session ?(pds_url=Metadata.default_pds_url) ~refresh_jwt on_success on_error =
+      let url = Printf.sprintf "%s%s" pds_url Metadata.refresh_session_path in
+      let headers = [
+        ("Authorization", Printf.sprintf "Bearer %s" refresh_jwt);
+      ] in
+      
+      Http.post ~headers url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let session = {
+                did = json |> member "did" |> to_string;
+                handle = json |> member "handle" |> to_string;
+                access_jwt = json |> member "accessJwt" |> to_string;
+                refresh_jwt = json |> member "refreshJwt" |> to_string;
+              } in
+              on_success session
+            with e ->
+              on_error (Printf.sprintf "Failed to parse session: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Session refresh failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Delete/invalidate a session
+        
+        @param pds_url Optional PDS URL (defaults to https://bsky.social)
+        @param refresh_jwt The refresh JWT of the session to delete
+        @param on_success Continuation called on successful deletion
+        @param on_error Continuation receiving error message
+    *)
+    let delete_session ?(pds_url=Metadata.default_pds_url) ~refresh_jwt on_success on_error =
+      let url = Printf.sprintf "%s%s" pds_url Metadata.delete_session_path in
+      let headers = [
+        ("Authorization", Printf.sprintf "Bearer %s" refresh_jwt);
+      ] in
+      
+      Http.post ~headers url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            on_success ()
+          else
+            on_error (Printf.sprintf "Session deletion failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Convert session to Social_core.credentials for storage
+        
+        Note: This stores the identifier in access_token and app_password in refresh_token
+        for compatibility with the SDK's credential storage model.
+    *)
+    let session_to_credentials ~identifier ~app_password : credentials =
+      {
+        access_token = identifier;
+        refresh_token = Some app_password;
+        expires_at = None;  (* App passwords don't expire *)
+        token_type = "AppPassword";
+      }
+  end
+end
+
 (** Configuration module type for Bluesky provider *)
 module type CONFIG = sig
   module Http : HTTP_CLIENT
