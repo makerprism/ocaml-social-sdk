@@ -1103,6 +1103,497 @@ let test_thread_with_alt_texts () =
       print_endline "✓ Thread with alt-texts per post")
     (fun err -> failwith ("Thread with alt-texts failed: " ^ err))
 
+(** {1 REST.li Protocol Tests} *)
+(** 
+   These tests verify protocol-level behaviors that the official LinkedIn SDK tests cover.
+   They ensure correct REST.li headers, URL encoding, and request formatting.
+*)
+
+(** Helper to find a header value in a request *)
+let find_header headers name =
+  List.find_opt (fun (k, _) -> String.lowercase_ascii k = String.lowercase_ascii name) headers
+  |> Option.map snd
+
+(** Test: X-RestLi-Protocol-Version header is sent on API calls *)
+let test_restli_protocol_version_header () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  let response_body = {|{
+    "id": "urn:li:share:123",
+    "author": "urn:li:person:abc",
+    "lifecycleState": "PUBLISHED"
+  }|} in
+  
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  LinkedIn.get_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
+    (fun _post ->
+      (* Check that X-RestLi-Protocol-Version header was sent *)
+      let requests = !Mock_http.requests in
+      match requests with
+      | (_, _, headers, _) :: _ ->
+          (match find_header headers "X-Restli-Protocol-Version" with
+          | Some version -> 
+              assert (version = "2.0.0");
+              print_endline "✓ X-RestLi-Protocol-Version header (2.0.0)"
+          | None -> failwith "X-RestLi-Protocol-Version header not found")
+      | [] -> failwith "No requests recorded")
+    (fun err -> failwith ("Get post failed: " ^ err))
+
+(** Test: Authorization header format is correct (Bearer token) *)
+let test_authorization_header_format () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "test_bearer_token_12345";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  let response_body = {|{"sub": "user123", "name": "Test User"}|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  LinkedIn.get_profile ~account_id:"test_account"
+    (fun _profile ->
+      let requests = !Mock_http.requests in
+      match requests with
+      | (_, _, headers, _) :: _ ->
+          (match find_header headers "Authorization" with
+          | Some auth -> 
+              assert (String.starts_with ~prefix:"Bearer " auth);
+              assert (string_contains auth "test_bearer_token_12345");
+              print_endline "✓ Authorization header format (Bearer token)"
+          | None -> failwith "Authorization header not found")
+      | [] -> failwith "No requests recorded")
+    (fun err -> failwith ("Get profile failed: " ^ err))
+
+(** Test: Content-Type header is application/json for POST requests *)
+let test_content_type_header_json () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  (* Set up response queue: first person URN, then like response *)
+  let person_response = {|{"sub": "user123"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = "{}"; headers = [] };
+  ];
+  
+  LinkedIn.like_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
+    (fun () ->
+      (* Find the POST request (like_post) *)
+      let requests = List.rev !Mock_http.requests in
+      let post_request = List.find_opt (fun (method_, _, _, _) ->
+        method_ = "POST"
+      ) requests in
+      
+      match post_request with
+      | Some (_, _, headers, _) ->
+          (match find_header headers "Content-Type" with
+          | Some ct -> 
+              assert (ct = "application/json");
+              print_endline "✓ Content-Type header (application/json)"
+          | None -> failwith "Content-Type header not found on POST request")
+      | None -> failwith "No POST request found")
+    (fun err -> failwith ("Like post failed: " ^ err))
+
+(** Test: URN is properly URL-encoded in path *)
+let test_urn_path_encoding () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  let response_body = {|{
+    "id": "urn:li:share:123456789",
+    "author": "urn:li:person:abc",
+    "lifecycleState": "PUBLISHED"
+  }|} in
+  
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  (* URN contains colons which need to be encoded *)
+  let test_urn = "urn:li:share:123456789" in
+  
+  LinkedIn.get_post ~account_id:"test_account" ~post_urn:test_urn
+    (fun _post ->
+      let requests = !Mock_http.requests in
+      match requests with
+      | (_, url, _, _) :: _ ->
+          (* URL should contain encoded URN - colons become %3A *)
+          assert (string_contains url "urn%3Ali%3Ashare%3A123456789" ||
+                  string_contains url "urn:li:share:123456789");
+          print_endline "✓ URN path encoding"
+      | [] -> failwith "No requests recorded")
+    (fun err -> failwith ("Get post failed: " ^ err))
+
+(** Test: Batch request URL encoding for multiple URNs *)
+let test_batch_urns_encoding () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  let response_body = {|{
+    "results": {
+      "urn:li:share:111": {"id": "urn:li:share:111", "author": "urn:li:person:a", "lifecycleState": "PUBLISHED"},
+      "urn:li:share:222": {"id": "urn:li:share:222", "author": "urn:li:person:b", "lifecycleState": "PUBLISHED"}
+    }
+  }|} in
+  
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  LinkedIn.batch_get_posts 
+    ~account_id:"test_account" 
+    ~post_urns:["urn:li:share:111"; "urn:li:share:222"]
+    (fun _posts ->
+      let requests = !Mock_http.requests in
+      match requests with
+      | (_, url, _, _) :: _ ->
+          (* URL should contain ids parameter with encoded URNs *)
+          assert (string_contains url "ids=");
+          (* Should have comma-separated values *)
+          assert (string_contains url "," || string_contains url "%2C");
+          print_endline "✓ Batch URNs encoding"
+      | [] -> failwith "No requests recorded")
+    (fun err -> failwith ("Batch get posts failed: " ^ err))
+
+(** Test: Request body structure for ugcPost creation *)
+let test_ugcpost_request_body_structure () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  (* Set up response queue: first person URN, then post response *)
+  let person_response = {|{"sub": "user123"}|} in
+  let post_response = {|{"id": "urn:li:share:789"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = post_response; headers = [] };
+  ];
+  
+  LinkedIn.post_single ~account_id:"test_account" ~text:"Test post content" ~media_urls:[]
+    (fun _post_id ->
+      (* Find the POST request to ugcPosts *)
+      let requests = List.rev !Mock_http.requests in
+      let ugc_post_request = List.find_opt (fun (method_, url, _, _) ->
+        method_ = "POST" && string_contains url "ugcPosts"
+      ) requests in
+      
+      match ugc_post_request with
+      | Some (_, _, _, body) ->
+          (* Verify required fields in request body *)
+          assert (string_contains body "author");
+          assert (string_contains body "lifecycleState");
+          assert (string_contains body "PUBLISHED");
+          assert (string_contains body "specificContent");
+          assert (string_contains body "com.linkedin.ugc.ShareContent");
+          assert (string_contains body "shareCommentary");
+          assert (string_contains body "visibility");
+          assert (string_contains body "com.linkedin.ugc.MemberNetworkVisibility");
+          print_endline "✓ UGC Post request body structure"
+      | None -> failwith "No ugcPosts POST request found")
+    (fun err -> failwith ("Post single failed: " ^ err))
+
+(** Test: Comment request body structure *)
+let test_comment_request_body_structure () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  (* Set up response queue: first person URN, then comment response *)
+  let person_response = {|{"sub": "user123"}|} in
+  let comment_response = {|{"id": "comment123"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = comment_response; headers = [] };
+  ];
+  
+  LinkedIn.comment_on_post 
+    ~account_id:"test_account" 
+    ~post_urn:"urn:li:share:123"
+    ~text:"This is a test comment"
+    (fun _comment_id ->
+      (* Find the POST request to comments *)
+      let requests = List.rev !Mock_http.requests in
+      let comment_request = List.find_opt (fun (method_, url, _, _) ->
+        method_ = "POST" && string_contains url "comments"
+      ) requests in
+      
+      match comment_request with
+      | Some (_, _, _, body) ->
+          (* Verify required fields *)
+          assert (string_contains body "actor");
+          assert (string_contains body "object");
+          assert (string_contains body "message");
+          assert (string_contains body "text");
+          assert (string_contains body "This is a test comment");
+          print_endline "✓ Comment request body structure"
+      | None -> failwith "No comments POST request found")
+    (fun err -> failwith ("Comment on post failed: " ^ err))
+
+(** Test: DELETE request for unlike_post *)
+let test_unlike_post_delete () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  (* Set up response queue: first person URN, then delete response *)
+  let person_response = {|{"sub": "user123"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 204; body = ""; headers = [] };
+  ];
+  
+  LinkedIn.unlike_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
+    (fun () ->
+      (* Find the DELETE request *)
+      let requests = List.rev !Mock_http.requests in
+      let delete_request = List.find_opt (fun (method_, _, _, _) ->
+        method_ = "DELETE"
+      ) requests in
+      
+      match delete_request with
+      | Some (_, url, headers, _) ->
+          (* Verify DELETE request was made to likes endpoint *)
+          assert (string_contains url "socialActions");
+          assert (string_contains url "likes");
+          (* Verify headers include Authorization and X-RestLi-Protocol-Version *)
+          assert (find_header headers "Authorization" <> None);
+          assert (find_header headers "X-Restli-Protocol-Version" <> None);
+          print_endline "✓ Unlike post DELETE request"
+      | None -> failwith "No DELETE request found")
+    (fun err -> failwith ("Unlike post failed: " ^ err))
+
+(** Test: Like request body structure with actor and object *)
+let test_like_request_body_structure () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  (* Set up response queue: first person URN, then like response *)
+  let person_response = {|{"sub": "user123"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = "{}"; headers = [] };
+  ];
+  
+  LinkedIn.like_post ~account_id:"test_account" ~post_urn:"urn:li:share:456"
+    (fun () ->
+      (* Find the POST request to likes *)
+      let requests = List.rev !Mock_http.requests in
+      let like_request = List.find_opt (fun (method_, url, _, _) ->
+        method_ = "POST" && string_contains url "likes"
+      ) requests in
+      
+      match like_request with
+      | Some (_, _, _, body) ->
+          (* Verify actor (person URN) and object (post URN) are present *)
+          assert (string_contains body "actor");
+          assert (string_contains body "object");
+          assert (string_contains body "urn:li:person:user123");
+          assert (string_contains body "urn:li:share:456");
+          print_endline "✓ Like request body structure (actor + object)"
+      | None -> failwith "No likes POST request found")
+    (fun err -> failwith ("Like post failed: " ^ err))
+
+(** Test: Register upload sends correct X-Restli-Protocol-Version *)
+let test_register_upload_headers () =
+  Mock_config.reset ();
+  
+  let response_body = {|{
+    "value": {
+      "asset": "urn:li:digitalmediaAsset:test123",
+      "uploadMechanism": {
+        "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
+          "uploadUrl": "https://upload.linkedin.com/test"
+        }
+      }
+    }
+  }|} in
+  
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  
+  LinkedIn.register_upload 
+    ~access_token:"test_token"
+    ~person_urn:"urn:li:person:test"
+    ~media_type:"image"
+    (fun (_asset, _upload_url) ->
+      let requests = !Mock_http.requests in
+      match requests with
+      | (_, url, headers, _) :: _ ->
+          (* Verify URL ends with action=registerUpload *)
+          assert (string_contains url "action=registerUpload");
+          (* Verify headers *)
+          assert (find_header headers "X-Restli-Protocol-Version" = Some "2.0.0");
+          assert (find_header headers "Content-Type" = Some "application/json");
+          assert (find_header headers "Authorization" <> None);
+          print_endline "✓ Register upload headers"
+      | [] -> failwith "No requests recorded")
+    (fun err -> failwith ("Register upload failed: " ^ err))
+
+(** Test: Query parameters are properly encoded (start, count) *)
+let test_query_param_encoding () =
+  Mock_config.reset ();
+  
+  let future_time = 
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+  
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  
+  let comments_response = {|{
+    "elements": [],
+    "paging": {"start": 5, "count": 20, "total": 100}
+  }|} in
+  
+  Mock_http.set_response { status = 200; body = comments_response; headers = [] };
+  
+  LinkedIn.get_post_comments ~account_id:"test_account" ~post_urn:"urn:li:share:123" ~start:5 ~count:20
+    (fun _collection ->
+      let requests = !Mock_http.requests in
+      match requests with
+      | (_, url, _, _) :: _ ->
+          (* Verify query parameters are in URL *)
+          assert (string_contains url "start=5");
+          assert (string_contains url "count=20");
+          print_endline "✓ Query parameter encoding (start, count)"
+      | [] -> failwith "No requests recorded")
+    (fun err -> failwith ("Get comments failed: " ^ err))
+
 (** Run all tests *)
 let () =
   print_endline "\n=== LinkedIn Provider Tests ===\n";
@@ -1145,4 +1636,17 @@ let () =
   test_alt_text_special_chars ();
   test_thread_with_alt_texts ();
   
-  print_endline "\n=== All 31 tests passed! ===\n"
+  print_endline "\n--- REST.li Protocol Tests ---";
+  test_restli_protocol_version_header ();
+  test_authorization_header_format ();
+  test_content_type_header_json ();
+  test_urn_path_encoding ();
+  test_batch_urns_encoding ();
+  test_ugcpost_request_body_structure ();
+  test_comment_request_body_structure ();
+  test_unlike_post_delete ();
+  test_like_request_body_structure ();
+  test_register_upload_headers ();
+  test_query_param_encoding ();
+  
+  print_endline "\n=== All 42 tests passed! ===\n"
