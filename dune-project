@@ -95,7 +95,9 @@
   (social-core (= :version))
   yojson
   digestif
-  base64))
+  base64
+  uri
+  ptime))
 
 (package
  (name social-facebook-graph-v21)
