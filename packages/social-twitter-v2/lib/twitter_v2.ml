@@ -503,7 +503,10 @@ module Make (Config : CONFIG) = struct
   (** Upload media to X API v2 (requires S256 PKCE tokens)
       
       Uses the v2 endpoint at https://api.x.com/2/media/upload with
-      multipart/form-data encoding and raw binary data.
+      application/json content type and base64-encoded media data,
+      as specified in the official X API v2 documentation.
+      
+      Reference: https://docs.x.com/x-api/media/upload-media
       
       Note: 403 errors typically indicate:
       - Missing OAuth scopes (need tweet.write, users.read)
@@ -519,50 +522,48 @@ module Make (Config : CONFIG) = struct
       else if mime_type = "image/gif" then "tweet_gif"
       else "tweet_image" in
     
-    (* Determine filename extension from MIME type *)
-    let extension = match mime_type with
-      | "image/jpeg" -> ".jpg"
-      | "image/png" -> ".png"
-      | "image/gif" -> ".gif"
-      | "image/webp" -> ".webp"
-      | "video/mp4" -> ".mp4"
-      | "video/quicktime" -> ".mov"
-      | _ -> "" in
+    (* Base64 encode the media data per official X API v2 docs *)
+    let media_base64 = Base64.encode_exn media_data in
     
-    (* X API v2 expects raw binary data in multipart/form-data *)
-    let parts = [
-      { Social_core.name = "media"; 
-        content = media_data;
-        filename = Some ("media" ^ extension);
-        content_type = Some mime_type };
-      { name = "media_category"; 
-        content = media_category; 
-        filename = None; 
-        content_type = None };
+    (* Build JSON body per official X API v2 documentation:
+       {
+         "media": "<base64-string>",
+         "media_category": "tweet_image",
+         "media_type": "image/png"
+       }
+    *)
+    let body_json = `Assoc [
+      ("media", `String media_base64);
+      ("media_category", `String media_category);
+      ("media_type", `String mime_type);
     ] in
+    let body = Yojson.Basic.to_string body_json in
     
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
+      ("Content-Type", "application/json");
     ] in
     
-    Printf.printf "[Twitter] Uploading media to X API v2 (url=%s, category=%s, mime=%s, size=%d)\n%!" 
-      url media_category mime_type (String.length media_data);
+    Printf.printf "[Twitter] Uploading media to X API v2 (url=%s, category=%s, mime=%s, size=%d, base64_size=%d)\n%!" 
+      url media_category mime_type (String.length media_data) (String.length media_base64);
     
-    Config.Http.post_multipart ~headers ~parts url
+    Config.Http.post ~headers ~body url
       (fun response ->
         Printf.printf "[Twitter] Media upload response: status=%d, body=%s\n%!" response.status response.body;
         if response.status >= 200 && response.status < 300 then
           try
             let json = Yojson.Basic.from_string response.body in
-            (* X API v2 may return different field names - try multiple formats *)
+            (* X API v2 returns: { "data": { "id": "...", "media_key": "...", ... } }
+               Per official docs: https://docs.x.com/x-api/media/upload-media *)
             let media_id = 
-              try json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
+              try json |> Yojson.Basic.Util.member "data" |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
               with _ -> 
+                (* Fallback for alternative response formats *)
                 try json |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
-                with _ -> json |> Yojson.Basic.Util.member "data" |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
+                with _ -> json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
             in
             Printf.printf "[Twitter] Media upload succeeded: media_id=%s\n%!" media_id;
-            (* If alt text provided, update media metadata *)
+            (* If alt text provided, update media metadata via POST /2/media/metadata *)
             (match alt_text with
             | Some alt when String.length alt > 0 ->
                 update_media_metadata ~access_token ~media_id ~alt_text:alt
@@ -572,7 +573,7 @@ module Make (Config : CONFIG) = struct
           with e ->
             on_error (Printf.sprintf "Failed to parse media response: %s\nBody: %s" (Printexc.to_string e) response.body)
         else if response.status = 403 then
-          on_error (Printf.sprintf "Twitter media upload forbidden (403). Please disconnect and reconnect your Twitter account. Details: %s" response.body)
+          on_error (Printf.sprintf "Twitter media upload forbidden (403). Please disconnect and reconnect your Twitter account to refresh authentication. Details: %s" response.body)
         else
           on_error (Printf.sprintf "Media upload error (%d): %s" response.status response.body))
       on_error
