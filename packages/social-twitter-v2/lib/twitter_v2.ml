@@ -22,8 +22,12 @@ module OAuth = struct
     (** Scopes required for read-only operations *)
     let read = ["tweet.read"; "users.read"]
     
-    (** Scopes required for posting content (includes offline.access for refresh tokens) *)
-    let write = ["tweet.read"; "tweet.write"; "users.read"; "offline.access"]
+    (** Scopes required for posting content with media (includes offline.access for refresh tokens)
+        
+        Per X API v2 OAuth 2.0 docs, media.write scope is required to upload media:
+        https://developer.x.com/en/docs/authentication/oauth-2-0/authorization-code
+    *)
+    let write = ["tweet.read"; "tweet.write"; "users.read"; "offline.access"; "media.write"]
     
     (** All available Twitter OAuth 2.0 scopes *)
     let all = [
@@ -31,7 +35,8 @@ module OAuth = struct
       "users.read"; "follows.read"; "follows.write";
       "offline.access"; "space.read"; "mute.read"; "mute.write";
       "like.read"; "like.write"; "list.read"; "list.write";
-      "block.read"; "block.write"; "bookmark.read"; "bookmark.write"
+      "block.read"; "block.write"; "bookmark.read"; "bookmark.write";
+      "media.write"
     ]
     
     (** Operations that can be performed with Twitter API *)
@@ -47,10 +52,14 @@ module OAuth = struct
     (** Get scopes required for specific operations *)
     let for_operations ops =
       let base = ["users.read"; "offline.access"] in
-      let post_scopes = ["tweet.read"; "tweet.write"] in
+      let post_text_scopes = ["tweet.read"; "tweet.write"] in
+      let post_media_scopes = ["tweet.read"; "tweet.write"; "media.write"] in
       let read_scopes = ["tweet.read"] in
-      if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Delete_post) ops
-      then base @ post_scopes
+      (* Media upload requires media.write scope *)
+      if List.exists (fun o -> o = Post_media || o = Post_video) ops
+      then base @ post_media_scopes
+      else if List.exists (fun o -> o = Post_text || o = Delete_post) ops
+      then base @ post_text_scopes
       else if List.exists (fun o -> o = Read_profile || o = Read_posts) ops
       then base @ read_scopes
       else base
