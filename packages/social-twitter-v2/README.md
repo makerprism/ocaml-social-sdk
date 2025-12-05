@@ -371,6 +371,76 @@ Twitter.exchange_code
     (* Handle error *))
 ```
 
+## OAuth & Required Scopes
+
+**Always request the correct scopes during authorization** - API calls will fail with 403 errors if you don't have the required permissions.
+
+### OAuth Details
+
+| Property | Value |
+|----------|-------|
+| PKCE | Required (S256 method) |
+| Token lifetime | 2 hours |
+| Refresh tokens | Yes (requires `offline.access` scope) |
+| Authorization endpoint | `https://twitter.com/i/oauth2/authorize` |
+| Token endpoint | `https://api.twitter.com/2/oauth2/token` |
+
+### Required Scopes by Operation
+
+| Operation | Required Scopes |
+|-----------|-----------------|
+| Read profile | `users.read` |
+| Read tweets | `tweet.read`, `users.read` |
+| Post tweet | `tweet.read`, `tweet.write`, `users.read` |
+| Post with media | `tweet.read`, `tweet.write`, `users.read` |
+| Delete tweet | `tweet.read`, `tweet.write`, `users.read` |
+| Like/unlike | `tweet.read`, `users.read`, `like.read`, `like.write` |
+| Retweet | `tweet.read`, `users.read` |
+| Follow/unfollow | `users.read`, `follows.read`, `follows.write` |
+| Block/unblock | `users.read`, `block.read`, `block.write` |
+| Mute/unmute | `users.read`, `mute.read`, `mute.write` |
+| Bookmarks | `tweet.read`, `users.read`, `bookmark.read`, `bookmark.write` |
+| Lists | `users.read`, `list.read`, `list.write` |
+| Token refresh | `offline.access` (must be included in initial request) |
+
+### Using Scope Helpers
+
+```ocaml
+open Social_twitter_v2.Twitter_v2
+
+(* Predefined scope sets *)
+let read_scopes = OAuth.Scopes.read    (* ["tweet.read"; "users.read"] *)
+let write_scopes = OAuth.Scopes.write  (* Includes offline.access for refresh *)
+
+(* Get scopes for specific operations *)
+let scopes = OAuth.Scopes.for_operations [Post_text; Post_media]
+(* Returns: ["users.read"; "offline.access"; "tweet.read"; "tweet.write"] *)
+
+(* Generate auth URL with correct scopes *)
+let code_verifier = OAuth.Pkce.generate_code_verifier ()
+let code_challenge = OAuth.Pkce.generate_code_challenge code_verifier
+let auth_url = OAuth.get_authorization_url
+  ~client_id:"your_client_id"
+  ~redirect_uri:"https://your-app.com/callback"
+  ~state:"random_csrf_token"
+  ~scopes:OAuth.Scopes.write
+  ~code_challenge
+  ()
+```
+
+### OAuth Metadata
+
+```ocaml
+let () =
+  let open Social_twitter_v2.Twitter_v2.OAuth.Metadata in
+  Printf.printf "PKCE supported: %b\n" supports_pkce;           (* true *)
+  Printf.printf "Refresh supported: %b\n" supports_refresh;     (* true *)
+  Printf.printf "Token lifetime: %d seconds\n" 
+    (Option.get token_lifetime_seconds);                        (* 7200 *)
+  Printf.printf "Refresh buffer: %d seconds\n" 
+    refresh_buffer_seconds                                      (* 1800 *)
+```
+
 ## API Coverage
 
 This implementation supports the following Twitter API v2 endpoints:

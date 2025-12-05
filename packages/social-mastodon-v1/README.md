@@ -238,6 +238,65 @@ Actual limits vary by instance and should be fetched from the instance configura
 
 Mastodon tokens typically don't expire unless revoked. The package currently doesn't implement token refresh, as it's not needed for most Mastodon instances.
 
+## OAuth & Required Scopes
+
+**Always request the correct scopes during app registration and authorization** - API calls will fail if you don't have the required permissions.
+
+### OAuth Details
+
+| Property | Value |
+|----------|-------|
+| PKCE | Supported (optional) |
+| Token lifetime | Never expires (until revoked) |
+| Refresh tokens | Not needed |
+| App registration | Required per-instance |
+
+### Required Scopes by Operation
+
+| Operation | Required Scopes |
+|-----------|-----------------|
+| Read profile/posts | `read` |
+| Post status | `read`, `write` |
+| Post with media | `read`, `write` |
+| Edit status | `read`, `write` |
+| Delete status | `read`, `write` |
+| Favorite/unfavorite | `read`, `write` |
+| Boost/unboost | `read`, `write` |
+| Bookmark | `read`, `write` |
+| Follow accounts | `read`, `write`, `follow` |
+| Push notifications | `push` |
+
+### Using Scope Helpers
+
+```ocaml
+open Social_mastodon_v1.Mastodon_v1
+
+(* Predefined scope sets *)
+let read_scopes = OAuth.Scopes.read    (* ["read"] *)
+let write_scopes = OAuth.Scopes.write  (* ["read"; "write"; "follow"] *)
+
+(* Generate auth URL with correct scopes *)
+let auth_url = OAuth.get_authorization_url
+  ~instance_url:"https://mastodon.social"
+  ~client_id:"your_client_id"
+  ~redirect_uri:"https://your-app.com/callback"
+  ~scopes:"read write follow"
+  ()
+```
+
+### OAuth Metadata
+
+```ocaml
+let () =
+  let open Social_mastodon_v1.Mastodon_v1.OAuth.Metadata in
+  Printf.printf "PKCE supported: %b\n" supports_pkce;       (* true *)
+  Printf.printf "Refresh supported: %b\n" supports_refresh; (* false *)
+  Printf.printf "Token lifetime: %s\n" 
+    (match token_lifetime_seconds with 
+     | Some s -> Printf.sprintf "%d seconds" s 
+     | None -> "never expires")                             (* never expires *)
+```
+
 ## Not Yet Implemented
 
 - Fetch instance configuration

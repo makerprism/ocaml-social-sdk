@@ -49,9 +49,40 @@ Bluesky AT Protocol v1 client for OCaml.
 - ✅ Block/unblock actors
 
 ### Authentication
-- ✅ App password authentication
+- ✅ App password authentication (no OAuth)
 - ✅ Session management
 - ✅ Health status tracking
+
+## Authentication (Not OAuth)
+
+**Bluesky does not use OAuth.** Instead, it uses app passwords via the AT Protocol.
+
+### How It Works
+
+| Property | Value |
+|----------|-------|
+| Auth method | App passwords |
+| OAuth | Not used |
+| Token lifetime | App passwords never expire |
+| Session tokens | Short-lived, auto-refreshed |
+
+### Setup
+
+1. Go to https://bsky.app/settings/app-passwords
+2. Create a new app password
+3. Use the identifier (handle or DID) + app password to authenticate
+
+```ocaml
+(* Bluesky authenticates via createSession, not OAuth *)
+(* Your credentials are: identifier + app_password *)
+
+(* The SDK handles session creation internally when you make API calls *)
+(* Just store the identifier and app_password in your credentials *)
+```
+
+### No Scopes
+
+Since Bluesky uses app passwords instead of OAuth, there are no scopes to request. App passwords grant full access to the account's capabilities.
 
 ### Validation
 - ✅ Content length validation (300 chars)
