@@ -121,7 +121,11 @@
   (ocaml (>= 4.14))
   (dune (>= 3.0))
   (social-provider-core (= :version))
-  yojson))
+  yojson
+  base64
+  uri
+  ptime
+  digestif))
 
 (package
  (name social-pinterest-v5)
