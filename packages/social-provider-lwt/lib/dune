@@ -1,0 +1,12 @@
+(library
+ (name social_provider_lwt)
+ (public_name social-provider-lwt)
+ (modules
+  lwt_adapter
+  cohttp_client)
+ (libraries
+  social-provider-core
+  lwt
+  lwt.unix
+  cohttp-lwt-unix)
+ (preprocess (pps lwt_ppx)))

@@ -1,0 +1,12 @@
+(library
+ (name social_linkedin_v2)
+ (public_name social-linkedin-v2)
+ (modules social_linkedin_v2 linkedin_v2)
+ (libraries
+  social-provider-core
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  base64
+  str))

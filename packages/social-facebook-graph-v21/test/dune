@@ -1,0 +1,9 @@
+(test
+ (name test_facebook)
+ (modules test_facebook)
+ (libraries
+  social-facebook-graph-v21
+  social-provider-core
+  ptime
+  ptime.clock.os
+  str))

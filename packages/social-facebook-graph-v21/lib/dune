@@ -1,0 +1,11 @@
+(library
+ (name social_facebook_graph_v21)
+ (public_name social-facebook-graph-v21)
+ (modules social_facebook_graph_v21 facebook_graph_v21)
+ (libraries
+  social-provider-core
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  digestif))

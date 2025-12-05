@@ -1,0 +1,12 @@
+(library
+ (name social_youtube_data_v3)
+ (public_name social-youtube-data-v3)
+ (modules social_youtube_data_v3 youtube_data_v3)
+ (libraries
+  social-provider-core
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  digestif
+  base64))

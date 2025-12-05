@@ -1,0 +1,9 @@
+(test
+ (name test_youtube)
+ (modules test_youtube)
+ (libraries
+  social-youtube-data-v3
+  social-provider-core
+  ptime
+  ptime.clock.os
+  str))

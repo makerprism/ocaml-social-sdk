@@ -1,0 +1,9 @@
+(library
+ (name social_mastodon_v1)
+ (public_name social-mastodon-v1)
+ (modules social_mastodon_v1 mastodon_v1)
+ (libraries
+  social-provider-core
+  yojson
+  digestif
+  base64))

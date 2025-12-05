@@ -1,0 +1,10 @@
+(library
+ (name social_tiktok_v1)
+ (public_name social-tiktok-v1)
+ (modules social_tiktok_v1 tiktok_v1)
+ (libraries
+  social-provider-core
+  yojson
+  uri
+  ptime
+  ptime.clock.os))

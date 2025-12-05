@@ -1,0 +1,9 @@
+(library
+ (name social_pinterest_v5)
+ (public_name social-pinterest-v5)
+ (modules social_pinterest_v5 pinterest_v5)
+ (libraries
+  social-provider-core
+  yojson
+  uri
+  base64))

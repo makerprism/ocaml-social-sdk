@@ -1,0 +1,12 @@
+(library
+ (name social_instagram_graph_v21)
+ (public_name social-instagram-graph-v21)
+ (modules social_instagram_graph_v21 instagram_graph_v21)
+ (libraries
+  social-provider-core
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  str
+  digestif))

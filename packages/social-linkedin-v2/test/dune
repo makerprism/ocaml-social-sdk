@@ -1,0 +1,9 @@
+(test
+ (name test_linkedin)
+ (modules test_linkedin)
+ (libraries
+  social-linkedin-v2
+  social-provider-core
+  ptime
+  ptime.clock.os
+  str))

@@ -1,0 +1,6 @@
+(executable
+ (name simple_cps)
+ (modules simple_cps)
+ (libraries
+  social-provider-core
+  social-bluesky-v1))

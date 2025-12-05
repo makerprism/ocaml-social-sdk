@@ -1,0 +1,9 @@
+(test
+ (name test_instagram)
+ (modules test_instagram)
+ (libraries
+  social-instagram-graph-v21
+  social-provider-core
+  ptime
+  ptime.clock.os
+  str))

@@ -1,0 +1,6 @@
+(test
+ (name test_bluesky)
+ (modules test_bluesky)
+ (libraries
+  social-provider-core
+  social-bluesky-v1))

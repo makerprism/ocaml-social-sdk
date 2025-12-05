@@ -1,0 +1,8 @@
+(test
+ (name test_pinterest)
+ (modules test_pinterest)
+ (libraries
+  social-pinterest-v5
+  social-provider-core
+  str
+  unix))
