@@ -6,6 +6,281 @@
 
 open Social_core
 
+(** OAuth 2.0 module for Twitter/X
+    
+    Twitter uses standard OAuth 2.0 with PKCE (Proof Key for Code Exchange).
+    Access tokens expire after 2 hours and can be refreshed using refresh tokens.
+    
+    Required environment variables (or pass directly to functions):
+    - TWITTER_CLIENT_ID: OAuth 2.0 Client ID from Twitter Developer Portal
+    - TWITTER_CLIENT_SECRET: OAuth 2.0 Client Secret
+    - TWITTER_REDIRECT_URI: Registered callback URL
+*)
+module OAuth = struct
+  (** Scope definitions for Twitter API v2 *)
+  module Scopes = struct
+    (** Scopes required for read-only operations *)
+    let read = ["tweet.read"; "users.read"]
+    
+    (** Scopes required for posting content (includes offline.access for refresh tokens) *)
+    let write = ["tweet.read"; "tweet.write"; "users.read"; "offline.access"]
+    
+    (** All available Twitter OAuth 2.0 scopes *)
+    let all = [
+      "tweet.read"; "tweet.write"; "tweet.moderate.write";
+      "users.read"; "follows.read"; "follows.write";
+      "offline.access"; "space.read"; "mute.read"; "mute.write";
+      "like.read"; "like.write"; "list.read"; "list.write";
+      "block.read"; "block.write"; "bookmark.read"; "bookmark.write"
+    ]
+    
+    (** Operations that can be performed with Twitter API *)
+    type operation = 
+      | Post_text
+      | Post_media
+      | Post_video
+      | Read_profile
+      | Read_posts
+      | Delete_post
+      | Manage_pages  (** Not applicable to Twitter *)
+    
+    (** Get scopes required for specific operations *)
+    let for_operations ops =
+      let base = ["users.read"; "offline.access"] in
+      let post_scopes = ["tweet.read"; "tweet.write"] in
+      let read_scopes = ["tweet.read"] in
+      if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Delete_post) ops
+      then base @ post_scopes
+      else if List.exists (fun o -> o = Read_profile || o = Read_posts) ops
+      then base @ read_scopes
+      else base
+  end
+  
+  (** Platform metadata for Twitter OAuth *)
+  module Metadata = struct
+    (** Twitter supports PKCE (S256 method) *)
+    let supports_pkce = true
+    
+    (** Twitter supports token refresh *)
+    let supports_refresh = true
+    
+    (** Twitter access tokens expire after 2 hours (7200 seconds) *)
+    let token_lifetime_seconds = Some 7200
+    
+    (** Recommended buffer before expiry to refresh (30 minutes) *)
+    let refresh_buffer_seconds = 1800
+    
+    (** Maximum retry attempts for token refresh *)
+    let max_refresh_attempts = 10
+    
+    (** Authorization endpoint *)
+    let authorization_endpoint = "https://twitter.com/i/oauth2/authorize"
+    
+    (** Token endpoint *)
+    let token_endpoint = "https://api.twitter.com/2/oauth2/token"
+    
+    (** Token revocation endpoint *)
+    let revocation_endpoint = "https://api.twitter.com/2/oauth2/revoke"
+  end
+  
+  (** PKCE helpers for OAuth 2.0 with Proof Key for Code Exchange *)
+  module Pkce = struct
+    (** Generate a cryptographically random code verifier (43-128 chars)
+        
+        The code verifier is a high-entropy random string using characters
+        [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~" per RFC 7636.
+        
+        @return A 64-character random code verifier string
+    *)
+    let generate_code_verifier () =
+      (* Use 48 random bytes -> 64 base64url chars *)
+      let random_bytes = Bytes.create 48 in
+      for i = 0 to 47 do
+        Bytes.set random_bytes i (Char.chr (Random.int 256))
+      done;
+      (* Base64-URL encode without padding *)
+      Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet (Bytes.to_string random_bytes)
+    
+    (** Generate code_challenge from code_verifier using SHA256 (S256 method)
+        
+        code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
+        
+        @param verifier The code_verifier string
+        @return Base64-URL encoded SHA256 hash without padding
+    *)
+    let generate_code_challenge verifier =
+      let hash = Digestif.SHA256.digest_string verifier in
+      let raw_hash = Digestif.SHA256.to_raw_string hash in
+      Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet raw_hash
+  end
+  
+  (** Generate authorization URL for Twitter OAuth 2.0 flow
+      
+      @param client_id OAuth 2.0 Client ID
+      @param redirect_uri Registered callback URL
+      @param state CSRF protection state parameter (should be stored and verified on callback)
+      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @param code_challenge PKCE code challenge (generate with Pkce.generate_code_challenge)
+      @return Full authorization URL to redirect user to
+  *)
+  let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) ~code_challenge () =
+    let scope_str = String.concat " " scopes in
+    let params = [
+      ("response_type", "code");
+      ("client_id", client_id);
+      ("redirect_uri", redirect_uri);
+      ("scope", scope_str);
+      ("state", state);
+      ("code_challenge", code_challenge);
+      ("code_challenge_method", "S256");
+    ] in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+  
+  (** Make functor for OAuth operations that need HTTP client
+      
+      This separates the pure functions (URL generation, scope selection) from
+      functions that need to make HTTP requests (token exchange, refresh).
+  *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Exchange authorization code for access token
+        
+        @param client_id OAuth 2.0 Client ID
+        @param client_secret OAuth 2.0 Client Secret
+        @param redirect_uri Registered callback URL (must match authorization request)
+        @param code Authorization code from callback
+        @param code_verifier PKCE code verifier (the original, not the challenge)
+        @param on_success Continuation receiving credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
+      let body = Uri.encoded_of_query [
+        ("grant_type", ["authorization_code"]);
+        ("code", [code]);
+        ("redirect_uri", [redirect_uri]);
+        ("code_verifier", [code_verifier]);
+      ] in
+      
+      let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
+      let headers = [
+        ("Authorization", "Basic " ^ auth);
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let refresh_token = 
+                try Some (json |> member "refresh_token" |> to_string) 
+                with _ -> None in
+              let expires_in = json |> member "expires_in" |> to_int in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Refresh access token using refresh token
+        
+        @param client_id OAuth 2.0 Client ID
+        @param client_secret OAuth 2.0 Client Secret
+        @param refresh_token The refresh token from previous exchange
+        @param on_success Continuation receiving new credentials
+        @param on_error Continuation receiving error message
+    *)
+    let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
+      let body = Uri.encoded_of_query [
+        ("grant_type", ["refresh_token"]);
+        ("refresh_token", [refresh_token]);
+        ("client_id", [client_id]);
+      ] in
+      
+      let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
+      let headers = [
+        ("Authorization", "Basic " ^ auth);
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let new_refresh = 
+                try Some (json |> member "refresh_token" |> to_string) 
+                with _ -> Some refresh_token in
+              let expires_in = json |> member "expires_in" |> to_int in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = new_refresh;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Revoke a token
+        
+        @param client_id OAuth 2.0 Client ID
+        @param client_secret OAuth 2.0 Client Secret
+        @param token The access token or refresh token to revoke
+        @param on_success Continuation called on successful revocation
+        @param on_error Continuation receiving error message
+    *)
+    let revoke_token ~client_id ~client_secret ~token on_success on_error =
+      let body = Uri.encoded_of_query [
+        ("token", [token]);
+      ] in
+      
+      let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
+      let headers = [
+        ("Authorization", "Basic " ^ auth);
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      
+      Http.post ~headers ~body Metadata.revocation_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            on_success ()
+          else
+            on_error (Printf.sprintf "Token revocation failed (%d): %s" response.status response.body))
+        on_error
+  end
+end
+
 (** Configuration module type for Twitter provider *)
 module type CONFIG = sig
   module Http : HTTP_CLIENT
@@ -2095,41 +2370,39 @@ module Make (Config : CONFIG) = struct
   
   (** Generate PKCE code_challenge from code_verifier using SHA256
       
+      @deprecated Use OAuth.Pkce.generate_code_challenge instead
+      
       code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
       
       @param verifier The code_verifier string
       @return Base64-URL encoded SHA256 hash without padding
   *)
-  let generate_code_challenge verifier =
-    let hash = Digestif.SHA256.digest_string verifier in
-    let raw_hash = Digestif.SHA256.to_raw_string hash in
-    (* Base64 URL encode without padding as per RFC 7636 *)
-    Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet raw_hash
+  let generate_code_challenge = OAuth.Pkce.generate_code_challenge
 
-  (** Get OAuth authorization URL *)
+  (** Get OAuth authorization URL
+      
+      @deprecated Use OAuth.get_authorization_url for more flexibility
+      
+      This convenience function uses environment variables for configuration.
+  *)
   let get_oauth_url ~state ~code_verifier =
     let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
     let redirect_uri = Config.get_env "TWITTER_LINK_REDIRECT_URI" |> Option.value ~default:"" in
-    
-    (* Generate code_challenge from code_verifier using SHA256 (S256 method) *)
-    let code_challenge = generate_code_challenge code_verifier in
-    
-    let params = [
-      ("response_type", "code");
-      ("client_id", client_id);
-      ("redirect_uri", redirect_uri);
-      ("scope", "tweet.read tweet.write users.read offline.access");
-      ("state", state);
-      ("code_challenge", code_challenge);
-      ("code_challenge_method", "S256");
-    ] in
-    
-    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
-    Printf.sprintf "https://twitter.com/i/oauth2/authorize?%s" query
+    let code_challenge = OAuth.Pkce.generate_code_challenge code_verifier in
+    OAuth.get_authorization_url 
+      ~client_id 
+      ~redirect_uri 
+      ~state 
+      ~code_challenge 
+      ()
   
-  (** Exchange authorization code for access token *)
+  (** Exchange authorization code for access token
+      
+      @deprecated Use OAuth.Make(Http).exchange_code for more flexibility
+      
+      This convenience function uses environment variables for configuration.
+  *)
   let exchange_code ~code ~code_verifier on_success on_error =
-    let url = "https://api.twitter.com/2/oauth2/token" in
     let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
     let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
     let redirect_uri = Config.get_env "TWITTER_LINK_REDIRECT_URI" |> Option.value ~default:"" in
@@ -2147,7 +2420,7 @@ module Make (Config : CONFIG) = struct
       ("Content-Type", "application/x-www-form-urlencoded");
     ] in
     
-    Config.Http.post ~headers ~body url
+    Config.Http.post ~headers ~body OAuth.Metadata.token_endpoint
       (fun response ->
         if response.status >= 200 && response.status < 300 then
           try
