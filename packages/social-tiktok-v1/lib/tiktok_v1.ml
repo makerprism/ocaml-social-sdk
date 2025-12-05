@@ -11,6 +11,283 @@
 
 open Social_core
 
+(** OAuth 2.0 module for TikTok Content Posting API
+    
+    TikTok uses a standard OAuth 2.0 flow with some unique characteristics:
+    
+    Key differences from other platforms:
+    - Uses "client_key" instead of "client_id" in API parameters
+    - Access tokens expire after 24 hours (very short compared to others)
+    - Refresh tokens are valid for 365 days
+    - No PKCE support
+    - Uses TikTok-specific scopes like "video.publish"
+    
+    Token lifetimes:
+    - Access tokens: 24 hours (86400 seconds)
+    - Refresh tokens: 365 days
+    
+    Required environment variables (or pass directly to functions):
+    - TIKTOK_CLIENT_KEY: Client key from TikTok Developer Portal
+    - TIKTOK_CLIENT_SECRET: Client secret
+    - TIKTOK_REDIRECT_URI: Registered callback URL
+*)
+module OAuth = struct
+  (** Scope definitions for TikTok Content Posting API *)
+  module Scopes = struct
+    (** Scopes for basic user information *)
+    let read = [
+      "user.info.basic";
+    ]
+    
+    (** Scopes required for video posting *)
+    let write = [
+      "user.info.basic";
+      "video.publish";
+    ]
+    
+    (** All commonly used scopes *)
+    let all = [
+      "user.info.basic";
+      "user.info.profile";
+      "user.info.stats";
+      "video.list";
+      "video.publish";
+      "video.upload";
+    ]
+    
+    (** Operations that can be performed with TikTok API *)
+    type operation = 
+      | Post_video
+      | Read_profile
+      | Read_videos
+      | Read_stats
+    
+    (** Get scopes required for specific operations *)
+    let for_operations ops =
+      let base = ["user.info.basic"] in
+      let needs_publish = List.exists (fun o -> o = Post_video) ops in
+      let needs_profile = List.exists (fun o -> o = Read_profile) ops in
+      let needs_videos = List.exists (fun o -> o = Read_videos) ops in
+      let needs_stats = List.exists (fun o -> o = Read_stats) ops in
+      base @
+      (if needs_publish then ["video.publish"] else []) @
+      (if needs_profile then ["user.info.profile"] else []) @
+      (if needs_videos then ["video.list"] else []) @
+      (if needs_stats then ["user.info.stats"] else [])
+  end
+  
+  (** Platform metadata for TikTok OAuth *)
+  module Metadata = struct
+    (** TikTok does NOT support PKCE *)
+    let supports_pkce = false
+    
+    (** TikTok supports token refresh *)
+    let supports_refresh = true
+    
+    (** Access tokens expire after 24 hours *)
+    let access_token_seconds = Some 86400
+    
+    (** Refresh tokens expire after 365 days *)
+    let refresh_token_seconds = Some 31536000
+    
+    (** Recommended buffer before expiry (1 hour for access tokens) *)
+    let refresh_buffer_seconds = 3600
+    
+    (** Maximum retry attempts for token operations *)
+    let max_refresh_attempts = 5
+    
+    (** Authorization endpoint *)
+    let authorization_endpoint = "https://www.tiktok.com/v2/auth/authorize"
+    
+    (** Token endpoint *)
+    let token_endpoint = "https://open.tiktokapis.com/v2/oauth/token/"
+    
+    (** API base URL *)
+    let api_base = "https://open.tiktokapis.com/v2"
+  end
+  
+  (** Generate authorization URL for TikTok OAuth 2.0 flow
+      
+      Note: TikTok uses "client_key" instead of "client_id".
+      
+      @param client_key TikTok Client Key (NOT client_id!)
+      @param redirect_uri Registered callback URL
+      @param state CSRF protection state parameter
+      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @return Full authorization URL to redirect user to
+  *)
+  let get_authorization_url ~client_key ~redirect_uri ~state ?(scopes=Scopes.write) () =
+    let scope_str = String.concat "," scopes in
+    let params = [
+      ("client_key", client_key);
+      ("redirect_uri", redirect_uri);
+      ("state", state);
+      ("scope", scope_str);
+      ("response_type", "code");
+    ] in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+  
+  (** Make functor for OAuth operations that need HTTP client *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Exchange authorization code for access token
+        
+        @param client_key TikTok Client Key
+        @param client_secret TikTok Client Secret
+        @param redirect_uri Registered callback URL
+        @param code Authorization code from callback
+        @param on_success Continuation receiving credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_code ~client_key ~client_secret ~redirect_uri ~code on_success on_error =
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      let body = Uri.encoded_of_query [
+        ("client_key", [client_key]);
+        ("client_secret", [client_secret]);
+        ("code", [code]);
+        ("grant_type", ["authorization_code"]);
+        ("redirect_uri", [redirect_uri]);
+      ] in
+      
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let refresh_token = 
+                try Some (json |> member "refresh_token" |> to_string)
+                with _ -> None in
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 86400 (* Default to 24 hours *)
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Refresh access token
+        
+        TikTok access tokens expire after 24 hours. Use this to get a new
+        access token using the refresh token (valid for 365 days).
+        
+        @param client_key TikTok Client Key
+        @param client_secret TikTok Client Secret
+        @param refresh_token The refresh token from initial auth
+        @param on_success Continuation receiving refreshed credentials
+        @param on_error Continuation receiving error message
+    *)
+    let refresh_token ~client_key ~client_secret ~refresh_token on_success on_error =
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      let body = Uri.encoded_of_query [
+        ("client_key", [client_key]);
+        ("client_secret", [client_secret]);
+        ("grant_type", ["refresh_token"]);
+        ("refresh_token", [refresh_token]);
+      ] in
+      
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let new_refresh_token = 
+                try Some (json |> member "refresh_token" |> to_string)
+                with _ -> Some refresh_token in  (* Keep old if not returned *)
+              let expires_in = 
+                try json |> member "expires_in" |> to_int
+                with _ -> 86400
+              in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = new_refresh_token;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Revoke access token
+        
+        @param access_token The token to revoke
+        @param on_success Continuation called on success
+        @param on_error Continuation receiving error message
+    *)
+    let revoke_token ~access_token on_success on_error =
+      let url = Printf.sprintf "%s/oauth/revoke/?access_token=%s" 
+        Metadata.api_base access_token in
+      
+      Http.post ~headers:[] ~body:"" url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            on_success ()
+          else
+            on_error (Printf.sprintf "Token revocation failed (%d): %s" response.status response.body))
+        on_error
+    
+    (** Get user info using access token
+        
+        @param access_token Valid access token
+        @param on_success Continuation receiving user info as JSON
+        @param on_error Continuation receiving error message
+    *)
+    let get_user_info ~access_token on_success on_error =
+      let url = Printf.sprintf "%s/user/info/?fields=open_id,union_id,avatar_url,display_name" 
+        Metadata.api_base in
+      let headers = [
+        ("Authorization", "Bearer " ^ access_token);
+      ] in
+      
+      Http.get ~headers url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              on_success json
+            with e ->
+              on_error (Printf.sprintf "Failed to parse user info: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Get user info failed (%d): %s" response.status response.body))
+        on_error
+  end
+end
+
 (** {1 Types} *)
 
 (** Privacy level for posts *)
