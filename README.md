@@ -1,5 +1,9 @@
 # ocaml-social-sdk
 
+[![CI](https://github.com/makerprism/ocaml-social-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/makerprism/ocaml-social-sdk/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OCaml](https://img.shields.io/badge/OCaml-%3E%3D4.14-orange)](https://ocaml.org/)
+
 Production-ready OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
 
 ## Packages
