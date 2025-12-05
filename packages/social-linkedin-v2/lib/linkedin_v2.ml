@@ -10,6 +10,269 @@
 
 open Social_core
 
+(** OAuth 2.0 module for LinkedIn
+    
+    LinkedIn uses standard OAuth 2.0 WITHOUT PKCE support.
+    Access tokens expire after 60 days and typically cannot be programmatically refreshed
+    unless you are enrolled in the LinkedIn Partner Program.
+    
+    IMPORTANT: LinkedIn has TWO separate OAuth products:
+    1. "Sign In with LinkedIn using OpenID Connect" + "Share on LinkedIn" 
+       - For personal profile posting
+       - Standard apps, no programmatic refresh
+    2. "Community Management API" 
+       - For LinkedIn Page posting
+       - Requires SEPARATE app registration
+       - Cannot be combined with other products
+    
+    Required environment variables (or pass directly to functions):
+    - LINKEDIN_CLIENT_ID: OAuth 2.0 Client ID from LinkedIn Developer Portal
+    - LINKEDIN_CLIENT_SECRET: OAuth 2.0 Client Secret
+    - LINKEDIN_REDIRECT_URI: Registered callback URL
+*)
+module OAuth = struct
+  (** Scope definitions for LinkedIn API v2 *)
+  module Scopes = struct
+    (** Scopes required for read-only operations (profile info) *)
+    let read = ["openid"; "profile"; "email"]
+    
+    (** Scopes required for personal posting (includes read scopes) *)
+    let write = ["openid"; "profile"; "email"; "w_member_social"]
+    
+    (** All available scopes for personal posting apps
+        
+        Note: Organization/page scopes require separate Community Management API app *)
+    let all = [
+      "openid"; "profile"; "email"; "w_member_social";
+      (* Organization scopes - require Community Management API product *)
+      "r_organization_admin"; "w_organization_social"; "rw_organization_admin"
+    ]
+    
+    (** Scopes for LinkedIn Company Pages (requires Community Management API) *)
+    let organization = ["r_organization_admin"; "w_organization_social"; "rw_organization_admin"]
+    
+    (** Operations that can be performed with LinkedIn API *)
+    type operation = 
+      | Post_text
+      | Post_media
+      | Post_video
+      | Read_profile
+      | Read_posts
+      | Delete_post
+      | Manage_pages  (** LinkedIn Pages - requires separate Community Management API app *)
+    
+    (** Get scopes required for specific operations *)
+    let for_operations ops =
+      let base = ["openid"; "profile"; "email"] in
+      if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Delete_post) ops
+      then base @ ["w_member_social"]
+      else if List.exists (fun o -> o = Manage_pages) ops
+      then base @ ["r_organization_admin"; "w_organization_social"]
+      else base
+  end
+  
+  (** Platform metadata for LinkedIn OAuth *)
+  module Metadata = struct
+    (** LinkedIn does NOT support PKCE *)
+    let supports_pkce = false
+    
+    (** LinkedIn Partner Program apps support refresh; standard apps do NOT *)
+    let supports_refresh = false  (* Standard apps: false; Partner Program: true *)
+    
+    (** LinkedIn access tokens expire after 60 days (5,184,000 seconds) *)
+    let token_lifetime_seconds = Some 5184000
+    
+    (** Recommended buffer before expiry (7 days) for reconnection prompts *)
+    let refresh_buffer_seconds = 604800
+    
+    (** Maximum retry attempts for token refresh (Partner Program only) *)
+    let max_refresh_attempts = 5
+    
+    (** Authorization endpoint *)
+    let authorization_endpoint = "https://www.linkedin.com/oauth/v2/authorization"
+    
+    (** Token endpoint *)
+    let token_endpoint = "https://www.linkedin.com/oauth/v2/accessToken"
+    
+    (** Token introspection endpoint (Partner Program only) *)
+    let introspection_endpoint = "https://www.linkedin.com/oauth/v2/introspectToken"
+  end
+  
+  (** Generate authorization URL for LinkedIn OAuth 2.0 flow
+      
+      Note: LinkedIn does NOT support PKCE, so no code_challenge parameter.
+      
+      @param client_id OAuth 2.0 Client ID
+      @param redirect_uri Registered callback URL
+      @param state CSRF protection state parameter (should be stored and verified on callback)
+      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @return Full authorization URL to redirect user to
+  *)
+  let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) () =
+    let scope_str = String.concat " " scopes in
+    let params = [
+      ("response_type", "code");
+      ("client_id", client_id);
+      ("redirect_uri", redirect_uri);
+      ("state", state);
+      ("scope", scope_str);
+    ] in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+  
+  (** Make functor for OAuth operations that need HTTP client
+      
+      This separates the pure functions (URL generation, scope selection) from
+      functions that need to make HTTP requests (token exchange, refresh).
+  *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Exchange authorization code for access token
+        
+        Note: LinkedIn does NOT support PKCE, so no code_verifier parameter.
+        
+        @param client_id OAuth 2.0 Client ID
+        @param client_secret OAuth 2.0 Client Secret
+        @param redirect_uri Registered callback URL (must match authorization request)
+        @param code Authorization code from callback
+        @param on_success Continuation receiving credentials
+        @param on_error Continuation receiving error message
+    *)
+    let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
+      (* LinkedIn expects parameters in query string, not body *)
+      let params = [
+        ("grant_type", ["authorization_code"]);
+        ("code", [code]);
+        ("redirect_uri", [redirect_uri]);
+        ("client_id", [String.trim client_id]);
+        ("client_secret", [String.trim client_secret]);
+      ] in
+      let query_string = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.token_endpoint query_string in
+      
+      (* POST request with parameters in query string, empty body *)
+      Http.post ~headers:[] ~body:"" url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let refresh_token = 
+                try Some (json |> member "refresh_token" |> to_string)
+                with _ -> None in
+              
+              (* LinkedIn always includes expires_in in seconds *)
+              let expires_in = json |> member "expires_in" |> to_int in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              
+              let creds : credentials = {
+                access_token;
+                refresh_token;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            (* Parse error response *)
+            let error_msg = 
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let error = json |> member "error" |> to_string_option |> Option.value ~default:"unknown" in
+                let error_desc = json |> member "error_description" |> to_string_option in
+                match error_desc with
+                | Some desc -> Printf.sprintf "%s: %s" error desc
+                | None -> error
+              with _ -> response.body
+            in
+            on_error (Printf.sprintf "LinkedIn OAuth exchange failed (%d): %s" response.status error_msg))
+        on_error
+    
+    (** Refresh access token (LinkedIn Partner Program ONLY)
+        
+        IMPORTANT: Standard LinkedIn apps (Sign In + Share on LinkedIn products)
+        do NOT support programmatic token refresh. This function will fail
+        unless you are enrolled in the LinkedIn Partner Program.
+        
+        For standard apps, users must re-authorize through the OAuth flow
+        when their token expires (every 60 days).
+        
+        @param client_id OAuth 2.0 Client ID
+        @param client_secret OAuth 2.0 Client Secret
+        @param refresh_token The refresh token from previous exchange
+        @param on_success Continuation receiving new credentials
+        @param on_error Continuation receiving error message
+    *)
+    let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
+      let body = Uri.encoded_of_query [
+        ("grant_type", ["refresh_token"]);
+        ("refresh_token", [refresh_token]);
+        ("client_id", [String.trim client_id]);
+        ("client_secret", [String.trim client_secret]);
+      ] in
+      
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let new_refresh = 
+                try Some (json |> member "refresh_token" |> to_string) 
+                with _ -> Some refresh_token in
+              let expires_in = json |> member "expires_in" |> to_int in
+              let expires_at = 
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type = 
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = new_refresh;
+                expires_at;
+                token_type;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            (* Parse error response for better error messages *)
+            let error_msg = 
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let error = json |> member "error" |> to_string_option |> Option.value ~default:"unknown" in
+                let error_desc = json |> member "error_description" |> to_string_option in
+                match error, error_desc with
+                | "unauthorized_client", _ | "invalid_grant", _ ->
+                    "Programmatic refresh not available - your app is not enrolled in LinkedIn Partner Program. User must re-authorize."
+                | _, Some desc -> Printf.sprintf "%s: %s" error desc
+                | _, None -> error
+              with _ -> response.body
+            in
+            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status error_msg))
+        on_error
+  end
+end
+
 (** {1 Response Types} *)
 
 (** Paging metadata for paginated responses *)
