@@ -19,11 +19,8 @@ jobs:
           echo "package=$PACKAGE" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Create Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: ${{ steps.parse.outputs.package }} ${{ steps.parse.outputs.version }}
+          name: ${{ steps.parse.outputs.package }} ${{ steps.parse.outputs.version }}
           draft: false
           prerelease: false
