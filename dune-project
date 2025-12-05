@@ -1,7 +1,7 @@
 (lang dune 3.17)
 (name ocaml-social-sdk)
 
-(generate_opam_files false)
+(generate_opam_files true)
 
 (source (github makerprism/ocaml-social-sdk))
 (license MIT)

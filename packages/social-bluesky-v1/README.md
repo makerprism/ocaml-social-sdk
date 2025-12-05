@@ -2,9 +2,7 @@
 
 Bluesky AT Protocol v1 client for OCaml.
 
-## Status
-
-✅ **Full implementation with recent improvements!**
+> **Status:** This library was primarily built using LLMs. Authentication and posting functionality have been used successfully. Read operations and other features should be considered untested. Expect breaking changes as we work towards stability.
 
 ## Features
 

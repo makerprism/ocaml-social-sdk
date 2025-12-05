@@ -2,6 +2,8 @@
 
 OCaml library for Instagram Graph API v21 integration (Business accounts) with runtime-agnostic design.
 
+> **Warning:** This library was primarily built using LLMs and has not been tested. Expect breaking changes.
+
 ## Features
 
 - **OAuth 2.0 Authentication**: Full OAuth flow via Facebook

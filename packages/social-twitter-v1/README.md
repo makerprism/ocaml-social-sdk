@@ -2,6 +2,8 @@
 
 **OAuth 1.0a Authentication & Legacy API Support**
 
+> **Warning:** This library was primarily built using LLMs and has not been tested. Consider using `social-twitter-v2` instead, which has been used successfully for OAuth and posting. Expect breaking changes.
+
 This package provides OCaml bindings for Twitter API v1.1 with a focus on features not available in v2:
 - OAuth 1.0a signature-based authentication
 - Streaming API (real-time tweet streams)

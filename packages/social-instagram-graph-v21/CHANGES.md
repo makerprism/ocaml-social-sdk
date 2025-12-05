@@ -1,4 +1,4 @@
-# Changelog
+# Changes
 
 ## [Unreleased] - 2025-11-13
 

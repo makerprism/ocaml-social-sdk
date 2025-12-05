@@ -2,6 +2,8 @@
 
 OCaml library for Facebook Graph API v21 integration (Facebook Pages) with runtime-agnostic design.
 
+> **Warning:** This library was primarily built using LLMs and has not been tested. Expect breaking changes.
+
 ## Features
 
 ### Core Functionality

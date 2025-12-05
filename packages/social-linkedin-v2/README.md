@@ -2,6 +2,8 @@
 
 OCaml library for LinkedIn API v2 integration with runtime-agnostic design.
 
+> **Status:** This library was primarily built using LLMs. OAuth 2.0 and posting functionality have been used successfully. Read operations and other features should be considered untested. Expect breaking changes as we work towards stability.
+
 ## Features
 
 - **OAuth 2.0 Authentication**: Full OAuth flow support (authorization_code grant)

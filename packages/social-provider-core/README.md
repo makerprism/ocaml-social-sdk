@@ -2,6 +2,8 @@
 
 Core interfaces for building social media API clients in OCaml.
 
+> **Warning:** This library is not production-ready. It was primarily built using LLMs and is under active development. Expect breaking changes.
+
 ## Features
 
 - **Runtime-agnostic**: Works with Lwt, Eio, Async, or synchronous code

@@ -2,9 +2,7 @@
 
 Twitter API v2 client for OCaml with comprehensive feature support.
 
-## Status
-
-✅ **Feature-complete Twitter v2 implementation!** - All major endpoints supported.
+> **Status:** This library was primarily built using LLMs. OAuth 2.0 and posting functionality have been used successfully. Read operations and other features should be considered untested. Expect breaking changes as we work towards stability.
 
 ## Features
 

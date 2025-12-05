@@ -1,6 +1,4 @@
-# Changelog
-
-All notable changes to the Facebook Graph API v21 package will be documented in this file.
+# Changes
 
 ## [2.0.0] - 2025-11-13
 

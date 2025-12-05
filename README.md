@@ -4,7 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OCaml](https://img.shields.io/badge/OCaml-%3E%3D4.14-orange)](https://ocaml.org/)
 
-Production-ready OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
+OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
+
+> **Warning: Experimental Software**
+>
+> This SDK is **not production-ready**. It was primarily built using LLMs and is under active development. We are working towards making these libraries stable and usable.
+>
+> **What has been used successfully:**
+> - OAuth 2.0 flows for Twitter, LinkedIn, Bluesky, and Mastodon
+> - Posting (write) functionality for Twitter, LinkedIn, Bluesky, and Mastodon
+>
+> All other functionality (Facebook, Instagram, YouTube, Pinterest, TikTok, and read operations) should be considered untested. Use at your own risk and expect breaking changes.
 
 ## Packages
 
@@ -125,18 +135,20 @@ The SDK follows a runtime-agnostic design:
 
 ## Supported Platforms
 
-| Platform | Post | Media | Threads | Stories | Reels |
-|----------|------|-------|---------|---------|-------|
-| Twitter v1 | ✅ | ✅ | ✅ | - | - |
-| Twitter v2 | ✅ | ✅ | ✅ | - | - |
-| Bluesky | ✅ | ✅ | ✅ | - | - |
-| LinkedIn | ✅ | ✅ | - | - | - |
-| Mastodon | ✅ | ✅ | ✅ | - | - |
-| Facebook | ✅ | ✅ | - | ✅ | ✅ |
-| Instagram | ✅ | ✅ | - | ✅ | ✅ |
-| YouTube | ✅ | ✅ | - | - | ✅ |
-| Pinterest | ✅ | ✅ | - | - | - |
-| TikTok | ✅ | ✅ | - | - | - |
+| Platform | OAuth | Post | Media | Threads | Status |
+|----------|-------|------|-------|---------|--------|
+| Twitter v2 | ✅ | ✅ | ✅ | ✅ | Used |
+| Bluesky | ✅ | ✅ | ✅ | ✅ | Used |
+| LinkedIn | ✅ | ✅ | ✅ | - | Used |
+| Mastodon | ✅ | ✅ | ✅ | ✅ | Used |
+| Twitter v1 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Untested |
+| Facebook | ⚠️ | ⚠️ | ⚠️ | - | Untested |
+| Instagram | ⚠️ | ⚠️ | ⚠️ | - | Untested |
+| YouTube | ⚠️ | ⚠️ | ⚠️ | - | Untested |
+| Pinterest | ⚠️ | ⚠️ | ⚠️ | - | Untested |
+| TikTok | ⚠️ | ⚠️ | ⚠️ | - | Untested |
+
+✅ = Used successfully, ⚠️ = Implemented but untested
 
 ## License
 

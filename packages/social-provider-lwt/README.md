@@ -2,6 +2,8 @@
 
 Lwt adapters and HTTP client for social-provider-core.
 
+> **Warning:** This library is not production-ready. It was primarily built using LLMs and is under active development. Expect breaking changes.
+
 ## Features
 
 - Convert CPS-style interfaces to Lwt promises

@@ -2,6 +2,8 @@
 
 OCaml library for YouTube Data API v3 integration (YouTube Shorts) with runtime-agnostic design.
 
+> **Warning:** This library was primarily built using LLMs and has not been tested. Expect breaking changes.
+
 ## Features
 
 - **Google OAuth 2.0 with PKCE**: Secure authentication

@@ -1,6 +1,8 @@
 # social-pinterest-v5
 
-OCaml library for Pinterest API v5 with enterprise-grade features inspired by battle-tested implementations.
+OCaml library for Pinterest API v5.
+
+> **Warning:** This library was primarily built using LLMs and has not been tested. Expect breaking changes.
 
 ## 🚀 New Features (Based on Popular Libraries)
 

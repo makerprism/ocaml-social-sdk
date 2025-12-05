@@ -1,6 +1,8 @@
 # social-tiktok-v1
 
-TikTok Content Posting API client for OCaml, part of the FeedMansion social provider ecosystem.
+TikTok Content Posting API client for OCaml.
+
+> **Warning:** This library was primarily built using LLMs and has not been tested. Expect breaking changes.
 
 ## Features
 

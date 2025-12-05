@@ -2,6 +2,8 @@
 
 Mastodon API client for OCaml with OAuth 2.0 support.
 
+> **Status:** This library was primarily built using LLMs. OAuth 2.0 and posting functionality have been used successfully. Read operations and other features should be considered untested. Expect breaking changes as we work towards stability.
+
 ## Features
 
 ### Implemented ✅
