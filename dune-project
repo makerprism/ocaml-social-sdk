@@ -81,7 +81,10 @@
   (ocaml (>= 4.14))
   (dune (>= 3.0))
   (social-provider-core (= :version))
-  yojson))
+  yojson
+  uri
+  ptime
+  base64))
 
 (package
  (name social-mastodon-v1)
@@ -91,7 +94,9 @@
   (ocaml (>= 4.14))
   (dune (>= 3.0))
   (social-provider-core (= :version))
-  yojson))
+  yojson
+  digestif
+  base64))
 
 (package
  (name social-facebook-graph-v21)
@@ -101,7 +106,10 @@
   (ocaml (>= 4.14))
   (dune (>= 3.0))
   (social-provider-core (= :version))
-  yojson))
+  yojson
+  uri
+  ptime
+  digestif))
 
 (package
  (name social-instagram-graph-v21)
@@ -111,7 +119,10 @@
   (ocaml (>= 4.14))
   (dune (>= 3.0))
   (social-provider-core (= :version))
-  yojson))
+  yojson
+  uri
+  ptime
+  digestif))
 
 (package
  (name social-youtube-data-v3)
@@ -122,10 +133,10 @@
   (dune (>= 3.0))
   (social-provider-core (= :version))
   yojson
-  base64
   uri
   ptime
-  digestif))
+  digestif
+  base64))
 
 (package
  (name social-pinterest-v5)
@@ -135,7 +146,9 @@
   (ocaml (>= 4.14))
   (dune (>= 3.0))
   (social-provider-core (= :version))
-  yojson))
+  yojson
+  uri
+  base64))
 
 (package
  (name social-tiktok-v1)
@@ -146,6 +159,5 @@
   (dune (>= 3.0))
   (social-provider-core (= :version))
   yojson
-  base64
-  ptime
-  uri))
+  uri
+  ptime))
