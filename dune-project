@@ -6,7 +6,7 @@
 (source (github makerprism/ocaml-social-sdk))
 (license MIT)
 (authors "Sabine Schmaltz")
-(maintainers "sabine@schmaltz.dev")
+(maintainers "sabine@makerprism.com")
 (documentation "https://github.com/makerprism/ocaml-social-sdk")
 (bug_reports "https://github.com/makerprism/ocaml-social-sdk/issues")
 
