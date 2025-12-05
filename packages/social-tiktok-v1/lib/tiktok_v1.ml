@@ -67,7 +67,7 @@ let auth_base_url = "https://www.tiktok.com/v2/auth/authorize"
 
 let max_video_duration_sec = 600  (* 10 minutes, varies by user *)
 let min_video_duration_sec = 3
-let max_video_size_bytes = 50 * 1024 * 1024  (* 50MB for FeedMansion, TikTok allows up to 4GB *)
+let max_video_size_bytes = 50 * 1024 * 1024  (* 50MB default, TikTok allows up to 4GB *)
 let max_caption_length = 2200
 let supported_formats = ["mp4"; "webm"; "mov"]
 let min_resolution = 360

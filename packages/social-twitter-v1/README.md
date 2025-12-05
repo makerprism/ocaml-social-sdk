@@ -366,9 +366,9 @@ If you're currently using v1.1 for everything:
 
 ## Contributing
 
-This package is part of the feedmansion.com social media automation platform.
+This package is part of the ocaml-social-sdk project by Sabine Schmaltz.
 
-Issues and pull requests welcome at: https://github.com/feedmansion/feedmansion.com
+Issues and pull requests welcome at: https://github.com/makerprism/ocaml-social-sdk
 
 ## License
 

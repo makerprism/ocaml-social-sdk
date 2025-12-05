@@ -225,7 +225,7 @@ packages/social-twitter-v1/
 └── IMPLEMENTATION_SUMMARY.md  # This file
 ```
 
-## Integration with feedmansion.com
+## Integration
 
 ### Use Cases
 

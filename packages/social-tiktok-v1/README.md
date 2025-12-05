@@ -116,7 +116,7 @@ let () = get_publish_status
 
 ## Video Constraints
 
-| Specification | FeedMansion Limit | TikTok Limit |
+| Specification | Default Limit | TikTok Limit |
 |--------------|-------------------|--------------|
 | Max file size | 50 MB | 4 GB |
 | Duration | 3s - 600s | 3s - 600s |

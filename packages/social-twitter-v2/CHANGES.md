@@ -173,9 +173,9 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
 
 ## Support
 
-- Issues: [GitHub Issues](https://github.com/yourusername/feedmansion/issues)
+- Issues: [GitHub Issues](https://github.com/makerprism/ocaml-social-sdk/issues)
 - Documentation: See README.md and EXAMPLES.md
-- Community: [Discussions](https://github.com/yourusername/feedmansion/discussions)
+- Community: [Discussions](https://github.com/makerprism/ocaml-social-sdk/discussions)
 
 ## License
 
