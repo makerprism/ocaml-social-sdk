@@ -167,8 +167,8 @@ let test_token_exchange () =
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = Some "refresh_token_456");
       assert (creds.token_type = "Bearer");
-      (* Enhanced version calculates expiry time *)
-      assert (creds.expires_at <> None);
+      (* Pinterest tokens are long-lived with no defined expiration *)
+      assert (creds.expires_at = None);
       print_endline "✓ Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
 

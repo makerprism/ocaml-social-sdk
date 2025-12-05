@@ -3,4 +3,5 @@
  (modules test_bluesky)
  (libraries
   social-core
-  social-bluesky-v1))
+  social-bluesky-v1
+  str))

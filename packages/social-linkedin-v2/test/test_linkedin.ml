@@ -10,48 +10,62 @@ let string_contains s substr =
     true
   with Not_found -> false
 
-(** Mock HTTP client for testing *)
+(** Mock HTTP client for testing with response queue *)
 module Mock_http = struct
   let requests = ref []
-  let next_response = ref None
+  let response_queue = ref []
   
   let reset () =
     requests := [];
-    next_response := None
+    response_queue := []
   
+  (** Set a single response (for backward compatibility) *)
   let set_response response =
-    next_response := Some response
+    response_queue := [response]
+  
+  (** Set multiple responses to be returned in order *)
+  let set_responses responses =
+    response_queue := responses
+  
+  (** Get next response from queue, or return the last one if queue exhausted *)
+  let get_next_response () =
+    match !response_queue with
+    | [] -> None
+    | [r] -> Some r  (* Keep returning last response *)
+    | r :: rest ->
+        response_queue := rest;
+        Some r
   
   include (struct
   
   let get ?(headers=[]) url on_success on_error =
     requests := ("GET", url, headers, "") :: !requests;
-    match !next_response with
+    match get_next_response () with
     | Some response -> on_success response
     | None -> on_error "No mock response set"
   
   let post ?(headers=[]) ?(body="") url on_success on_error =
     requests := ("POST", url, headers, body) :: !requests;
-    match !next_response with
+    match get_next_response () with
     | Some response -> on_success response
     | None -> on_error "No mock response set"
   
   let put ?(headers=[]) ?(body="") url on_success on_error =
     requests := ("PUT", url, headers, body) :: !requests;
-    match !next_response with
+    match get_next_response () with
     | Some response -> on_success response
     | None -> on_error "No mock response set"
   
   let delete ?(headers=[]) url on_success on_error =
     requests := ("DELETE", url, headers, "") :: !requests;
-    match !next_response with
+    match get_next_response () with
     | Some response -> on_success response
     | None -> on_error "No mock response set"
   
   let post_multipart ?(headers=[]) ~parts url on_success on_error =
     let body_str = Printf.sprintf "multipart with %d parts" (List.length parts) in
     requests := ("POST_MULTIPART", url, headers, body_str) :: !requests;
-    match !next_response with
+    match get_next_response () with
     | Some response -> on_success response
     | None -> on_error "No mock response set"
   end : HTTP_CLIENT)
@@ -350,11 +364,8 @@ let test_get_posts () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  (* First call to get person URN *)
+  (* Set up response queue: first person URN, then posts *)
   let person_response = {|{"sub": "user123"}|} in
-  Mock_http.set_response { status = 200; body = person_response; headers = [] };
-  
-  (* Second call to get posts *)
   let posts_response = {|{
     "elements": [
       {
@@ -375,7 +386,10 @@ let test_get_posts () =
       "total": 10
     }
   }|} in
-  Mock_http.set_response { status = 200; body = posts_response; headers = [] };
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 200; body = posts_response; headers = [] };
+  ];
   
   LinkedIn.get_posts ~account_id:"test_account" ~start:0 ~count:10
     (fun collection ->
@@ -437,7 +451,7 @@ let test_batch_get_posts () =
     }
   }|} in
   
-  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  Mock_http.set_responses [{ status = 200; body = response_body; headers = [] }];
   
   LinkedIn.batch_get_posts 
     ~account_id:"test_account" 
@@ -467,16 +481,16 @@ let test_posts_scroller () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  (* First response for person URN *)
+  (* Set up response queue: first person URN, then posts *)
   let person_response = {|{"sub": "user123"}|} in
-  Mock_http.set_response { status = 200; body = person_response; headers = [] };
-  
-  (* Second response for posts *)
   let posts_response = {|{
     "elements": [{"id": "1", "author": "urn:li:person:user123", "lifecycleState": "PUBLISHED"}],
     "paging": {"start": 0, "count": 1, "total": 5}
   }|} in
-  Mock_http.set_response { status = 200; body = posts_response; headers = [] };
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 200; body = posts_response; headers = [] };
+  ];
   
   let scroller = LinkedIn.create_posts_scroller ~account_id:"test_account" ~page_size:1 () in
   
@@ -544,12 +558,12 @@ let test_like_post () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  (* Person URN response *)
+  (* Set up response queue: first person URN, then like response *)
   let person_response = {|{"sub": "user123"}|} in
-  Mock_http.set_response { status = 200; body = person_response; headers = [] };
-  
-  (* Like response *)
-  Mock_http.set_response { status = 201; body = "{}"; headers = [] };
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = "{}"; headers = [] };
+  ];
   
   LinkedIn.like_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun () -> print_endline "✓ Like post")
@@ -575,13 +589,13 @@ let test_comment_on_post () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  (* Person URN response *)
+  (* Set up response queue: first person URN, then comment response *)
   let person_response = {|{"sub": "user123"}|} in
-  Mock_http.set_response { status = 200; body = person_response; headers = [] };
-  
-  (* Comment response *)
   let comment_response = {|{"id": "comment123"}|} in
-  Mock_http.set_response { status = 201; body = comment_response; headers = [] };
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = comment_response; headers = [] };
+  ];
   
   LinkedIn.comment_on_post 
     ~account_id:"test_account" 
@@ -654,13 +668,13 @@ let test_post_with_url_preview () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  (* Person URN response *)
+  (* Set up response queue: first person URN, then post response *)
   let person_response = {|{"sub": "user123"}|} in
-  Mock_http.set_response { status = 200; body = person_response; headers = [] };
-  
-  (* Post response *)
   let post_response = {|{"id": "urn:li:share:789"}|} in
-  Mock_http.set_response { status = 201; body = post_response; headers = [] };
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = post_response; headers = [] };
+  ];
   
   let text = "Great article about OCaml! https://example.com/ocaml-article" in
   
@@ -885,6 +899,23 @@ let test_oauth_scope_validation () =
       print_endline "✓ OAuth scope validation")
     (fun err -> failwith ("Scope validation failed: " ^ err))
 
+(** Helper to create mock responses for post_single with media *)
+let make_media_upload_responses ~num_images =
+  (* 1. GET userinfo *)
+  let userinfo_response = { status = 200; body = {|{"sub": "user123"}|}; headers = [] } in
+  (* For each image: GET media, POST register, PUT upload *)
+  let per_image_responses = List.init num_images (fun _ -> [
+    (* GET media URL - fake binary data *)
+    { status = 200; body = "fake_image_binary_data"; headers = [] };
+    (* POST register upload *)
+    { status = 200; body = {|{"value": {"asset": "urn:li:digitalmediaAsset:123456", "uploadMechanism": {"com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {"uploadUrl": "https://api.linkedin.com/upload/123"}}}}|}; headers = [] };
+    (* PUT upload binary *)
+    { status = 200; body = ""; headers = [] };
+  ]) |> List.flatten in
+  (* Final POST to create the ugcPost *)
+  let create_post_response = { status = 201; body = {|{"id": "urn:li:share:123456"}|}; headers = [] } in
+  [userinfo_response] @ per_image_responses @ [create_post_response]
+
 (** Test: Post with single image and alt-text *)
 let test_post_with_alt_text () =
   Mock_config.reset ();
@@ -905,7 +936,7 @@ let test_post_with_alt_text () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  Mock_http.set_response { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+  Mock_http.set_responses (make_media_upload_responses ~num_images:1);
   
   LinkedIn.post_single 
     ~account_id:"test_account"
@@ -936,7 +967,7 @@ let test_post_with_multiple_alt_texts () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  Mock_http.set_response { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+  Mock_http.set_responses (make_media_upload_responses ~num_images:2);
   
   LinkedIn.post_single 
     ~account_id:"test_account"
@@ -967,7 +998,7 @@ let test_post_without_alt_text () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  Mock_http.set_response { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+  Mock_http.set_responses (make_media_upload_responses ~num_images:1);
   
   LinkedIn.post_single 
     ~account_id:"test_account"
@@ -998,7 +1029,7 @@ let test_post_with_partial_alt_texts () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  Mock_http.set_response { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+  Mock_http.set_responses (make_media_upload_responses ~num_images:3);
   
   LinkedIn.post_single 
     ~account_id:"test_account"
@@ -1029,7 +1060,7 @@ let test_alt_text_special_chars () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  Mock_http.set_response { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+  Mock_http.set_responses (make_media_upload_responses ~num_images:1);
   
   LinkedIn.post_single 
     ~account_id:"test_account"
@@ -1060,7 +1091,8 @@ let test_thread_with_alt_texts () =
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
-  Mock_http.set_response { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+  (* LinkedIn post_thread only posts the first item, so we need 1 image worth of responses *)
+  Mock_http.set_responses (make_media_upload_responses ~num_images:1);
   
   LinkedIn.post_thread
     ~account_id:"test_account"

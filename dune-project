@@ -43,8 +43,7 @@
   yojson
   base64
   ptime
-  (cryptokit (>= 1.16))
-  (ounit2 :with-test)))
+  (cryptokit (>= 1.16))))
 
 (package
  (name social-twitter-v2)

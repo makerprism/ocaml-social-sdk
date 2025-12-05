@@ -127,11 +127,10 @@ The SDK follows a runtime-agnostic design:
 
 ### Features
 
-- **Thread Splitting**: Automatically split long content into threads
 - **Content Validation**: Platform-specific validation (character limits, media types)
 - **URL Extraction**: Parse and handle URLs in content
 - **Media Upload**: Support for images, videos, and documents
-- **Rate Limiting**: Built-in rate limit handling
+- **Thread Posting**: Post threads/reply chains on supported platforms (Twitter, Bluesky, Mastodon)
 
 ## Supported Platforms
 

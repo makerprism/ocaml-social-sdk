@@ -89,10 +89,12 @@ module Mock_config = struct
   let get_env _key = Some "test_value"
   
   let get_credentials ~account_id:_ on_success _on_error =
+    (* Mastodon credentials must be JSON-encoded with both access_token and instance_url *)
+    let creds_json = {|{"access_token":"test_access_token","instance_url":"https://mastodon.social"}|} in
     on_success {
-      Social_core.access_token = "test_access_token";
+      Social_core.access_token = creds_json;
       refresh_token = None;
-      expires_at = Some "https://mastodon.social"; (* Instance URL *)
+      expires_at = None;
       token_type = "Bearer";
     }
   

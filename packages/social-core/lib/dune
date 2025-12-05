@@ -6,7 +6,6 @@
   social_core
   platform_types
   content_validator
-  thread_splitter
   url_extractor)
  (libraries
   yojson

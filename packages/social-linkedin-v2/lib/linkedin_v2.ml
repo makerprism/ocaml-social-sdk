@@ -759,7 +759,7 @@ module Make (Config : CONFIG) = struct
                 let post = {
                   id = json |> member "id" |> to_string;
                   author = json |> member "author" |> to_string;
-                  created_at = json |> member "created" |> member "time" |> to_string_option;
+                  created_at = (try json |> member "created" |> member "time" |> to_string_option with _ -> None);
                   text = (try
                     json 
                     |> member "specificContent" 
@@ -824,7 +824,7 @@ module Make (Config : CONFIG) = struct
                       {
                         id = elem |> member "id" |> to_string;
                         author = elem |> member "author" |> to_string;
-                        created_at = elem |> member "created" |> member "time" |> to_string_option;
+                        created_at = (try elem |> member "created" |> member "time" |> to_string_option with _ -> None);
                         text = (try
                           elem 
                           |> member "specificContent" 
@@ -948,38 +948,44 @@ module Make (Config : CONFIG) = struct
           Config.Http.get ~headers url
             (fun response ->
               if response.status >= 200 && response.status < 300 then
-                try
-                  let json = Yojson.Basic.from_string response.body in
-                  let open Yojson.Basic.Util in
-                  let results = json |> member "results" |> to_assoc in
-                  
-                  let posts = List.filter_map (fun (_id, post_json) ->
-                    try
-                      Some {
-                        id = post_json |> member "id" |> to_string;
-                        author = post_json |> member "author" |> to_string;
-                        created_at = post_json |> member "created" |> member "time" |> to_string_option;
-                        text = (try
-                          post_json 
-                          |> member "specificContent" 
-                          |> member "com.linkedin.ugc.ShareContent"
-                          |> member "shareCommentary"
-                          |> member "text"
-                          |> to_string_option
-                        with _ -> None);
-                        visibility = (try
-                          post_json
-                          |> member "visibility"
-                          |> member "com.linkedin.ugc.MemberNetworkVisibility"
-                          |> to_string_option
-                        with _ -> None);
-                        lifecycle_state = post_json |> member "lifecycleState" |> to_string_option;
-                      }
-                    with _ -> None
-                  ) results in
-                  on_success posts
-                with e ->
-                  on_error (Printf.sprintf "Failed to parse batch results: %s" (Printexc.to_string e))
+                (* Parse response first, then call callback outside try/with *)
+                match
+                  try
+                    let json = Yojson.Basic.from_string response.body in
+                    let open Yojson.Basic.Util in
+                    let results = json |> member "results" |> to_assoc in
+                    
+                    Ok (List.filter_map (fun (_id, post_json) ->
+                      try
+                        Some {
+                          id = post_json |> member "id" |> to_string;
+                          author = post_json |> member "author" |> to_string;
+                          created_at = (try
+                            post_json |> member "created" |> member "time" |> to_string_option
+                          with _ -> None);
+                          text = (try
+                            post_json 
+                            |> member "specificContent" 
+                            |> member "com.linkedin.ugc.ShareContent"
+                            |> member "shareCommentary"
+                            |> member "text"
+                            |> to_string_option
+                          with _ -> None);
+                          visibility = (try
+                            post_json
+                            |> member "visibility"
+                            |> member "com.linkedin.ugc.MemberNetworkVisibility"
+                            |> to_string_option
+                          with _ -> None);
+                          lifecycle_state = post_json |> member "lifecycleState" |> to_string_option;
+                        }
+                      with _ -> None
+                    ) results)
+                  with e ->
+                    Error (Printf.sprintf "Failed to parse batch results: %s" (Printexc.to_string e))
+                with
+                | Ok posts -> on_success posts
+                | Error msg -> on_error msg
               else
                 on_error (Printf.sprintf "Batch get failed (%d): %s" response.status response.body))
             on_error)
@@ -1039,7 +1045,7 @@ module Make (Config : CONFIG) = struct
                   {
                     id = elem |> member "id" |> to_string;
                     author = elem |> member "author" |> to_string;
-                    created_at = elem |> member "created" |> member "time" |> to_string_option;
+                    created_at = (try elem |> member "created" |> member "time" |> to_string_option with _ -> None);
                     text = (try
                       elem 
                       |> member "specificContent" 
@@ -1272,7 +1278,7 @@ module Make (Config : CONFIG) = struct
                     id = elem |> member "id" |> to_string;
                     actor = elem |> member "actor" |> to_string;
                     text = elem |> member "message" |> member "text" |> to_string;
-                    created_at = elem |> member "created" |> member "time" |> to_string_option;
+                    created_at = (try elem |> member "created" |> member "time" |> to_string_option with _ -> None);
                   }
                 ) elements_json in
                 
