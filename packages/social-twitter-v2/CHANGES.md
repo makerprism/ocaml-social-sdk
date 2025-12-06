@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Character Counting (`Twitter_char_counter` module)
+- **`count`** - Count characters according to Twitter's rules (URLs=23, CJK/emoji=2)
+- **`is_valid`** - Check if text fits within 280 character limit
+- **`remaining`** - Get remaining characters available
+- **`split_into_thread`** - Split text into thread posts by triple newlines
+- **`validate_thread`** - Validate all posts in a thread
+- **`get_thread_summary`** - Get summary of thread validation
+- Reply mention handling (excluded from count when `is_reply=true`)
+- Proper Unicode support for CJK characters and emojis
+
 #### Tweet Operations
 - **`post_single`** - Post single tweets with media support
 - **`post_thread`** - Post threads with proper reply chaining

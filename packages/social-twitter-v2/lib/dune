@@ -1,7 +1,7 @@
 (library
  (name social_twitter_v2)
  (public_name social-twitter-v2)
- (modules social_twitter_v2 twitter_v2)
+ (modules social_twitter_v2 twitter_v2 twitter_char_counter)
  (libraries
   social-core
   yojson
@@ -9,4 +9,6 @@
   digestif
   ptime
   ptime.clock.os
-  uri))
+  uri
+  uutf
+  str))

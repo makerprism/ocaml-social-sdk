@@ -1766,6 +1766,200 @@ let test_rate_limit_partial_headers () =
   (* Should handle gracefully *)
   print_endline "✓ Rate limit partial headers test executed"
 
+(* ============================================ *)
+(* Character Counter Tests                      *)
+(* ============================================ *)
+
+module Char_counter = Social_twitter_v2.Char_counter
+
+(** Test: Basic ASCII character counting *)
+let test_char_counter_basic () =
+  let text = "Hello, World!" in
+  let count = Char_counter.count text in
+  assert (count = 13);
+  print_endline "✓ Basic ASCII character counting test passed"
+
+(** Test: URL counting (should be 23 characters regardless of length) *)
+let test_char_counter_urls () =
+  (* Short URL *)
+  let text1 = "Check this: https://t.co/abc" in
+  let count1 = Char_counter.count text1 in
+  assert (count1 = 12 + 23); (* "Check this: " + 23 for URL *)
+  
+  (* Long URL *)
+  let text2 = "Check this: https://example.com/very/long/path/to/some/resource?query=value&another=thing" in
+  let count2 = Char_counter.count text2 in
+  assert (count2 = 12 + 23); (* Same - long URLs still count as 23 *)
+  
+  (* Multiple URLs *)
+  let text3 = "Links: https://a.com and https://b.com" in
+  let count3 = Char_counter.count text3 in
+  assert (count3 = 7 + 23 + 5 + 23); (* "Links: " + URL + " and " + URL *)
+  
+  print_endline "✓ URL character counting test passed"
+
+(** Test: CJK character counting (should be 2 per character) *)
+let test_char_counter_cjk () =
+  (* Japanese text *)
+  let text1 = "日本語" in
+  let count1 = Char_counter.count text1 in
+  assert (count1 = 6); (* 3 characters × 2 *)
+  
+  (* Chinese text *)
+  let text2 = "中文" in
+  let count2 = Char_counter.count text2 in
+  assert (count2 = 4); (* 2 characters × 2 *)
+  
+  (* Korean text *)
+  let text3 = "한국어" in
+  let count3 = Char_counter.count text3 in
+  assert (count3 = 6); (* 3 characters × 2 *)
+  
+  (* Mixed ASCII and CJK *)
+  let text4 = "Hello 日本" in
+  let count4 = Char_counter.count text4 in
+  assert (count4 = 6 + 4); (* "Hello " + 2 CJK chars *)
+  
+  print_endline "✓ CJK character counting test passed"
+
+(** Test: Emoji counting (should be 2 per emoji) *)
+let test_char_counter_emoji () =
+  (* Single emoji *)
+  let text1 = "🎉" in
+  let count1 = Char_counter.count text1 in
+  assert (count1 = 2);
+  
+  (* Multiple emojis *)
+  let text2 = "👋🌍🎉" in
+  let count2 = Char_counter.count text2 in
+  assert (count2 = 6); (* 3 emojis × 2 *)
+  
+  (* Mixed text and emojis *)
+  let text3 = "Hello 👋 World 🌍" in
+  let count3 = Char_counter.count text3 in
+  assert (count3 = 6 + 2 + 7 + 2); (* "Hello " + emoji + " World " + emoji *)
+  
+  print_endline "✓ Emoji character counting test passed"
+
+(** Test: Reply mention removal *)
+let test_char_counter_reply_mentions () =
+  (* Single mention at start *)
+  let text1 = "@user Hello there!" in
+  let count_normal = Char_counter.count text1 in
+  let count_reply = Char_counter.count ~is_reply:true text1 in
+  
+  assert (count_normal > count_reply);
+  assert (count_reply = 12); (* Just "Hello there!" *)
+  
+  (* Multiple mentions at start *)
+  let text2 = "@user1 @user2 Hello!" in
+  let count_reply2 = Char_counter.count ~is_reply:true text2 in
+  assert (count_reply2 = 6); (* Just "Hello!" *)
+  
+  (* Mention in middle (should not be removed) *)
+  let text3 = "Hey @user check this" in
+  let count_reply3 = Char_counter.count ~is_reply:true text3 in
+  assert (count_reply3 = 20); (* Full text *)
+  
+  print_endline "✓ Reply mention removal test passed"
+
+(** Test: Validation *)
+let test_char_counter_validation () =
+  (* Valid tweet *)
+  let valid = String.make 280 'a' in
+  assert (Char_counter.is_valid valid);
+  
+  (* Invalid tweet (too long) *)
+  let invalid = String.make 281 'a' in
+  assert (not (Char_counter.is_valid invalid));
+  
+  (* Short tweet *)
+  let short = "Hello" in
+  assert (Char_counter.is_valid short);
+  
+  print_endline "✓ Validation test passed"
+
+(** Test: Remaining characters *)
+let test_char_counter_remaining () =
+  let text = "Hello" in
+  let remaining = Char_counter.remaining text in
+  assert (remaining = 275);
+  
+  let at_limit = String.make 280 'a' in
+  let remaining_at_limit = Char_counter.remaining at_limit in
+  assert (remaining_at_limit = 0);
+  
+  let over_limit = String.make 300 'a' in
+  let remaining_over = Char_counter.remaining over_limit in
+  assert (remaining_over = -20);
+  
+  print_endline "✓ Remaining characters test passed"
+
+(** Test: Thread splitting *)
+let test_char_counter_thread_split () =
+  let text = "First tweet\n\n\nSecond tweet\n\n\nThird tweet" in
+  let posts = Char_counter.split_into_thread text in
+  
+  assert (List.length posts = 3);
+  assert (List.nth posts 0 = "First tweet");
+  assert (List.nth posts 1 = "Second tweet");
+  assert (List.nth posts 2 = "Third tweet");
+  
+  (* Empty posts should be filtered *)
+  let text2 = "Tweet 1\n\n\n\n\n\nTweet 2" in
+  let posts2 = Char_counter.split_into_thread text2 in
+  assert (List.length posts2 = 2);
+  
+  print_endline "✓ Thread splitting test passed"
+
+(** Test: Thread validation *)
+let test_char_counter_thread_validation () =
+  let short_posts = "Short 1\n\n\nShort 2\n\n\nShort 3" in
+  let summary = Char_counter.get_thread_summary short_posts in
+  
+  assert (summary.total_posts = 3);
+  assert (summary.invalid_count = 0);
+  assert (summary.all_valid);
+  
+  (* Thread with one too-long post *)
+  let long_post = String.make 300 'a' in
+  let mixed_posts = Printf.sprintf "Short\n\n\n%s\n\n\nShort again" long_post in
+  let summary2 = Char_counter.get_thread_summary mixed_posts in
+  
+  assert (summary2.total_posts = 3);
+  assert (summary2.invalid_count = 1);
+  assert (not summary2.all_valid);
+  assert (List.length summary2.invalid_posts = 1);
+  
+  print_endline "✓ Thread validation test passed"
+
+(** Test: Complex mixed content *)
+let test_char_counter_complex () =
+  (* Japanese text with emoji and URL *)
+  (* 日本語テスト = 6 chars: 日本語 (3 kanji) + テスト (3 katakana) *)
+  let text = "日本語テスト 🎉 https://example.com/test" in
+  let count = Char_counter.count text in
+  (* 6 CJK chars × 2 = 12, space = 1, emoji = 2, space = 1, URL = 23 = 39 *)
+  assert (count = 12 + 1 + 2 + 1 + 23);
+  
+  print_endline "✓ Complex mixed content test passed"
+
+(** Test: Edge cases *)
+let test_char_counter_edge_cases () =
+  (* Empty string *)
+  let empty = Char_counter.count "" in
+  assert (empty = 0);
+  
+  (* Whitespace only *)
+  let whitespace = Char_counter.count "   " in
+  assert (whitespace = 3);
+  
+  (* Newlines *)
+  let newlines = Char_counter.count "a\nb\nc" in
+  assert (newlines = 5);
+  
+  print_endline "✓ Edge cases test passed"
+
 (** Run all tests *)
 let () =
   print_endline "===========================================";
@@ -1894,6 +2088,21 @@ let () =
   test_thread_with_alt_texts_twitter ();
   test_alt_text_unicode_twitter ();
   
+  (* Character counter tests *)
+  print_endline "";
+  print_endline "--- Character Counter Tests ---";
+  test_char_counter_basic ();
+  test_char_counter_urls ();
+  test_char_counter_cjk ();
+  test_char_counter_emoji ();
+  test_char_counter_reply_mentions ();
+  test_char_counter_validation ();
+  test_char_counter_remaining ();
+  test_char_counter_thread_split ();
+  test_char_counter_thread_validation ();
+  test_char_counter_complex ();
+  test_char_counter_edge_cases ();
+  
   print_endline "";
   print_endline "===========================================";
   print_endline "All tests passed!";
@@ -1911,5 +2120,6 @@ let () =
   print_endline "  - Rate limiting (3 tests)";
   print_endline "  - Error handling (6 tests)";
   print_endline "  - Alt-text accessibility (6 tests)";
+  print_endline "  - Character counting (11 tests)";
   print_endline "";
-  print_endline "Total: 77 test functions covering 100+ features"
+  print_endline "Total: 88 test functions covering 100+ features"
