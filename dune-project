@@ -48,7 +48,7 @@
 (package
  (name social-twitter-v2)
  (synopsis "Twitter API v2 client")
- (description "Twitter API v2 client. Supports posting tweets, threads, media upload, and user lookup.")
+ (description "Twitter API v2 client. Supports posting tweets, threads, media upload, user lookup, and character counting.")
  (depends
   (ocaml (>= 4.14))
   (dune (>= 3.0))
@@ -57,7 +57,8 @@
   base64
   digestif
   ptime
-  uri))
+  uri
+  uutf))
 
 (package
  (name social-bluesky-v1)
