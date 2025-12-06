@@ -1895,44 +1895,6 @@ let test_char_counter_remaining () =
   
   print_endline "✓ Remaining characters test passed"
 
-(** Test: Thread splitting *)
-let test_char_counter_thread_split () =
-  let text = "First tweet\n\n\nSecond tweet\n\n\nThird tweet" in
-  let posts = Char_counter.split_into_thread text in
-  
-  assert (List.length posts = 3);
-  assert (List.nth posts 0 = "First tweet");
-  assert (List.nth posts 1 = "Second tweet");
-  assert (List.nth posts 2 = "Third tweet");
-  
-  (* Empty posts should be filtered *)
-  let text2 = "Tweet 1\n\n\n\n\n\nTweet 2" in
-  let posts2 = Char_counter.split_into_thread text2 in
-  assert (List.length posts2 = 2);
-  
-  print_endline "✓ Thread splitting test passed"
-
-(** Test: Thread validation *)
-let test_char_counter_thread_validation () =
-  let short_posts = "Short 1\n\n\nShort 2\n\n\nShort 3" in
-  let summary = Char_counter.get_thread_summary short_posts in
-  
-  assert (summary.total_posts = 3);
-  assert (summary.invalid_count = 0);
-  assert (summary.all_valid);
-  
-  (* Thread with one too-long post *)
-  let long_post = String.make 300 'a' in
-  let mixed_posts = Printf.sprintf "Short\n\n\n%s\n\n\nShort again" long_post in
-  let summary2 = Char_counter.get_thread_summary mixed_posts in
-  
-  assert (summary2.total_posts = 3);
-  assert (summary2.invalid_count = 1);
-  assert (not summary2.all_valid);
-  assert (List.length summary2.invalid_posts = 1);
-  
-  print_endline "✓ Thread validation test passed"
-
 (** Test: Complex mixed content *)
 let test_char_counter_complex () =
   (* Japanese text with emoji and URL *)
@@ -2098,8 +2060,6 @@ let () =
   test_char_counter_reply_mentions ();
   test_char_counter_validation ();
   test_char_counter_remaining ();
-  test_char_counter_thread_split ();
-  test_char_counter_thread_validation ();
   test_char_counter_complex ();
   test_char_counter_edge_cases ();
   
@@ -2120,6 +2080,6 @@ let () =
   print_endline "  - Rate limiting (3 tests)";
   print_endline "  - Error handling (6 tests)";
   print_endline "  - Alt-text accessibility (6 tests)";
-  print_endline "  - Character counting (11 tests)";
+  print_endline "  - Character counting (9 tests)";
   print_endline "";
-  print_endline "Total: 88 test functions covering 100+ features"
+  print_endline "Total: 86 test functions"

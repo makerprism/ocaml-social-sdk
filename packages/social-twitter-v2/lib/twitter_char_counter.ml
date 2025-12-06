@@ -10,7 +10,6 @@
     which is essential for:
     - Pre-validating tweet length before posting
     - Showing accurate character counts in UIs
-    - Splitting long content into threads
 *)
 
 (** Twitter's t.co wrapped URL length *)
@@ -156,68 +155,3 @@ let is_valid ?(is_reply=false) ?has_media text =
 let remaining ?(is_reply=false) ?has_media text =
   let char_count = count ~is_reply ?has_media text in
   max_tweet_length - char_count
-
-(** Split text into Twitter-compliant thread posts
-    
-    Splits by triple newlines (common thread separator convention)
-    
-    @param text The full text to split
-    @return List of individual tweet texts
-*)
-let split_into_thread text =
-  let posts = Str.split (Str.regexp "\n\n\n+") text in
-  List.filter (fun s -> String.trim s <> "") posts
-
-(** Thread post validation result *)
-type thread_post = {
-  index: int;
-  text: string;
-  is_valid: bool;
-  char_count: int;
-}
-
-(** Validate a thread - returns list of validation results for each post
-    
-    @param text The full thread text (posts separated by triple newlines)
-    @return List of validation results for each post
-*)
-let validate_thread text =
-  let posts = split_into_thread text in
-  List.mapi (fun i post ->
-    let char_count = count post in
-    let is_valid = char_count <= max_tweet_length in
-    { index = i; text = post; is_valid; char_count }
-  ) posts
-
-(** Thread validation summary *)
-type thread_summary = {
-  total_posts: int;
-  invalid_count: int;
-  max_length: int;
-  all_valid: bool;
-  invalid_posts: (int * int * int) list; (* index, length, over_by *)
-}
-
-(** Get thread validation summary
-    
-    @param text The full thread text (posts separated by triple newlines)
-    @return Summary of thread validation
-*)
-let get_thread_summary text =
-  let validation = validate_thread text in
-  let total_posts = List.length validation in
-  let invalid_posts = List.filter_map (fun p -> 
-    if not p.is_valid then 
-      Some (p.index, p.char_count, p.char_count - max_tweet_length)
-    else None
-  ) validation in
-  let invalid_count = List.length invalid_posts in
-  let max_length = List.fold_left (fun acc p -> max acc p.char_count) 0 validation in
-  
-  {
-    total_posts;
-    invalid_count;
-    max_length;
-    all_valid = invalid_count = 0;
-    invalid_posts;
-  }
