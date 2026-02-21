@@ -459,6 +459,24 @@ type mastodon_filter = {
   expires_at: string option;
 }
 
+(** Account information returned by verify_credentials *)
+type account_info = {
+  id: string;
+  username: string;
+  acct: string;
+  display_name: string;
+  avatar: string;
+  header: string;
+  followers_count: int;
+  following_count: int;
+  statuses_count: int;
+  note: string;
+  url: string;
+  locked: bool;
+  bot: bool;
+  created_at: string option;
+}
+
 (** Configuration module type for Mastodon provider *)
 module type CONFIG = sig
   module Http : HTTP_CLIENT
@@ -687,17 +705,47 @@ module Make (Config : CONFIG) = struct
       ((random_byte () land 0x3f) lor 0x80) (random_byte ())
       (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ())
   
-  (** Verify credentials are valid *)
+  (** Verify credentials are valid and return account information *)
   let verify_credentials ~mastodon_creds on_success on_error =
     let url = Printf.sprintf "%s/api/v1/accounts/verify_credentials" mastodon_creds.instance_url in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
     ] in
-    
+
     Config.Http.get ~headers url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
-          on_success ()
+          try
+            let json = Yojson.Basic.from_string response.body in
+            let open Yojson.Basic.Util in
+            let str field = try json |> member field |> to_string with _ -> "" in
+            let int_field field = try json |> member field |> to_int with _ -> 0 in
+            let bool_field field = try json |> member field |> to_bool with _ -> false in
+            let opt_str field =
+              try match json |> member field with
+                | `String v when v <> "" -> Some v
+                | _ -> None
+              with _ -> None
+            in
+            let info = {
+              id = str "id";
+              username = str "username";
+              acct = str "acct";
+              display_name = str "display_name";
+              avatar = str "avatar";
+              header = str "header";
+              followers_count = int_field "followers_count";
+              following_count = int_field "following_count";
+              statuses_count = int_field "statuses_count";
+              note = str "note";
+              url = str "url";
+              locked = bool_field "locked";
+              bot = bool_field "bot";
+              created_at = opt_str "created_at";
+            } in
+            on_success info
+          with e ->
+            on_error (Printf.sprintf "Failed to parse verify_credentials response: %s" (Printexc.to_string e))
         else
           on_error (Printf.sprintf "Invalid credentials (%d): %s" response.status response.body))
       on_error
@@ -872,12 +920,12 @@ module Make (Config : CONFIG) = struct
         parse_mastodon_credentials creds
           (fun mastodon_creds ->
             verify_credentials ~mastodon_creds
-              (fun () ->
+              (fun _account_info ->
                 Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
                   (fun () -> on_success mastodon_creds)
                   (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
               (fun err ->
-                Config.update_health_status ~account_id ~status:"invalid_token" 
+                Config.update_health_status ~account_id ~status:"invalid_token"
                   ~error_message:(Some err)
                   (fun () -> on_error (Error_types.Auth_error Error_types.Token_invalid))
                   (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))))
@@ -3055,7 +3103,61 @@ module Make (Config : CONFIG) = struct
       Error "Poll cannot be open for more than 30 days"
     else
       Ok ()
-  
+
+  (** Reply to an existing status
+
+      Fetches the original status to determine its author, then posts a reply
+      that automatically includes an @mention of the original author and sets
+      in_reply_to_id for proper threading.
+
+      @param account_id The account posting the reply
+      @param status_id The ID of the status being replied to
+      @param text The reply text (the @mention prefix is prepended automatically)
+      @param media_urls Optional media URLs to attach
+      @param alt_texts Optional alt-text descriptions for each media URL
+      @param visibility Visibility level for the reply (default: Public)
+      @param sensitive Whether the reply is sensitive (default: false)
+      @param spoiler_text Optional content warning text
+  *)
+  let reply_to_status
+      ~account_id
+      ~status_id
+      ~text
+      ?(media_urls=[])
+      ?(alt_texts=[])
+      ?(visibility=Public)
+      ?(sensitive=false)
+      ?(spoiler_text=None)
+      on_result =
+    (* First, fetch the original status to get the author's acct *)
+    get_status ~account_id ~status_id
+      (fun status_result ->
+        match status_result with
+        | Error err -> on_result (Error_types.Failure err)
+        | Ok original_status ->
+          (* Build the reply text with @mention prefix *)
+          let reply_text = match original_status.account_acct with
+            | Some acct when acct <> "" ->
+              let mention = Printf.sprintf "@%s " acct in
+              if String.starts_with ~prefix:mention text
+                || String.starts_with ~prefix:(Printf.sprintf "@%s" acct) text then
+                text  (* Already mentions the author *)
+              else
+                Printf.sprintf "@%s %s" acct text
+            | _ -> text  (* No account info, post as-is *)
+          in
+          (* Post as a reply using post_single with in_reply_to_id *)
+          post_single
+            ~account_id
+            ~text:reply_text
+            ~media_urls
+            ~alt_texts
+            ~visibility
+            ~sensitive
+            ~spoiler_text
+            ~in_reply_to_id:(Some status_id)
+            on_result)
+
   (** Delete a status *)
   let delete_status ~account_id ~status_id on_success on_error =
     ensure_valid_token ~account_id

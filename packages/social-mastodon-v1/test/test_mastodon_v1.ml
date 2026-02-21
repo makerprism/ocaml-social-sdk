@@ -31,12 +31,27 @@ let handle_api_result on_success on_error result =
 
 (** Mock HTTP client for testing *)
 module Mock_http : Social_core.HTTP_CLIENT = struct
-  let get ?headers:_ _url on_success _on_error =
-    on_success {
-      Social_core.status = 200;
-      headers = [("content-type", "application/json")];
-      body = {|{"id":"123","username":"testuser"}|};
-    }
+  let get ?headers:_ url on_success _on_error =
+    (* Verify credentials endpoint returns full account info *)
+    if String.ends_with ~suffix:"api/v1/accounts/verify_credentials" url then
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"id":"123","username":"testuser","acct":"testuser","display_name":"Test User","avatar":"https://mastodon.social/avatars/original/missing.png","header":"https://mastodon.social/headers/original/missing.png","followers_count":42,"following_count":10,"statuses_count":100,"note":"<p>Hello world</p>","url":"https://mastodon.social/@testuser","locked":false,"bot":false,"created_at":"2024-01-01T00:00:00.000Z"}|};
+      }
+    (* Status lookup returns status with account info *)
+    else if Str.string_match (Str.regexp ".*api/v1/statuses/[0-9]+$") url 0 then
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"id":"99999","content":"<p>Original post content</p>","url":"https://mastodon.social/@originalauthor/99999","created_at":"2024-01-01T00:00:00Z","account":{"id":"456","acct":"originalauthor","username":"originalauthor","display_name":"Original Author","url":"https://mastodon.social/@originalauthor"}}|};
+      }
+    else
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"id":"123","username":"testuser"}|};
+      }
   
   let post ?headers:_ ?body:_ url on_success _on_error =
     (* Check if this is a status post *)
@@ -1223,6 +1238,93 @@ let test_thread_with_videos () =
         assert false));
   assert !success_called
 
+(** Test: verify_credentials returns account info *)
+let test_verify_credentials () =
+  Printf.printf "Test: verify_credentials returns account info... ";
+  let success_called = ref false in
+  let mastodon_creds : Social_mastodon_v1.mastodon_credentials = {
+    access_token = "test_access_token";
+    refresh_token = None;
+    token_type = "Bearer";
+    instance_url = "https://mastodon.social";
+  } in
+  Mastodon.verify_credentials ~mastodon_creds
+    (fun (info : Social_mastodon_v1.account_info) ->
+      success_called := true;
+      assert (info.id = "123");
+      assert (info.username = "testuser");
+      assert (info.acct = "testuser");
+      assert (info.display_name = "Test User");
+      assert (info.followers_count = 42);
+      assert (info.following_count = 10);
+      assert (info.statuses_count = 100);
+      assert (info.url = "https://mastodon.social/@testuser");
+      assert (info.locked = false);
+      assert (info.bot = false);
+      assert (info.note = "<p>Hello world</p>");
+      assert (info.avatar <> "");
+      assert (info.header <> "");
+      assert (info.created_at = Some "2024-01-01T00:00:00.000Z");
+      Printf.printf "✓ (id=%s, username=%s, followers=%d)\n" info.id info.username info.followers_count)
+    (fun err ->
+      Printf.printf "✗ Error: %s\n" err;
+      assert false);
+  assert !success_called
+
+(** Test: reply_to_status prepends @mention and sets in_reply_to_id *)
+let test_reply_to_status () =
+  Printf.printf "Test: reply_to_status with @mention... ";
+  let success_called = ref false in
+  Mastodon.reply_to_status
+    ~account_id:"test_account"
+    ~status_id:"99999"
+    ~text:"Great post!"
+    (handle_outcome
+      (fun post_url ->
+        success_called := true;
+        Printf.printf "✓ (post_url: %s)\n" post_url)
+      (fun err ->
+        Printf.printf "✗ Error: %s\n" err;
+        assert false));
+  assert !success_called
+
+(** Test: reply_to_status does not double-mention if text already starts with @mention *)
+let test_reply_to_status_no_double_mention () =
+  Printf.printf "Test: reply_to_status skips duplicate @mention... ";
+  let success_called = ref false in
+  Mastodon.reply_to_status
+    ~account_id:"test_account"
+    ~status_id:"99999"
+    ~text:"@originalauthor Great post!"
+    (handle_outcome
+      (fun post_url ->
+        success_called := true;
+        Printf.printf "✓ (post_url: %s)\n" post_url)
+      (fun err ->
+        Printf.printf "✗ Error: %s\n" err;
+        assert false));
+  assert !success_called
+
+(** Test: reply_to_status with media *)
+let test_reply_to_status_with_media () =
+  Printf.printf "Test: reply_to_status with media... ";
+  let success_called = ref false in
+  Mastodon.reply_to_status
+    ~account_id:"test_account"
+    ~status_id:"99999"
+    ~text:"Here is a photo reply"
+    ~media_urls:["https://example.com/image.jpg"]
+    ~alt_texts:[Some "Reply image"]
+    ~visibility:Social_mastodon_v1.Unlisted
+    (handle_outcome
+      (fun post_url ->
+        success_called := true;
+        Printf.printf "✓ (post_url: %s)\n" post_url)
+      (fun err ->
+        Printf.printf "✗ Error: %s\n" err;
+        assert false));
+  assert !success_called
+
 (** Run all tests *)
 let () =
   Printf.printf "\n=== Mastodon Provider Tests ===\n\n";
@@ -1303,5 +1405,12 @@ let () =
   test_max_media_attachments ();
   test_too_many_media ();
   test_thread_with_videos ();
-  
-  Printf.printf "\n✓ All 58 tests passed!\n"
+
+  (* verify_credentials and reply tests *)
+  Printf.printf "\n--- Verify Credentials & Reply Tests ---\n";
+  test_verify_credentials ();
+  test_reply_to_status ();
+  test_reply_to_status_no_double_mention ();
+  test_reply_to_status_with_media ();
+
+  Printf.printf "\n✓ All 62 tests passed!\n"
