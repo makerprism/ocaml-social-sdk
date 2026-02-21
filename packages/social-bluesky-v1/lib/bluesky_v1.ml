@@ -275,6 +275,16 @@ module Make (Config : CONFIG) = struct
     | Ok () -> Ok ()
     | Error errs -> Error (String.concat "; " (List.map Error_types.validation_error_to_string errs))
   
+  (** Session cache: maps account_id to (did, access_jwt, created_at_unix) *)
+  let session_cache : (string, string * string * float) Hashtbl.t = Hashtbl.create 16
+
+  (** Session lifetime in seconds (matches Auth.Metadata.access_jwt_lifetime_seconds minus margin) *)
+  let session_max_age_seconds = 240.0  (* 4 minutes, conservative vs 5-min expiry *)
+
+  (** Clear cached session for an account *)
+  let invalidate_session ~account_id =
+    Hashtbl.remove session_cache account_id
+
   (** {1 Internal Helpers} *)
   
   (** Parse API error from response *)
@@ -459,8 +469,52 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Session creation failed (%d): %s" response.status response.body))
       on_error
   
-  (** Upload blob to Bluesky with optional alt text *)
-  let upload_blob ~access_jwt ~blob_data ~mime_type ~alt_text on_success on_error =
+  (** Video upload host *)
+  let video_upload_host = "https://video.bsky.app"
+
+  (** Get a service auth token for video upload
+
+      Calls com.atproto.server.getServiceAuth with the video service DID
+      and the uploadBlob lexicon method.
+
+      @param access_jwt Current session JWT for authenticating the request
+      @param did The user's DID
+      @param on_success Receives the service auth token
+      @param on_error Receives error message
+  *)
+  let get_service_auth ~access_jwt ~did on_success on_error =
+    let aud = "did:web:video.bsky.app" in
+    let lxm = "com.atproto.repo.uploadBlob" in
+    let url = Printf.sprintf "%s/xrpc/com.atproto.server.getServiceAuth?aud=%s&lxm=%s"
+      pds_url (Uri.pct_encode aud) (Uri.pct_encode lxm) in
+    let headers = [
+      ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
+    ] in
+    let _ = did in
+    Config.Http.get ~headers url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let json = Yojson.Basic.from_string response.body in
+            let token = json |> Yojson.Basic.Util.member "token" |> Yojson.Basic.Util.to_string in
+            on_success token
+          with e ->
+            on_error (Printf.sprintf "Failed to parse service auth response: %s" (Printexc.to_string e))
+        else
+          on_error (Printf.sprintf "Service auth request failed (%d): %s" response.status response.body))
+      on_error
+
+  (** Upload blob to Bluesky with optional alt text
+
+      @param access_jwt Session JWT for authentication
+      @param did Optional DID for video uploads (used to get service auth token)
+      @param blob_data Raw binary data
+      @param mime_type MIME type of the data
+      @param alt_text Optional alt text for accessibility
+      @param on_success Receives (blob_json, alt_text)
+      @param on_error Receives error message
+  *)
+  let upload_blob ~access_jwt ?did ~blob_data ~mime_type ~alt_text on_success on_error =
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
       ("Content-Type", mime_type);
@@ -582,33 +636,52 @@ module Make (Config : CONFIG) = struct
       || status_code = 501
       || method_unavailable_error
     in
-    let rec upload_via_video attempts_left =
-      let video_url = Printf.sprintf "%s/xrpc/app.bsky.video.uploadVideo" pds_url in
-      Config.Http.post ~headers ~body:blob_data video_url
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              match parse_blob_from_json json with
-              | Some blob -> on_success (blob, alt_text)
-              | None ->
-                  (match parse_job_id json with
-                   | Some job_id -> poll_video_job job_id 5
-                   | None -> on_error "Video upload response missing both blob and jobId")
-            with e -> on_error (Printf.sprintf "Failed to parse video upload response: %s" (Printexc.to_string e))
-          else
-            if should_fallback_from_video_endpoint response.status response.body then
-              upload_via_blob ()
+    let do_upload_video ~service_token ~user_did attempts_left =
+      let rec upload_via_video attempts_left =
+        let video_url = Printf.sprintf "%s/xrpc/app.bsky.video.uploadVideo?did=%s&name=video.mp4"
+          video_upload_host (Uri.pct_encode user_did) in
+        let video_headers = [
+          ("Authorization", Printf.sprintf "Bearer %s" service_token);
+          ("Content-Type", mime_type);
+        ] in
+        Config.Http.post ~headers:video_headers ~body:blob_data video_url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                match parse_blob_from_json json with
+                | Some blob -> on_success (blob, alt_text)
+                | None ->
+                    (match parse_job_id json with
+                     | Some job_id -> poll_video_job job_id 5
+                     | None -> on_error "Video upload response missing both blob and jobId")
+              with e -> on_error (Printf.sprintf "Failed to parse video upload response: %s" (Printexc.to_string e))
             else
-              on_error (Printf.sprintf "Video upload failed (%d): %s" response.status response.body))
-        (fun err ->
-          if attempts_left > 1 then
-            upload_via_video (attempts_left - 1)
-          else
-            on_error (Printf.sprintf "Video upload network error: %s" err))
+              if should_fallback_from_video_endpoint response.status response.body then
+                upload_via_blob ()
+              else
+                on_error (Printf.sprintf "Video upload failed (%d): %s" response.status response.body))
+          (fun err ->
+            if attempts_left > 1 then
+              upload_via_video (attempts_left - 1)
+            else
+              on_error (Printf.sprintf "Video upload network error: %s" err))
+      in
+      upload_via_video attempts_left
     in
     if is_video then
-      upload_via_video 2
+      match did with
+      | Some user_did ->
+          (* Get service auth token for video upload *)
+          get_service_auth ~access_jwt ~did:user_did
+            (fun service_token ->
+              do_upload_video ~service_token ~user_did 2)
+            (fun _err ->
+              (* Fall back to regular upload if service auth fails *)
+              do_upload_video ~service_token:access_jwt ~user_did 2)
+      | None ->
+          (* No DID available, use regular JWT with video host *)
+          do_upload_video ~service_token:access_jwt ~user_did:"unknown" 2
     else
       upload_via_blob ()
   
@@ -765,35 +838,58 @@ module Make (Config : CONFIG) = struct
           (Printf.sprintf "Network error: %s" err) :: !warnings;
         on_success (None, !warnings))
   
-  (** Ensure valid session token *)
+  (** Ensure valid session token, reusing cached session when available *)
   let ensure_valid_token ~account_id on_success on_error =
-    Config.get_credentials ~account_id
-      (fun creds ->
-        (* Bluesky uses identifier (handle/email) as access_token and password as refresh_token *)
-        match creds.refresh_token with
+    (* Check for a cached session that hasn't expired *)
+    let now = Unix.gettimeofday () in
+    match Hashtbl.find_opt session_cache account_id with
+    | Some (_did, access_jwt, created_at)
+      when now -. created_at < session_max_age_seconds ->
+        on_success access_jwt
+    | _ ->
+        (* No valid cached session - create a new one *)
+        Config.get_credentials ~account_id
+          (fun creds ->
+            (* Bluesky uses identifier (handle/email) as access_token and password as refresh_token *)
+            match creds.refresh_token with
+            | None ->
+                Config.update_health_status ~account_id ~status:"refresh_failed"
+                  ~error_message:(Some "No app password available")
+                  (fun () -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
+                  (fun _ -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
+            | Some password ->
+                (* Create new session *)
+                create_session ~identifier:creds.access_token ~password
+                  (fun (did, access_jwt) ->
+                    (* Cache the session *)
+                    Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
+                    Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
+                      (fun () -> on_success access_jwt)
+                      (fun _ -> on_success access_jwt))
+                  (fun err ->
+                    (* Invalidate any stale cache entry *)
+                    invalidate_session ~account_id;
+                    Config.update_health_status ~account_id ~status:"refresh_failed"
+                      ~error_message:(Some ("Session creation failed: " ^ err))
+                      (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
+                      (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
+          (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
+  
+  (** Ensure valid session token and also return the DID *)
+  let ensure_valid_token_with_did ~account_id on_success on_error =
+    ensure_valid_token ~account_id
+      (fun access_jwt ->
+        match Hashtbl.find_opt session_cache account_id with
+        | Some (did, _, _) -> on_success (did, access_jwt)
         | None ->
-            Config.update_health_status ~account_id ~status:"refresh_failed" 
-              ~error_message:(Some "No app password available")
-              (fun () -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
-              (fun _ -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
-        | Some password ->
-            (* Create new session *)
-            create_session ~identifier:creds.access_token ~password
-              (fun (_did, access_jwt) ->
-                Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                  (fun () -> on_success access_jwt)
-                  (fun _ -> on_success access_jwt))
-              (fun err ->
-                Config.update_health_status ~account_id ~status:"refresh_failed" 
-                  ~error_message:(Some ("Session creation failed: " ^ err))
-                  (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
-                  (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
-      (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
-  
+            (* Session was cached with a DID, this shouldn't happen *)
+            on_error (Error_types.Internal_error "Session cache missing DID"))
+      on_error
+
   (** {1 Public API - Posting} *)
-  
+
   (** Post with optional reply references (internal implementation) *)
-  let post_with_reply_impl ~account_id ~text ~media_urls ?(alt_texts=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ~reply_refs on_result =
+  let post_with_reply_impl ~account_id ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ~reply_refs on_result =
     (* Validate first *)
     match validate_post ~text ~media_count:(List.length media_urls) () with
     | Error errs ->
@@ -801,40 +897,42 @@ module Make (Config : CONFIG) = struct
     | Ok () ->
         let accumulated_warnings = ref [] in
         
-        ensure_valid_token ~account_id
-          (fun access_jwt ->
+        ensure_valid_token_with_did ~account_id
+          (fun (did, access_jwt) ->
             Config.get_credentials ~account_id
               (fun creds ->
                 let identifier = creds.access_token in
-                
-                (* Pair URLs with alt text - use None if alt text list is shorter *)
-                let urls_with_alt = List.mapi (fun i url ->
+
+                (* Pair URLs with alt text and dimensions - use None if lists are shorter *)
+                let urls_with_meta = List.mapi (fun i url ->
                   let alt_text = try List.nth alt_texts i with _ -> None in
-                  (url, alt_text)
+                  let width = try List.nth widths i with _ -> None in
+                  let height = try List.nth heights i with _ -> None in
+                  (url, alt_text, width, height)
                 ) media_urls in
-                
+
                 (* Helper to determine media type from MIME type *)
                 let media_type_of_mime mime_type =
                   if String.starts_with ~prefix:"video/" mime_type then Platform_types.Video
                   else if mime_type = "image/gif" then Platform_types.Gif
                   else Platform_types.Image
                 in
-                
+
                 (* Helper to upload multiple blobs in sequence *)
-                let rec upload_blobs_seq urls_with_alt acc on_complete on_err =
-                  match urls_with_alt with
+                let rec upload_blobs_seq urls_with_meta acc on_complete on_err =
+                  match urls_with_meta with
                   | [] -> on_complete (List.rev acc)
-                  | (url, alt_text) :: rest ->
+                  | (url, alt_text, w, h) :: rest ->
                       (* Fetch media from URL *)
                       Config.Http.get url
                         (fun media_resp ->
                           if media_resp.status >= 200 && media_resp.status < 300 then
-                            let mime_type = 
-                              List.assoc_opt "content-type" media_resp.headers 
+                            let mime_type =
+                              List.assoc_opt "content-type" media_resp.headers
                               |> Option.value ~default:"application/octet-stream"
                             in
                             let file_size = String.length media_resp.body in
-                            
+
                             (* Validate media if requested *)
                             let validation_result =
                               if validate_media_before_upload then
@@ -851,16 +949,16 @@ module Make (Config : CONFIG) = struct
                               else
                                 Ok ()
                             in
-                            
+
                             (match validation_result with
                             | Error errs ->
                                 on_result (Error_types.Failure (Error_types.Validation_error errs))
                             | Ok () ->
-                                (* Upload blob with alt text *)
-                                upload_blob ~access_jwt ~blob_data:media_resp.body ~mime_type ~alt_text
+                                (* Upload blob with alt text, passing DID for video service auth *)
+                                upload_blob ~access_jwt ~did ~blob_data:media_resp.body ~mime_type ~alt_text
                                   (fun (blob, alt) ->
                                     let media_type = media_type_of_mime mime_type in
-                                    upload_blobs_seq rest ((blob, alt, media_type) :: acc) on_complete on_err)
+                                    upload_blobs_seq rest ((blob, alt, media_type, w, h) :: acc) on_complete on_err)
                                   (fun err -> on_err (Error_types.Internal_error err)))
                           else
                             on_err (Error_types.make_api_error
@@ -869,9 +967,9 @@ module Make (Config : CONFIG) = struct
                               ~message:(Printf.sprintf "Failed to fetch media from %s" url) ()))
                         (fun err -> on_err (Error_types.Network_error (Error_types.Connection_failed err)))
                 in
-                
+
                 (* Upload media if provided (max 4 images) *)
-                let media_to_upload = List.filteri (fun i _ -> i < 4) urls_with_alt in
+                let media_to_upload = List.filteri (fun i _ -> i < 4) urls_with_meta in
                 upload_blobs_seq media_to_upload []
                   (fun blobs ->
                     (* Extract facets from text *)
@@ -914,8 +1012,8 @@ module Make (Config : CONFIG) = struct
                     (* Add embed based on content *)
                     let post_record_cont =
                       if List.length blobs > 0 then
-                        let video_blobs = List.filter (fun (_, _, mt) -> mt = Platform_types.Video) blobs in
-                        let non_video_blobs = List.filter (fun (_, _, mt) -> mt <> Platform_types.Video) blobs in
+                        let video_blobs = List.filter (fun (_, _, mt, _, _) -> mt = Platform_types.Video) blobs in
+                        let non_video_blobs = List.filter (fun (_, _, mt, _, _) -> mt <> Platform_types.Video) blobs in
                         if List.length video_blobs > 1 then
                           fun _ ->
                             on_result (Error_types.Failure (Error_types.Validation_error [
@@ -928,7 +1026,7 @@ module Make (Config : CONFIG) = struct
                                 "Mixing video and image embeds in one Bluesky post is not supported by this provider"
                             ]))
                         else if List.length video_blobs = 1 then
-                          let (video_blob, alt_text_opt, _) = List.hd video_blobs in
+                          let (video_blob, alt_text_opt, _, _, _) = List.hd video_blobs in
                           let video_fields =
                             match alt_text_opt with
                             | Some alt when String.length alt > 0 ->
@@ -949,15 +1047,26 @@ module Make (Config : CONFIG) = struct
                             ]))
                         else
                           (* Images present - skip link card *)
-                          let images_json = `List (List.map (fun (blob, alt_text_opt, _) ->
+                          let images_json = `List (List.map (fun (blob, alt_text_opt, _, w, h) ->
                           let alt_text = match alt_text_opt with
                             | Some alt when String.length alt > 0 -> alt
                             | _ -> ""
                           in
-                          `Assoc [
+                          let base_fields = [
                             ("alt", `String alt_text);
                             ("image", blob);
-                          ]
+                          ] in
+                          let fields_with_aspect = match w, h with
+                            | Some width, Some height ->
+                                base_fields @ [
+                                  ("aspectRatio", `Assoc [
+                                    ("width", `Int width);
+                                    ("height", `Int height);
+                                  ])
+                                ]
+                            | _ -> base_fields
+                          in
+                          `Assoc fields_with_aspect
                           ) non_video_blobs) in
                           fun on_rec_success ->
                             on_rec_success (`Assoc (base_with_reply @ [
@@ -1042,32 +1151,36 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error_types.Failure err))
   
   (** Post a single post to Bluesky
-      
+
       @param account_id The account identifier
       @param text The post text (max 300 characters)
       @param media_urls List of media URLs to attach (max 4)
       @param alt_texts Optional alt text for each media item
+      @param widths Optional width for each image (for aspectRatio)
+      @param heights Optional height for each image (for aspectRatio)
       @param skip_enrichments Skip link card fetching (default: false)
       @param validate_media_before_upload When true, validates media size after download
              but before upload. Bluesky limits: 50MB video, 60s duration, 1MB images.
              Default: false
       @param on_result Callback receiving the outcome
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
-    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~skip_enrichments ~validate_media_before_upload ~reply_refs:None on_result
-  
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
+    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload ~reply_refs:None on_result
+
   (** Post a thread to Bluesky
-      
+
       @param account_id The account identifier
       @param texts List of post texts
       @param media_urls_per_post Media URLs for each post
       @param alt_texts_per_post Alt texts for each post's media
+      @param widths_per_post Optional widths for each post's images (for aspectRatio)
+      @param heights_per_post Optional heights for each post's images (for aspectRatio)
       @param skip_enrichments Skip link card fetching (default: false)
       @param validate_media_before_upload When true, validates each media file after download.
              Default: false
       @param on_result Callback receiving the outcome with thread_result
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
     (* Validate entire thread upfront *)
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
@@ -1076,11 +1189,13 @@ module Make (Config : CONFIG) = struct
     | Ok () ->
         let total_requested = List.length texts in
         let accumulated_warnings = ref [] in
-        
-        (* Pair media URLs with alt text for each post *)
-        let media_with_alt_per_post = List.mapi (fun i media_urls ->
+
+        (* Pair media URLs with alt text and dimensions for each post *)
+        let media_with_meta_per_post = List.mapi (fun i media_urls ->
           let alt_texts = try List.nth alt_texts_per_post i with _ -> [] in
-          (media_urls, alt_texts)
+          let post_widths = try List.nth widths_per_post i with _ -> [] in
+          let post_heights = try List.nth heights_per_post i with _ -> [] in
+          (media_urls, alt_texts, post_widths, post_heights)
         ) media_urls_per_post in
         
         (* Helper to post thread items sequentially *)
@@ -1097,15 +1212,15 @@ module Make (Config : CONFIG) = struct
               else
                 on_result (Error_types.Partial_success { result; warnings = !accumulated_warnings })
           | text :: rest_texts ->
-              let (media, alt_texts) = match remaining_media with
-                | [] -> ([], [])
-                | (m, a) :: _ -> (m, a)
+              let (media, alt_texts, post_widths, post_heights) = match remaining_media with
+                | [] -> ([], [], [], [])
+                | (m, a, w, h) :: _ -> (m, a, w, h)
               in
               let rest_media = match remaining_media with
                 | [] -> []
                 | _ :: r -> r
               in
-              
+
               let reply_refs = match root_ref with
                 | None -> None  (* First post, no reply *)
                 | Some (root_uri, root_cid) ->
@@ -1113,12 +1228,12 @@ module Make (Config : CONFIG) = struct
                     match parent_ref with
                     | Some (parent_uri, parent_cid) ->
                         Some (root_uri, root_cid, parent_uri, parent_cid)
-                    | None -> 
+                    | None ->
                         (* Should not happen, but use root as parent *)
                         Some (root_uri, root_cid, root_uri, root_cid)
               in
-              
-              post_with_reply_impl ~account_id ~text ~media_urls:media ~alt_texts ~skip_enrichments ~validate_media_before_upload ~reply_refs
+
+              post_with_reply_impl ~account_id ~text ~media_urls:media ~alt_texts ~widths:post_widths ~heights:post_heights ~skip_enrichments ~validate_media_before_upload ~reply_refs
                 (function
                   | Error_types.Success uri_cid ->
                       process_post_result uri_cid [] rest_texts rest_media root_ref acc_uris
@@ -1159,7 +1274,7 @@ module Make (Config : CONFIG) = struct
                 "Failed to parse post response (expected uri|cid format)"))
         in
         
-        post_thread_items texts media_with_alt_per_post None None []
+        post_thread_items texts media_with_meta_per_post None None []
   
   (** {1 Public API - Post Management} *)
   
@@ -1552,46 +1667,48 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error err))
   
   (** Quote a post with optional text and media *)
-  let quote_post ~account_id ~post_uri ~post_cid ~text ~media_urls ?(alt_texts=[]) ?(skip_enrichments=false) on_result =
+  let quote_post ~account_id ~post_uri ~post_cid ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) on_result =
     (* Validate first *)
     match validate_post ~text ~media_count:(List.length media_urls) () with
     | Error errs ->
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
-        ensure_valid_token ~account_id
-          (fun access_jwt ->
+        ensure_valid_token_with_did ~account_id
+          (fun (did, access_jwt) ->
             Config.get_credentials ~account_id
               (fun creds ->
                 let identifier = creds.access_token in
                 let _ = skip_enrichments in (* Quote posts don't use link cards *)
-                
-                (* Pair URLs with alt text *)
-                let urls_with_alt = List.mapi (fun i url ->
+
+                (* Pair URLs with alt text and dimensions *)
+                let urls_with_meta = List.mapi (fun i url ->
                   let alt_text = try List.nth alt_texts i with _ -> None in
-                  (url, alt_text)
+                  let w = try List.nth widths i with _ -> None in
+                  let h = try List.nth heights i with _ -> None in
+                  (url, alt_text, w, h)
                 ) media_urls in
-                
+
                 (* Helper to upload blobs *)
-                let rec upload_blobs_seq urls_with_alt acc on_complete on_err =
-                  match urls_with_alt with
+                let rec upload_blobs_seq urls_with_meta acc on_complete on_err =
+                  match urls_with_meta with
                   | [] -> on_complete (List.rev acc)
-                  | (url, alt_text) :: rest ->
+                  | (url, alt_text, w, h) :: rest ->
                       Config.Http.get url
                         (fun media_resp ->
                           if media_resp.status >= 200 && media_resp.status < 300 then
-                            let mime_type = 
-                              List.assoc_opt "content-type" media_resp.headers 
+                            let mime_type =
+                              List.assoc_opt "content-type" media_resp.headers
                               |> Option.value ~default:"application/octet-stream"
                             in
-                            (* Upload with alt text *)
-                            upload_blob ~access_jwt ~blob_data:media_resp.body ~mime_type ~alt_text
+                            (* Upload with alt text, passing DID for video service auth *)
+                            upload_blob ~access_jwt ~did ~blob_data:media_resp.body ~mime_type ~alt_text
                               (fun (blob, alt) ->
                                 let media_type =
                                   if String.starts_with ~prefix:"video/" mime_type then Platform_types.Video
                                   else if mime_type = "image/gif" then Platform_types.Gif
                                   else Platform_types.Image
                                 in
-                                upload_blobs_seq rest ((blob, alt, media_type) :: acc) on_complete on_err)
+                                upload_blobs_seq rest ((blob, alt, media_type, w, h) :: acc) on_complete on_err)
                               (fun err -> on_err (Error_types.Internal_error err))
                           else
                             on_err (Error_types.make_api_error
@@ -1600,12 +1717,12 @@ module Make (Config : CONFIG) = struct
                               ~message:(Printf.sprintf "Failed to fetch media from %s" url) ()))
                         (fun err -> on_err (Error_types.Network_error (Error_types.Connection_failed err)))
                 in
-                
-                let media_to_upload = List.filteri (fun i _ -> i < 4) urls_with_alt in
+
+                let media_to_upload = List.filteri (fun i _ -> i < 4) urls_with_meta in
                 upload_blobs_seq media_to_upload []
                   (fun blobs ->
-                    let video_count = List.length (List.filter (fun (_, _, mt) -> mt = Platform_types.Video) blobs) in
-                    let non_video_count = List.length (List.filter (fun (_, _, mt) -> mt <> Platform_types.Video) blobs) in
+                    let video_count = List.length (List.filter (fun (_, _, mt, _, _) -> mt = Platform_types.Video) blobs) in
+                    let non_video_count = List.length (List.filter (fun (_, _, mt, _, _) -> mt <> Platform_types.Video) blobs) in
                     if video_count > 1 then
                       on_result (Error_types.Failure (Error_types.Validation_error [
                         Error_types.Too_many_media { count = video_count; max = 1 }
@@ -1619,20 +1736,20 @@ module Make (Config : CONFIG) = struct
                     extract_facets text
                       (fun facets ->
                         let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
-                        
+
                         let base_record = [
                           ("$type", `String "app.bsky.feed.post");
                           ("text", `String text);
                           ("createdAt", `String now);
                         ] in
-                        
-                        let base_with_facets = 
+
+                        let base_with_facets =
                           if List.length facets > 0 then
                             base_record @ [("facets", `List facets)]
                           else
                             base_record
                         in
-                        
+
                         (* Create embed for quote post *)
                         let quote_embed = `Assoc [
                           ("$type", `String "app.bsky.embed.record");
@@ -1641,15 +1758,15 @@ module Make (Config : CONFIG) = struct
                             ("cid", `String post_cid);
                           ]);
                         ] in
-                        
+
                         (* If we have media, use recordWithMedia *)
-                         let final_record = 
+                         let final_record =
                           if List.length blobs > 0 then
-                            let video_blobs = List.filter (fun (_, _, mt) -> mt = Platform_types.Video) blobs in
-                            let non_video_blobs = List.filter (fun (_, _, mt) -> mt <> Platform_types.Video) blobs in
+                            let video_blobs = List.filter (fun (_, _, mt, _, _) -> mt = Platform_types.Video) blobs in
+                            let non_video_blobs = List.filter (fun (_, _, mt, _, _) -> mt <> Platform_types.Video) blobs in
                             let media_embed =
                               if List.length video_blobs = 1 && List.length non_video_blobs = 0 then
-                                let (video_blob, alt_text_opt, _) = List.hd video_blobs in
+                                let (video_blob, alt_text_opt, _, _, _) = List.hd video_blobs in
                                 let video_fields =
                                   match alt_text_opt with
                                   | Some alt when String.length alt > 0 ->
@@ -1666,15 +1783,26 @@ module Make (Config : CONFIG) = struct
                                 in
                                 `Assoc video_fields
                               else
-                                let images_json = `List (List.map (fun (blob, alt_text_opt, _) ->
+                                let images_json = `List (List.map (fun (blob, alt_text_opt, _, w, h) ->
                                   let alt_text = match alt_text_opt with
                                     | Some alt when String.length alt > 0 -> alt
                                     | _ -> ""
                                   in
-                                  `Assoc [
+                                  let base_fields = [
                                     ("alt", `String alt_text);
                                     ("image", blob);
-                                  ]
+                                  ] in
+                                  let fields_with_aspect = match w, h with
+                                    | Some width, Some height ->
+                                        base_fields @ [
+                                          ("aspectRatio", `Assoc [
+                                            ("width", `Int width);
+                                            ("height", `Int height);
+                                          ])
+                                        ]
+                                    | _ -> base_fields
+                                  in
+                                  `Assoc fields_with_aspect
                                 ) non_video_blobs) in
                                 `Assoc [
                                   ("$type", `String "app.bsky.embed.images");
