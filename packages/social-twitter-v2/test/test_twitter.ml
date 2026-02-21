@@ -139,12 +139,12 @@ module Twitter = Social_twitter_v2.Make(Mock_config)
 (** Test: Content validation *)
 let test_content_validation () =
   (* Test valid tweet *)
-  let result1 = Twitter.validate_content ~text:"Hello Twitter!" in
+  let result1 = Twitter.validate_content ~text:"Hello Twitter!" () in
   assert (result1 = Ok ());
-  
+
   (* Test tweet exceeding max length *)
   let long_text = String.make 281 'a' in
-  let result2 = Twitter.validate_content ~text:long_text in
+  let result2 = Twitter.validate_content ~text:long_text () in
   (match result2 with
   | Error _ -> () (* Expected *)
   | Ok () -> failwith "Should have failed for long tweet");
@@ -4108,27 +4108,27 @@ let test_timeline_with_pagination () =
 (** Test: Tweet at exact character limit (280) *)
 let test_tweet_at_char_limit () =
   let exact_280 = String.make 280 'a' in
-  let result = Twitter.validate_content ~text:exact_280 in
+  let result = Twitter.validate_content ~text:exact_280 () in
   assert (result = Ok ());
   print_endline "✓ Tweet at exact char limit test passed"
 
 (** Test: Tweet with URLs (shortened by Twitter) *)
 let test_tweet_with_url () =
   let text_with_url = "Check out this link: https://example.com/very/long/path/to/resource" in
-  let result = Twitter.validate_content ~text:text_with_url in
+  let result = Twitter.validate_content ~text:text_with_url () in
   assert (result = Ok ());
   print_endline "✓ Tweet with URL test passed"
 
 (** Test: Tweet with emoji (multi-byte characters) *)
 let test_tweet_with_emoji () =
   let emoji_text = "Hello 👋 World 🌍 Test 🎉" in
-  let result = Twitter.validate_content ~text:emoji_text in
+  let result = Twitter.validate_content ~text:emoji_text () in
   assert (result = Ok ());
   print_endline "✓ Tweet with emoji test passed"
 
 (** Test: Empty tweet validation *)
 let test_empty_tweet () =
-  let result = Twitter.validate_content ~text:"" in
+  let result = Twitter.validate_content ~text:"" () in
   (* Twitter requires at least some content *)
   (match result with
    | Error _ -> () (* Expected - empty tweets should fail *)
@@ -4137,7 +4137,7 @@ let test_empty_tweet () =
 
 (** Test: Whitespace-only tweet *)
 let test_whitespace_tweet () =
-  let result = Twitter.validate_content ~text:"   " in
+  let result = Twitter.validate_content ~text:"   " () in
   (* Whitespace-only should likely fail *)
   (match result with
    | Error _ -> ()
@@ -5488,6 +5488,365 @@ let test_canonical_analytics_adapters () =
    | None -> failwith "Missing impression_count canonical series");
   print_endline "✓ Canonical analytics adapters test passed"
 
+(* ============================================ *)
+(* NEW TESTS: Batch lookup (M1)                *)
+(* ============================================ *)
+
+(** Test: get_tweets batch lookup with multiple IDs *)
+let test_get_tweets_batch () =
+  let result = ref None in
+  Twitter.get_tweets ~account_id:"test_account"
+    ~ids:["111"; "222"; "333"] ()
+    (function
+      | Ok json ->
+          let open Yojson.Basic.Util in
+          let data = json |> member "data" in
+          result := Some (Ok (data <> `Null))
+      | Error err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok true) -> ()
+   | Some (Ok false) -> failwith "Expected data in batch lookup response"
+   | Some (Error err) -> failwith ("Batch lookup failed: " ^ err)
+   | None -> failwith "No result from batch lookup");
+  print_endline "✓ Batch tweet lookup test passed"
+
+(** Test: get_tweets with empty list returns error *)
+let test_get_tweets_empty_ids () =
+  let result = ref None in
+  Twitter.get_tweets ~account_id:"test_account" ~ids:[] ()
+    (function
+      | Ok _ -> result := Some (Ok ())
+      | Error err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Error _) -> () (* Expected - empty ids should error *)
+   | Some (Ok ()) -> failwith "Expected error for empty ids list"
+   | None -> failwith "No result from empty ids test");
+  print_endline "✓ Batch tweet lookup empty IDs test passed"
+
+(** Test: get_tweets with optional fields *)
+let test_get_tweets_with_fields () =
+  let result = ref None in
+  Twitter.get_tweets ~account_id:"test_account"
+    ~ids:["111"]
+    ~expansions:["author_id"]
+    ~tweet_fields:["created_at"; "public_metrics"] ()
+    (function
+      | Ok _ -> result := Some (Ok ())
+      | Error err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok ()) -> ()
+   | Some (Error err) -> failwith ("Batch lookup with fields failed: " ^ err)
+   | None -> failwith "No result from batch lookup with fields");
+  print_endline "✓ Batch tweet lookup with fields test passed"
+
+(* ============================================ *)
+(* NEW TESTS: Time-filtered timelines (M2)     *)
+(* ============================================ *)
+
+(** Test: get_user_timeline with start_time and end_time *)
+let test_timeline_with_time_filters () =
+  let result = ref None in
+  Twitter.get_user_timeline ~account_id:"test_account"
+    ~user_id:"user_123"
+    ~start_time:(Some "2024-01-01T00:00:00Z")
+    ~end_time:(Some "2024-12-31T23:59:59Z") ()
+    (function
+      | Ok _ -> result := Some (Ok ())
+      | Error err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok ()) -> ()
+   | Some (Error err) -> failwith ("Timeline with time filters failed: " ^ err)
+   | None -> failwith "No result from time-filtered timeline");
+  print_endline "✓ Timeline with time filters test passed"
+
+(** Test: get_user_timeline with exclude parameter *)
+let test_timeline_with_exclude () =
+  let result = ref None in
+  Twitter.get_user_timeline ~account_id:"test_account"
+    ~user_id:"user_123"
+    ~exclude:["retweets"; "replies"] ()
+    (function
+      | Ok _ -> result := Some (Ok ())
+      | Error err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok ()) -> ()
+   | Some (Error err) -> failwith ("Timeline with exclude failed: " ^ err)
+   | None -> failwith "No result from timeline with exclude");
+  print_endline "✓ Timeline with exclude parameter test passed"
+
+(** Test: get_user_timeline with all new filters combined *)
+let test_timeline_combined_filters () =
+  let result = ref None in
+  Twitter.get_user_timeline ~account_id:"test_account"
+    ~user_id:"user_123"
+    ~max_results:20
+    ~start_time:(Some "2024-06-01T00:00:00Z")
+    ~end_time:(Some "2024-06-30T23:59:59Z")
+    ~exclude:["retweets"]
+    ~tweet_fields:["created_at"; "public_metrics"] ()
+    (function
+      | Ok _ -> result := Some (Ok ())
+      | Error err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok ()) -> ()
+   | Some (Error err) -> failwith ("Timeline combined filters failed: " ^ err)
+   | None -> failwith "No result from timeline combined filters");
+  print_endline "✓ Timeline combined filters test passed"
+
+(* ============================================ *)
+(* NEW TESTS: Premium character limit (M3)     *)
+(* ============================================ *)
+
+(** Test: validate_post allows 4000 chars when premium=true *)
+let test_validate_post_premium () =
+  let long_text = String.make 3000 'a' in
+  let result = Twitter.validate_post ~text:long_text ~premium:true () in
+  assert (result = Ok ());
+  print_endline "✓ Premium validate_post allows long tweets test passed"
+
+(** Test: validate_post rejects >280 chars when premium=false *)
+let test_validate_post_standard_rejects_long () =
+  let text_300 = String.make 300 'a' in
+  let result = Twitter.validate_post ~text:text_300 () in
+  (match result with
+   | Error _ -> ()
+   | Ok () -> failwith "Expected standard validation to reject 300-char tweet");
+  print_endline "✓ Standard validate_post rejects long tweets test passed"
+
+(** Test: validate_post rejects >4000 chars even with premium=true *)
+let test_validate_post_premium_max () =
+  let text_4001 = String.make 4001 'a' in
+  let result = Twitter.validate_post ~text:text_4001 ~premium:true () in
+  (match result with
+   | Error _ -> ()
+   | Ok () -> failwith "Expected premium validation to reject 4001-char tweet");
+  print_endline "✓ Premium validate_post rejects >4000 chars test passed"
+
+(** Test: validate_content with premium flag *)
+let test_validate_content_premium () =
+  let long_text = String.make 3000 'a' in
+  let result = Twitter.validate_content ~text:long_text ~premium:true () in
+  assert (result = Ok ());
+  let too_long = String.make 4001 'a' in
+  let result2 = Twitter.validate_content ~text:too_long ~premium:true () in
+  (match result2 with
+   | Error _ -> ()
+   | Ok () -> failwith "Expected premium validate_content to reject >4000 chars");
+  print_endline "✓ validate_content premium flag test passed"
+
+(** Test: max_tweet_length_premium constant is 4000 *)
+let test_max_tweet_length_premium () =
+  assert (Twitter.max_tweet_length_premium = 4000);
+  assert (Twitter.max_tweet_length = 280);
+  print_endline "✓ max_tweet_length_premium constant test passed"
+
+(* ============================================ *)
+(* NEW TESTS: Retry on 401 (M4)               *)
+(* ============================================ *)
+
+let retry_401_refresh_calls = ref 0
+let retry_401_api_calls = ref 0
+
+module Mock_http_retry_401 : Social_core.HTTP_CLIENT = struct
+  let get ?headers:_ _url on_success _on_error =
+    incr retry_401_api_calls;
+    if !retry_401_api_calls = 1 then
+      (* First call returns 401 *)
+      on_success {
+        Social_core.status = 401;
+        headers = [];
+        body = {|{"detail":"Unauthorized"}|};
+      }
+    else
+      (* Retry call succeeds *)
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data": {"id": "tweet_999", "text": "Success after retry"}}|};
+      }
+
+  let post ?headers:_ ?body:_ url on_success _on_error =
+    if String.ends_with ~suffix:"/oauth2/token" url then begin
+      incr retry_401_refresh_calls;
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"refreshed_token","refresh_token":"refreshed_refresh","expires_in":7200,"token_type":"Bearer"}|};
+      }
+    end else
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"id":"ok"}}|};
+      }
+
+  let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{"id":"media"}}|} }
+
+  let put ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{}}|} }
+
+  let delete ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{"deleted":true}}|} }
+end
+
+module Mock_config_retry_401 = struct
+  module Http = Mock_http_retry_401
+  let get_env = function
+    | "TWITTER_CLIENT_ID" -> Some "test_client_id"
+    | "TWITTER_CLIENT_SECRET" -> Some "test_client_secret"
+    | _ -> None
+  let get_credentials ~account_id:_ on_success _on_error =
+    let expires_at =
+      Ptime_clock.now () |> fun t ->
+        match Ptime.add_span t (Ptime.Span.of_int_s 3600) with
+        | Some t -> Ptime.to_rfc3339 t
+        | None -> Ptime.to_rfc3339 t in
+    on_success {
+      Social_core.access_token = "valid_but_expired_token";
+      refresh_token = Some "good_refresh";
+      expires_at = Some expires_at;
+      token_type = "Bearer";
+    }
+  let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
+  let encrypt _data on_success _on_error = on_success "encrypted"
+  let decrypt _data on_success _on_error = on_success "decrypted"
+  let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+end
+
+module Twitter_retry_401 = Social_twitter_v2.Make(Mock_config_retry_401)
+
+(** Test: with_retry_on_401 retries after token refresh on 401 response *)
+let test_retry_on_401 () =
+  retry_401_refresh_calls := 0;
+  retry_401_api_calls := 0;
+  let result = ref None in
+  Twitter_retry_401.with_retry_on_401
+    ~account_id:"test_account"
+    ~action:(fun access_token on_done on_err ->
+      let url = Printf.sprintf "https://api.twitter.com/2/tweets/123" in
+      let headers = [("Authorization", Printf.sprintf "Bearer %s" access_token)] in
+      Mock_http_retry_401.get ~headers url on_done on_err)
+    ~handle_response:(fun response on_result ->
+      if response.Social_core.status >= 200 && response.Social_core.status < 300 then
+        on_result (Ok response.body)
+      else
+        on_result (Error (Error_types.Internal_error "API error")))
+    (fun r -> result := Some r);
+  (match !result with
+   | Some (Ok _body) -> ()
+   | Some (Error err) -> failwith ("Retry on 401 failed: " ^ Error_types.error_to_string err)
+   | None -> failwith "No result from retry on 401 test");
+  (* The action should have been called twice: once failing, once succeeding *)
+  assert (!retry_401_api_calls = 2);
+  print_endline "✓ Retry on 401 with token refresh test passed"
+
+(* ============================================ *)
+(* NEW TESTS: share_with_followers (M5)        *)
+(* ============================================ *)
+
+let share_followers_body = ref ""
+
+module Mock_http_share_followers : Social_core.HTTP_CLIENT = struct
+  let get ?headers:_ _url on_success _on_error =
+    on_success {
+      Social_core.status = 200;
+      headers = [("content-type", "application/json")];
+      body = {|{"data":{"id":"user_12345","username":"testuser"}}|};
+    }
+
+  let post ?headers:_ ?body url on_success _on_error =
+    let body_str = match body with Some b -> b | None -> "" in
+    if String.ends_with ~suffix:"/tweets" (Uri.of_string url |> Uri.path) then
+      share_followers_body := body_str;
+    on_success {
+      Social_core.status = 200;
+      headers = [("content-type", "application/json")];
+      body = {|{"data":{"id":"tweet_community_123"}}|};
+    }
+
+  let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{"id":"media"}}|} }
+
+  let put ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{}}|} }
+
+  let delete ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{"deleted":true}}|} }
+end
+
+module Mock_config_share_followers = struct
+  module Http = Mock_http_share_followers
+  let get_env = function
+    | "TWITTER_CLIENT_ID" -> Some "test_client_id"
+    | "TWITTER_CLIENT_SECRET" -> Some "test_client_secret"
+    | _ -> None
+  let get_credentials ~account_id:_ on_success _on_error =
+    let expires_at =
+      Ptime_clock.now () |> fun t ->
+        match Ptime.add_span t (Ptime.Span.of_int_s 3600) with
+        | Some t -> Ptime.to_rfc3339 t
+        | None -> Ptime.to_rfc3339 t in
+    on_success {
+      Social_core.access_token = "test_access_token";
+      refresh_token = Some "test_refresh_token";
+      expires_at = Some expires_at;
+      token_type = "Bearer";
+    }
+  let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
+  let encrypt _data on_success _on_error = on_success "encrypted"
+  let decrypt _data on_success _on_error = on_success "decrypted"
+  let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+end
+
+module Twitter_share_followers = Social_twitter_v2.Make(Mock_config_share_followers)
+
+(** Test: post_single with community_id and share_with_followers includes the field *)
+let test_share_with_followers () =
+  share_followers_body := "";
+  let result = ref None in
+  Twitter_share_followers.post_single
+    ~account_id:"test_account"
+    ~text:"Hello community!"
+    ~media_urls:[]
+    ~community_id:"comm_123"
+    ~share_with_followers:true
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success tweet_id -> result := Some (Ok tweet_id)
+      | Error_types.Partial_success { result = tweet_id; _ } -> result := Some (Ok tweet_id)
+      | Error_types.Failure err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok _) -> ()
+   | Some (Error err) -> failwith ("share_with_followers test failed: " ^ err)
+   | None -> failwith "No result from share_with_followers test");
+  (* Verify the body contains share_with_followers *)
+  assert (string_contains !share_followers_body "share_with_followers");
+  assert (string_contains !share_followers_body "true");
+  print_endline "✓ share_with_followers with community_id test passed"
+
+(** Test: post_single without community_id does not include share_with_followers *)
+let test_no_share_without_community () =
+  share_followers_body := "";
+  let result = ref None in
+  Twitter_share_followers.post_single
+    ~account_id:"test_account"
+    ~text:"Regular tweet"
+    ~media_urls:[]
+    ~share_with_followers:true  (* flag set but no community_id *)
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success tweet_id -> result := Some (Ok tweet_id)
+      | Error_types.Partial_success { result = tweet_id; _ } -> result := Some (Ok tweet_id)
+      | Error_types.Failure err -> result := Some (Error (Error_types.error_to_string err)));
+  (match !result with
+   | Some (Ok _) -> ()
+   | Some (Error err) -> failwith ("no share without community test failed: " ^ err)
+   | None -> failwith "No result from no share without community test");
+  (* Verify the body does NOT contain share_with_followers *)
+  assert (not (string_contains !share_followers_body "share_with_followers"));
+  print_endline "✓ No share_with_followers without community_id test passed"
+
 (** Run all tests *)
 let () =
   print_endline "===========================================";
@@ -5573,7 +5932,14 @@ let () =
   test_thread_posting ();
   test_quote_tweet ();
   test_reply_tweet ();
-  
+
+  (* Batch tweet lookup tests (M1) *)
+  print_endline "";
+  print_endline "--- Batch Tweet Lookup ---";
+  test_get_tweets_batch ();
+  test_get_tweets_empty_ids ();
+  test_get_tweets_with_fields ();
+
   (* Timeline tests *)
   print_endline "";
   print_endline "--- Timeline Operations ---";
@@ -5581,6 +5947,13 @@ let () =
   test_timeline_with_pagination ();
   test_get_mentions_timeline ();
   test_get_home_timeline ();
+
+  (* Time-filtered timeline tests (M2) *)
+  print_endline "";
+  print_endline "--- Time-Filtered Timelines ---";
+  test_timeline_with_time_filters ();
+  test_timeline_with_exclude ();
+  test_timeline_combined_filters ();
   
   (* User operations tests *)
   print_endline "";
@@ -5704,7 +6077,27 @@ let () =
   test_video_uses_chunked_upload_path ();
   test_image_uses_simple_upload_path ();
   test_chunked_upload_contract_init_append_finalize ();
-  
+
+  (* Premium character limit tests (M3) *)
+  print_endline "";
+  print_endline "--- Premium Character Limit ---";
+  test_validate_post_premium ();
+  test_validate_post_standard_rejects_long ();
+  test_validate_post_premium_max ();
+  test_validate_content_premium ();
+  test_max_tweet_length_premium ();
+
+  (* Retry on 401 tests (M4) *)
+  print_endline "";
+  print_endline "--- Retry on 401 ---";
+  test_retry_on_401 ();
+
+  (* share_with_followers tests (M5) *)
+  print_endline "";
+  print_endline "--- Community share_with_followers ---";
+  test_share_with_followers ();
+  test_no_share_without_community ();
+
   print_endline "";
   print_endline "===========================================";
   print_endline "All tests passed!";
@@ -5714,7 +6107,12 @@ let () =
   print_endline "  - Content & media validation (7 tests)";
   print_endline "  - OAuth 2.0 authentication (55 tests)";
   print_endline "  - Tweet CRUD operations (10 tests)";
+  print_endline "  - Batch tweet lookup (3 tests)";
   print_endline "  - Timeline operations (4 tests)";
+  print_endline "  - Time-filtered timelines (3 tests)";
+  print_endline "  - Premium character limit (5 tests)";
+  print_endline "  - Retry on 401 (1 test)";
+  print_endline "  - Community share_with_followers (2 tests)";
   print_endline "  - User operations (16 tests)";
   print_endline "  - Engagement operations (6 tests)";
   print_endline "  - Lists management (12 tests)";
@@ -5725,4 +6123,4 @@ let () =
   print_endline "  - Character counting (9 tests)";
   print_endline "  - Video upload (16 tests)";
   print_endline "";
-  print_endline "Total: 152 test functions"
+  print_endline "Total: 166 test functions"

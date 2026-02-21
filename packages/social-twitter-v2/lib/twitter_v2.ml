@@ -636,6 +636,9 @@ module Make (Config : CONFIG) = struct
   
   (** Maximum tweet length (Twitter counts characters specially - see Twitter_char_counter) *)
   let max_tweet_length = 280
+
+  (** Maximum tweet length for Premium/X Premium subscribers (4000 characters) *)
+  let max_tweet_length_premium = 4000
   
   (** Maximum number of images per tweet *)
   let max_images = 4
@@ -648,12 +651,17 @@ module Make (Config : CONFIG) = struct
   
   (** {1 Validation} *)
   
-  (** Validate a single tweet's content *)
-  let validate_post ~text ?(media_count=0) ?(is_reply=false) () =
+  (** Validate a single tweet's content.
+
+      @param premium When true, allows up to 4000 characters (X Premium limit).
+                     Default: false (standard 280-character limit).
+  *)
+  let validate_post ~text ?(media_count=0) ?(is_reply=false) ?(premium=false) () =
     let errors = ref [] in
     let char_count = Twitter_char_counter.count ~is_reply text in
-    if char_count > max_tweet_length then
-      errors := Error_types.Text_too_long { length = char_count; max = max_tweet_length } :: !errors;
+    let limit = if premium then max_tweet_length_premium else max_tweet_length in
+    if char_count > limit then
+      errors := Error_types.Text_too_long { length = char_count; max = limit } :: !errors;
     if media_count > max_images then
       errors := Error_types.Too_many_media { count = media_count; max = max_images } :: !errors;
     if !errors = [] then Ok ()
@@ -896,7 +904,40 @@ module Make (Config : CONFIG) = struct
             (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
   
-  (** Update media metadata with alt text using X API v2 
+  (** Retry-on-401 wrapper.
+
+      Performs [action] with the current access token.  If the HTTP response
+      returns status 401 the wrapper refreshes the token once via
+      {!ensure_valid_token} and retries the action with the new token.
+      If the retry also returns 401, the error is returned without further
+      retries.
+
+      @param account_id   Account whose credentials should be refreshed
+      @param action        [fun access_token on_done -> ...] where [on_done]
+                           receives the HTTP response
+      @param handle_response  Processes the HTTP response into the final result
+      @param on_result     Final callback with the result
+  *)
+  let with_retry_on_401 ~account_id ~action ~handle_response on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        action access_token
+          (fun response ->
+            if response.Social_core.status = 401 then
+              (* Force a token refresh by invalidating cache, then retry once *)
+              ensure_valid_token ~account_id
+                (fun new_access_token ->
+                  action new_access_token
+                    (fun retry_response ->
+                      handle_response retry_response on_result)
+                    (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+                (fun err -> on_result (Error err))
+            else
+              handle_response response on_result)
+          (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+      (fun err -> on_result (Error err))
+
+  (** Update media metadata with alt text using X API v2
       
       @param on_success Called with `true` if alt-text was set, `false` if it failed
   *)
@@ -1227,7 +1268,7 @@ module Make (Config : CONFIG) = struct
              Default: false (for backward compatibility)
       @param on_result Callback receiving the outcome with tweet ID
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(validate_media_before_upload=false) ?reply_settings ?community_id on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(validate_media_before_upload=false) ?reply_settings ?community_id ?(share_with_followers=false) on_result =
     (* Validate before making any API calls *)
     let media_count = List.length media_urls in
     match validate_post ~text ~media_count () with
@@ -1334,7 +1375,13 @@ module Make (Config : CONFIG) = struct
                       |> add_optional_string_field "reply_settings" reply_settings
                       |> add_optional_string_field "community_id" community_id
                     in
-                    let body_json = 
+                    (* When posting to a community, optionally share with followers *)
+                    let base_fields = match community_id with
+                      | Some _ when share_with_followers ->
+                          ("share_with_followers", `Bool true) :: base_fields
+                      | _ -> base_fields
+                    in
+                    let body_json =
                       if List.length media_ids > 0 then
                         `Assoc (("media", `Assoc [
                           ("media_ids", `List (List.map (fun id -> `String id) media_ids))
@@ -1343,7 +1390,7 @@ module Make (Config : CONFIG) = struct
                         `Assoc base_fields
                     in
                     let body = Yojson.Basic.to_string body_json in
-                    
+
                     let headers = [
                       ("Authorization", Printf.sprintf "Bearer %s" access_token);
                       ("Content-Type", "application/json");
@@ -1853,6 +1900,53 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
+  (** Get multiple tweets by IDs (batch lookup).
+
+      Uses GET /2/tweets with the `ids` query parameter for fetching multiple
+      tweets in a single request.  This is more efficient than individual
+      lookups for timeline and analytics workflows.
+
+      @param account_id  The account identifier
+      @param ids          List of tweet IDs to look up (max 100 per request)
+      @param expansions   Optional expansions (e.g. ["author_id"])
+      @param tweet_fields Optional tweet fields (e.g. ["created_at"; "public_metrics"])
+      @return JSON response with a `data` array of tweet objects
+  *)
+  let get_tweets ~account_id ~ids ?(expansions=[]) ?(tweet_fields=[]) () on_result =
+    if ids = [] then
+      on_result (Error (Error_types.Internal_error "ids list must not be empty"))
+    else
+      ensure_valid_token ~account_id
+        (fun access_token ->
+          let params = [
+            ("ids", String.concat "," ids);
+          ] in
+          let params = if List.length expansions > 0 then
+            ("expansions", String.concat "," expansions) :: params
+          else params in
+          let params = if List.length tweet_fields > 0 then
+            ("tweet.fields", String.concat "," tweet_fields) :: params
+          else params in
+
+          let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+          let url = Printf.sprintf "%s/tweets?%s" twitter_api_base query in
+          let headers = [
+            ("Authorization", Printf.sprintf "Bearer %s" access_token);
+          ] in
+
+          Config.Http.get ~headers url
+            (fun response ->
+              if response.status >= 200 && response.status < 300 then
+                try
+                  let json = Yojson.Basic.from_string response.body in
+                  on_result (Ok json)
+                with e ->
+                  on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse tweets response: %s" (Printexc.to_string e))))
+              else
+                on_result (Error (parse_api_error ~status_code:response.status ~body:response.body ~headers:response.headers)))
+            (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+        (fun err -> on_result (Error err))
+
   (** Search recent tweets *)
   let search_tweets ~account_id ~query ?(max_results=10) ?(next_token=None) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
@@ -1890,8 +1984,13 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
-  (** Get user timeline (tweets by user ID) *)
-  let get_user_timeline ~account_id ~user_id ?(max_results=10) ?(pagination_token=None) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
+  (** Get user timeline (tweets by user ID).
+
+      @param start_time  Oldest UTC datetime (RFC 3339) for returned tweets.
+      @param end_time    Newest UTC datetime (RFC 3339) for returned tweets.
+      @param exclude     List of tweet types to exclude, e.g. ["retweets"; "replies"].
+  *)
+  let get_user_timeline ~account_id ~user_id ?(max_results=10) ?(pagination_token=None) ?(start_time=None) ?(end_time=None) ?(exclude=[]) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
       (fun access_token ->
         let params = [
@@ -1900,19 +1999,28 @@ module Make (Config : CONFIG) = struct
         let params = match pagination_token with
           | Some token -> ("pagination_token", token) :: params
           | None -> params in
+        let params = match start_time with
+          | Some t -> ("start_time", t) :: params
+          | None -> params in
+        let params = match end_time with
+          | Some t -> ("end_time", t) :: params
+          | None -> params in
+        let params = if List.length exclude > 0 then
+          ("exclude", String.concat "," exclude) :: params
+        else params in
         let params = if List.length expansions > 0 then
           ("expansions", String.concat "," expansions) :: params
         else params in
         let params = if List.length tweet_fields > 0 then
           ("tweet.fields", String.concat "," tweet_fields) :: params
         else params in
-        
+
         let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/users/%s/tweets?%s" twitter_api_base user_id query in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
         ] in
-        
+
         Config.Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
@@ -3268,9 +3376,13 @@ module Make (Config : CONFIG) = struct
                 on_error (Printf.sprintf "Failed to parse user ID: %s" (Printexc.to_string e))))
       (fun err -> on_error (Error_types.error_to_string err))
   
-  (** Validate content for Twitter *)
-  let validate_content ~text =
-    let max_length = 280 in
+  (** Validate content for Twitter.
+
+      @param premium When true, allows up to 4000 characters (X Premium limit).
+                     Default: false (standard 280-character limit).
+  *)
+  let validate_content ~text ?(premium=false) () =
+    let max_length = if premium then max_tweet_length_premium else max_tweet_length in
     if String.length text > max_length then
       Error (Printf.sprintf "Tweet exceeds %d character limit" max_length)
     else
