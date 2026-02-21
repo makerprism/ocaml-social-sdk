@@ -1117,40 +1117,63 @@ module Make (Config : CONFIG) = struct
     in
     if errors = [] then Ok () else Error (List.rev errors)
   
+  (** {1 Tagging helper} *)
+
+  (** Build optional tagging and location parameters for container creation *)
+  let tagging_params ?(user_tags=[]) ?location_id ?(collaborators=[]) () =
+    let user_tag_params = match user_tags with
+      | [] -> []
+      | tags ->
+          let json_tags = List.map (fun (username, x, y) ->
+            Printf.sprintf {|{"username":"%s","x":%f,"y":%f}|} username x y
+          ) tags in
+          [("user_tags", [Printf.sprintf "[%s]" (String.concat "," json_tags)])]
+    in
+    let location_params = match location_id with
+      | Some loc -> [("location_id", [loc])]
+      | None -> []
+    in
+    let collab_params = match collaborators with
+      | [] -> []
+      | collabs -> [("collaborators", [String.concat "," collabs])]
+    in
+    user_tag_params @ location_params @ collab_params
+
   (** Step 1a: Create single image container *)
-  let create_image_container ~ig_user_id ~access_token ~image_url ~caption ~alt_text ~is_carousel_item on_result =
+  let create_image_container ~ig_user_id ~access_token ~image_url ~caption ~alt_text ~is_carousel_item ?(user_tags=[]) ?location_id ?(collaborators=[]) on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
-    
+
     let base_params = [
       ("image_url", [image_url]);
     ] in
-    
+
     (* Add alt text if provided *)
     let base_with_alt = match alt_text with
       | Some alt when String.length alt > 0 ->
           ("custom_accessibility_caption", [alt]) :: base_params
       | _ -> base_params
     in
-    
-    let params = 
+
+    let params =
       (if is_carousel_item then
         (* Carousel items don't include caption, and mark as carousel item *)
         ("is_carousel_item", ["true"]) :: base_with_alt
       else
         (* Regular posts include caption *)
         ("caption", [caption]) :: base_with_alt) @
+      (tagging_params ~user_tags ?location_id ~collaborators ()) @
       (* Add app secret proof if available *)
       (match compute_app_secret_proof ~access_token with
        | Some proof -> [("appsecret_proof", [proof])]
        | None -> [])
     in
-    
+
     let body = Uri.encoded_of_query params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
     ] in
-    
+
     Config.Http.post ~headers ~body url
       (fun response ->
         update_rate_limits response;
@@ -1167,40 +1190,59 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
   
   (** Step 1b: Create video container *)
-  let create_video_container ~ig_user_id ~access_token ~video_url ~caption ~alt_text ~media_type ~is_carousel_item on_result =
+  let create_video_container ~ig_user_id ~access_token ~video_url ~caption ~alt_text ~media_type ~is_carousel_item ?(user_tags=[]) ?location_id ?(collaborators=[]) ?share_to_feed ?cover_url ?thumb_offset ?audio_name on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
-    
+
     let base_params = [
       ("media_type", [media_type]); (* "VIDEO" or "REELS" *)
       ("video_url", [video_url]);
     ] in
-    
+
     (* Add alt text if provided *)
     let base_with_alt = match alt_text with
       | Some alt when String.length alt > 0 ->
           ("custom_accessibility_caption", [alt]) :: base_params
       | _ -> base_params
     in
-    
-    let params = 
+
+    (* Add reel-specific parameters *)
+    let reel_params =
+      (match share_to_feed with
+       | Some true -> [("share_to_feed", ["true"])]
+       | Some false -> [("share_to_feed", ["false"])]
+       | None -> []) @
+      (match cover_url with
+       | Some u -> [("cover_url", [u])]
+       | None -> []) @
+      (match thumb_offset with
+       | Some ms -> [("thumb_offset", [string_of_int ms])]
+       | None -> []) @
+      (match audio_name with
+       | Some name -> [("audio_name", [name])]
+       | None -> [])
+    in
+
+    let params =
       (if is_carousel_item then
         (* Carousel items don't include caption, and mark as carousel item *)
         ("is_carousel_item", ["true"]) :: base_with_alt
       else
         (* Regular posts include caption *)
         ("caption", [caption]) :: base_with_alt) @
+      (tagging_params ~user_tags ?location_id ~collaborators ()) @
+      reel_params @
       (* Add app secret proof if available *)
       (match compute_app_secret_proof ~access_token with
        | Some proof -> [("appsecret_proof", [proof])]
        | None -> [])
     in
-    
+
     let body = Uri.encoded_of_query params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
     ] in
-    
+
     Config.Http.post ~headers ~body url
       (fun response ->
         update_rate_limits response;
@@ -1481,8 +1523,191 @@ module Make (Config : CONFIG) = struct
                            (Error_types.Internal_error err))))
                      (fun err -> on_result (Error_types.Failure err)))
   
+  (** {1 Comment Posting (H1)} *)
+
+  (** Post a comment on a media object
+
+      Requires the instagram_manage_comments permission.
+
+      @param media_id The ID of the media to comment on
+      @param access_token Valid access token
+      @param message The comment text
+      @param on_result Continuation receiving api_result with the new comment ID
+  *)
+  let post_comment ~media_id ~access_token ~message on_result =
+    let url = Printf.sprintf "%s/%s/comments" graph_api_base media_id in
+
+    let params = [
+      ("message", [message]);
+    ] @
+    (match compute_app_secret_proof ~access_token with
+     | Some proof -> [("appsecret_proof", [proof])]
+     | None -> [])
+    in
+
+    let body = Uri.encoded_of_query params in
+    let headers = [
+      ("Content-Type", "application/x-www-form-urlencoded");
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          try
+            let open Yojson.Basic.Util in
+            let json = Yojson.Basic.from_string response.body in
+            let comment_id = json |> member "id" |> to_string in
+            on_result (Ok comment_id)
+          with e ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse comment response: %s" (Printexc.to_string e))))
+        else
+          on_result (Error (api_error_of_response response)))
+      (fun err -> on_result (Error (network_error_of_string err)))
+
+  (** Post a comment using account credentials (auto-refreshes token)
+
+      @param account_id Internal account identifier
+      @param media_id The ID of the media to comment on
+      @param message The comment text
+      @param on_result Continuation receiving api_result with the new comment ID
+  *)
+  let post_comment_for_account ~account_id ~media_id ~message on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        post_comment ~media_id ~access_token ~message on_result)
+      (fun err -> on_result (Error err))
+
+  (** {1 Media Listing (H2)} *)
+
+  (** Media item returned from the media listing endpoint *)
+  type media_item = {
+    id : string;
+    caption : string option;
+    timestamp : string option;
+    media_type : string option;
+    media_url : string option;
+    thumbnail_url : string option;
+    permalink : string option;
+  }
+
+  (** List media for an Instagram user
+
+      @param ig_user_id Instagram Business Account ID
+      @param access_token Valid access token
+      @param limit Maximum number of items to return (optional, API default applies)
+      @param on_result Continuation receiving api_result with list of media items
+  *)
+  let get_user_media ~ig_user_id ~access_token ?limit on_result =
+    let params = [
+      ("fields", ["id,caption,timestamp,media_type,media_url,thumbnail_url,permalink"]);
+      ("access_token", [access_token]);
+    ] @
+    (match limit with
+     | Some n -> [("limit", [string_of_int n])]
+     | None -> []) @
+    (match compute_app_secret_proof ~access_token with
+     | Some proof -> [("appsecret_proof", [proof])]
+     | None -> [])
+    in
+
+    let query = Uri.encoded_of_query params in
+    let url = Printf.sprintf "%s/%s/media?%s" graph_api_base ig_user_id query in
+
+    Config.Http.get url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          try
+            let open Yojson.Basic.Util in
+            let json = Yojson.Basic.from_string response.body in
+            let data = json |> member "data" |> to_list in
+            let items = List.map (fun item ->
+              {
+                id = item |> member "id" |> to_string;
+                caption = item |> member "caption" |> to_string_option;
+                timestamp = item |> member "timestamp" |> to_string_option;
+                media_type = item |> member "media_type" |> to_string_option;
+                media_url = item |> member "media_url" |> to_string_option;
+                thumbnail_url = item |> member "thumbnail_url" |> to_string_option;
+                permalink = item |> member "permalink" |> to_string_option;
+              }
+            ) data in
+            on_result (Ok items)
+          with e ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse media listing response: %s" (Printexc.to_string e))))
+        else
+          on_result (Error (api_error_of_response response)))
+      (fun err -> on_result (Error (network_error_of_string err)))
+
+  (** List media for an account (auto-refreshes token)
+
+      @param account_id Internal account identifier
+      @param limit Maximum number of items to return (optional)
+      @param on_result Continuation receiving api_result with list of media items
+  *)
+  let get_user_media_for_account ~account_id ?limit on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_ig_user_id ~account_id
+          (fun ig_user_id ->
+            get_user_media ~ig_user_id ~access_token ?limit on_result)
+          (fun err ->
+            on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+      (fun err -> on_result (Error err))
+
+  (** {1 Media Deletion (H3)} *)
+
+  (** Delete a media object
+
+      @param media_id The ID of the media to delete
+      @param access_token Valid access token
+      @param on_result Continuation receiving api_result with success boolean
+  *)
+  let delete_media ~media_id ~access_token on_result =
+    let proof_params = match compute_app_secret_proof ~access_token with
+      | Some proof -> [("appsecret_proof", [proof])]
+      | None -> []
+    in
+    let query = Uri.encoded_of_query proof_params in
+    let base_url = Printf.sprintf "%s/%s" graph_api_base media_id in
+    let url = if query = "" then base_url else Printf.sprintf "%s?%s" base_url query in
+
+    let headers = [
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+
+    Config.Http.delete ~headers url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          try
+            let open Yojson.Basic.Util in
+            let json = Yojson.Basic.from_string response.body in
+            let success = json |> member "success" |> to_bool in
+            on_result (Ok success)
+          with _ ->
+            (* If parsing fails but status is 2xx, treat as success *)
+            on_result (Ok true)
+        else
+          on_result (Error (api_error_of_response response)))
+      (fun err -> on_result (Error (network_error_of_string err)))
+
+  (** Delete a media object using account credentials (auto-refreshes token)
+
+      @param account_id Internal account identifier
+      @param media_id The ID of the media to delete
+      @param on_result Continuation receiving api_result with success boolean
+  *)
+  let delete_media_for_account ~account_id ~media_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        delete_media ~media_id ~access_token on_result)
+      (fun err -> on_result (Error err))
+
   (** Post Reel (short-form video) *)
-  let post_reel ~account_id ~text ~video_url ?(alt_text=None) on_result =
+  let post_reel ~account_id ~text ~video_url ?(alt_text=None) ?(share_to_feed=None) ?(cover_url=None) ?(thumb_offset=None) ?(audio_name=None) on_result =
     (* Validate caption *)
     match validate_post ~text ~media_count:1 () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1501,6 +1726,7 @@ module Make (Config : CONFIG) = struct
                          (* Create Reel container with REELS media type *)
                          create_video_container ~ig_user_id ~access_token ~video_url
                            ~caption:text ~alt_text ~media_type:"REELS" ~is_carousel_item:false
+                           ?share_to_feed ?cover_url ?thumb_offset ?audio_name
                            (function
                              | Ok container_id ->
                                  (* Poll and publish *)

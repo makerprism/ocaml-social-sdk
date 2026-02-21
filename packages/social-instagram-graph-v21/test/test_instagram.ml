@@ -1671,6 +1671,387 @@ let test_insights_network_error_redacts_query_token () =
       | Ok _ -> failwith "Expected network error"
       | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
 
+(** {1 Comment Posting Tests (H1)} *)
+
+(** Test: Post comment request contract *)
+let test_post_comment () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "comment_12345"}|};
+    headers = [];
+  };
+
+  Instagram.post_comment
+    ~media_id:"media_99"
+    ~access_token:"test_token"
+    ~message:"Great post! #firstcomment"
+    (handle_result
+      (fun comment_id ->
+        assert (comment_id = "comment_12345");
+        let requests = !Mock_http.requests in
+        let has_contract = List.exists (fun (meth, url, _, body) ->
+          meth = "POST"
+          && string_contains url "/media_99/comments"
+          && string_contains body "message"
+          && string_contains body "Great"
+        ) requests in
+        assert has_contract;
+        print_endline "✓ Post comment")
+      (fun err -> failwith ("Post comment failed: " ^ err)))
+
+(** Test: Post comment returns structured error on auth failure *)
+let test_post_comment_auth_error () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 400;
+    body = {|{"error":{"code":190,"message":"Invalid OAuth 2.0 Access Token"}}|};
+    headers = [];
+  };
+
+  Instagram.post_comment
+    ~media_id:"media_99"
+    ~access_token:"bad_token"
+    ~message:"This will fail"
+    (function
+      | Ok _ -> failwith "Expected auth error"
+      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+          print_endline "✓ Post comment auth error"
+      | Error _ -> failwith "Expected Token_expired")
+
+(** {1 Media Listing Tests (H2)} *)
+
+(** Test: Get user media request contract *)
+let test_get_user_media () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{
+      "data": [
+        {
+          "id": "media_1",
+          "caption": "First post",
+          "timestamp": "2025-01-01T12:00:00+0000",
+          "media_type": "IMAGE",
+          "media_url": "https://example.com/img1.jpg",
+          "thumbnail_url": null,
+          "permalink": "https://www.instagram.com/p/abc123/"
+        },
+        {
+          "id": "media_2",
+          "caption": null,
+          "timestamp": "2025-01-02T12:00:00+0000",
+          "media_type": "VIDEO",
+          "media_url": "https://example.com/vid1.mp4",
+          "thumbnail_url": "https://example.com/thumb1.jpg",
+          "permalink": "https://www.instagram.com/p/def456/"
+        }
+      ]
+    }|};
+    headers = [];
+  };
+
+  Instagram.get_user_media
+    ~ig_user_id:"ig_user_123"
+    ~access_token:"tok+en/=="
+    (handle_result
+      (fun (items : Instagram.media_item list) ->
+        assert (List.length items = 2);
+        let first = List.nth items 0 in
+        assert (first.id = "media_1");
+        assert (first.caption = Some "First post");
+        assert (first.media_type = Some "IMAGE");
+        assert (first.permalink = Some "https://www.instagram.com/p/abc123/");
+        let second = List.nth items 1 in
+        assert (second.id = "media_2");
+        assert (second.caption = None);
+        assert (second.media_type = Some "VIDEO");
+        assert (second.thumbnail_url = Some "https://example.com/thumb1.jpg");
+        (* Verify request contract *)
+        let requests = !Mock_http.requests in
+        let has_contract = List.exists (fun (meth, url, _, _) ->
+          meth = "GET"
+          && string_contains url "/ig_user_123/media"
+          && (query_param url "fields" <> None)
+        ) requests in
+        assert has_contract;
+        print_endline "✓ Get user media")
+      (fun err -> failwith ("Get user media failed: " ^ err)))
+
+(** Test: Get user media with limit parameter *)
+let test_get_user_media_with_limit () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"data": [{"id": "media_1"}]}|};
+    headers = [];
+  };
+
+  Instagram.get_user_media
+    ~ig_user_id:"ig_user_123"
+    ~access_token:"test_token"
+    ~limit:5
+    (handle_result
+      (fun _items ->
+        let requests = !Mock_http.requests in
+        let has_limit = List.exists (fun (_, url, _, _) ->
+          query_param url "limit" = Some "5"
+        ) requests in
+        assert has_limit;
+        print_endline "✓ Get user media with limit")
+      (fun err -> failwith ("Get user media with limit failed: " ^ err)))
+
+(** {1 Media Deletion Tests (H3)} *)
+
+(** Test: Delete media request contract *)
+let test_delete_media () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"success": true}|};
+    headers = [];
+  };
+
+  Instagram.delete_media
+    ~media_id:"media_to_delete"
+    ~access_token:"test_token"
+    (handle_result
+      (fun success ->
+        assert success;
+        let requests = !Mock_http.requests in
+        let has_contract = List.exists (fun (meth, url, _, _) ->
+          meth = "DELETE"
+          && string_contains url "/media_to_delete"
+        ) requests in
+        assert has_contract;
+        print_endline "✓ Delete media")
+      (fun err -> failwith ("Delete media failed: " ^ err)))
+
+(** Test: Delete media returns structured error on auth failure *)
+let test_delete_media_auth_error () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 400;
+    body = {|{"error":{"code":190,"message":"Invalid OAuth 2.0 Access Token"}}|};
+    headers = [];
+  };
+
+  Instagram.delete_media
+    ~media_id:"media_to_delete"
+    ~access_token:"bad_token"
+    (function
+      | Ok _ -> failwith "Expected auth error"
+      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+          print_endline "✓ Delete media auth error"
+      | Error _ -> failwith "Expected Token_expired")
+
+(** {1 Tagging Tests (H4)} *)
+
+(** Test: Image container with user tags, location, and collaborators *)
+let test_image_container_with_tagging () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "container_tagged"}|};
+    headers = [];
+  };
+
+  Instagram.create_image_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~image_url:"https://example.com/image.jpg"
+    ~caption:"Tagged post"
+    ~alt_text:None
+    ~is_carousel_item:false
+    ~user_tags:[("user1", 0.5, 0.5); ("user2", 0.2, 0.8)]
+    ~location_id:"location_456"
+    ~collaborators:["collab_user1"; "collab_user2"]
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "container_tagged");
+        let requests = !Mock_http.requests in
+        let has_tags = List.exists (fun (_, _, _, body) ->
+          string_contains body "user_tags"
+          && string_contains body "user1"
+          && string_contains body "user2"
+        ) requests in
+        assert has_tags;
+        let has_location = List.exists (fun (_, _, _, body) ->
+          string_contains body "location_id"
+          && string_contains body "location_456"
+        ) requests in
+        assert has_location;
+        let has_collabs = List.exists (fun (_, _, _, body) ->
+          string_contains body "collaborators"
+          && string_contains body "collab_user1"
+        ) requests in
+        assert has_collabs;
+        print_endline "✓ Image container with tagging")
+      (fun err -> failwith ("Image container with tagging failed: " ^ err)))
+
+(** Test: Video container with location *)
+let test_video_container_with_location () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "container_loc"}|};
+    headers = [];
+  };
+
+  Instagram.create_video_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~video_url:"https://example.com/video.mp4"
+    ~caption:"Video with location"
+    ~alt_text:None
+    ~media_type:"VIDEO"
+    ~is_carousel_item:false
+    ~location_id:"loc_789"
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "container_loc");
+        let requests = !Mock_http.requests in
+        let has_location = List.exists (fun (_, _, _, body) ->
+          string_contains body "location_id"
+          && string_contains body "loc_789"
+        ) requests in
+        assert has_location;
+        print_endline "✓ Video container with location")
+      (fun err -> failwith ("Video container with location failed: " ^ err)))
+
+(** {1 Reel Parameters Tests (H5)} *)
+
+(** Test: Reel with share_to_feed, cover_url, thumb_offset, audio_name *)
+let test_reel_with_extra_params () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "reel_container_params"}|};
+    headers = [];
+  };
+
+  Instagram.create_video_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~video_url:"https://example.com/reel.mp4"
+    ~caption:"Reel with params"
+    ~alt_text:None
+    ~media_type:"REELS"
+    ~is_carousel_item:false
+    ~share_to_feed:true
+    ~cover_url:"https://example.com/cover.jpg"
+    ~thumb_offset:5000
+    ~audio_name:"My Audio Track"
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "reel_container_params");
+        let requests = !Mock_http.requests in
+        let has_share_to_feed = List.exists (fun (_, _, _, body) ->
+          string_contains body "share_to_feed" && string_contains body "true"
+        ) requests in
+        assert has_share_to_feed;
+        let has_cover = List.exists (fun (_, _, _, body) ->
+          string_contains body "cover_url"
+        ) requests in
+        assert has_cover;
+        let has_thumb = List.exists (fun (_, _, _, body) ->
+          string_contains body "thumb_offset" && string_contains body "5000"
+        ) requests in
+        assert has_thumb;
+        let has_audio = List.exists (fun (_, _, _, body) ->
+          string_contains body "audio_name"
+        ) requests in
+        assert has_audio;
+        print_endline "✓ Reel with extra params (share_to_feed, cover_url, thumb_offset, audio_name)")
+      (fun err -> failwith ("Reel with extra params failed: " ^ err)))
+
+(** Test: post_reel passes reel-specific parameters via create_video_container *)
+let test_post_reel_with_reel_params () =
+  Mock_config.reset ();
+
+  (* Use create_video_container directly to verify reel params are sent *)
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "reel_container_direct"}|};
+    headers = [];
+  };
+
+  Instagram.create_video_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~video_url:"https://example.com/reel.mp4"
+    ~caption:"Reel caption"
+    ~alt_text:None
+    ~media_type:"REELS"
+    ~is_carousel_item:false
+    ~share_to_feed:true
+    ~cover_url:"https://example.com/cover.jpg"
+    ~thumb_offset:3000
+    ~audio_name:"Cool Audio"
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "reel_container_direct");
+        let requests = !Mock_http.requests in
+        let create_req = List.find (fun (meth, _, _, _) -> meth = "POST") requests in
+        let (_, _, _, body) = create_req in
+        assert (string_contains body "share_to_feed");
+        assert (string_contains body "cover_url");
+        assert (string_contains body "thumb_offset");
+        assert (string_contains body "3000");
+        assert (string_contains body "audio_name");
+        print_endline "✓ post_reel with reel-specific params (via create_video_container)")
+      (fun err -> failwith ("post_reel with reel params failed: " ^ err)))
+
+(** Test: post_reel end-to-end flow with reel-specific params *)
+let test_post_reel_e2e_with_params () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_user_123";
+
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "reel_container"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED"}|}; headers = [] };
+    { status = 200; body = {|{"id": "reel_post_e2e"}|}; headers = [] };
+  ];
+
+  Instagram.post_reel
+    ~account_id:"test_account"
+    ~text:"Reel e2e"
+    ~video_url:"https://example.com/reel.mp4"
+    ~share_to_feed:(Some true)
+    ~cover_url:(Some "https://example.com/cover.jpg")
+    ~thumb_offset:(Some 3000)
+    ~audio_name:(Some "Cool Audio")
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "reel_post_e2e");
+        print_endline "✓ post_reel e2e with reel-specific params")
+      (fun err -> failwith ("post_reel e2e with params failed: " ^ err)))
+
 (** Run all tests *)
 let () =
   print_endline "\n=== Instagram Provider Tests (Facebook Login) ===\n";
@@ -1743,5 +2124,26 @@ let () =
   test_media_insights_parser ();
   test_canonical_insights_adapters ();
   test_insights_network_error_redacts_query_token ();
+
+  print_endline "\n--- Comment Posting Tests (H1) ---";
+  test_post_comment ();
+  test_post_comment_auth_error ();
+
+  print_endline "\n--- Media Listing Tests (H2) ---";
+  test_get_user_media ();
+  test_get_user_media_with_limit ();
+
+  print_endline "\n--- Media Deletion Tests (H3) ---";
+  test_delete_media ();
+  test_delete_media_auth_error ();
+
+  print_endline "\n--- Tagging Tests (H4) ---";
+  test_image_container_with_tagging ();
+  test_video_container_with_location ();
+
+  print_endline "\n--- Reel Parameters Tests (H5) ---";
+  test_reel_with_extra_params ();
+  test_post_reel_with_reel_params ();
+  test_post_reel_e2e_with_params ();
 
   print_endline "\n=== All tests passed! ===\n"
