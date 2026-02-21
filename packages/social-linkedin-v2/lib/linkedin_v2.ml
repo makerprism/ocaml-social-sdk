@@ -431,6 +431,7 @@ end
 (** Make functor to create LinkedIn provider with given configuration *)
 module Make (Config : CONFIG) = struct
   let linkedin_api_base = "https://api.linkedin.com/v2"
+  let linkedin_rest_base = "https://api.linkedin.com/rest"
   let linkedin_auth_url = "https://www.linkedin.com/oauth/v2"
   
   (** Check if token is expired or expiring soon *)
@@ -994,6 +995,7 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/userinfo" linkedin_api_base in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
+      ("LinkedIn-Version", linkedin_version_header ());
     ] in
     
     Config.Http.get ~headers url
@@ -1038,48 +1040,46 @@ module Make (Config : CONFIG) = struct
           on_error message)
       on_error
   
-  (** Register image upload with LinkedIn *)
+  (** Register media upload with LinkedIn using modern per-asset-type REST APIs
+
+      Uses /rest/images for images, /rest/videos for videos, /rest/documents for documents.
+      Returns (asset_urn, upload_url) for subsequent binary upload.
+  *)
   let register_upload ~access_token ~owner_urn ~media_type on_success on_error =
-    let recipe = match media_type with
-      | "video" -> "urn:li:digitalmediaRecipe:feedshare-video"
-      | _ -> "urn:li:digitalmediaRecipe:feedshare-image"
+    let endpoint = match media_type with
+      | "video" -> Printf.sprintf "%s/videos?action=initializeUpload" linkedin_rest_base
+      | "document" -> Printf.sprintf "%s/documents?action=initializeUpload" linkedin_rest_base
+      | _ -> Printf.sprintf "%s/images?action=initializeUpload" linkedin_rest_base
     in
-    
-    let url = Printf.sprintf "%s/assets?action=registerUpload" linkedin_api_base in
+
     let register_body = `Assoc [
-      ("registerUploadRequest", `Assoc [
-        ("recipes", `List [`String recipe]);
+      ("initializeUploadRequest", `Assoc [
         ("owner", `String owner_urn);
-        ("serviceRelationships", `List [
-          `Assoc [
-            ("relationshipType", `String "OWNER");
-            ("identifier", `String "urn:li:userGeneratedContent");
-          ]
-        ]);
       ])
     ] in
-    
+
     let body = Yojson.Basic.to_string register_body in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
       ("Content-Type", "application/json");
       ("X-Restli-Protocol-Version", "2.0.0");
+      ("LinkedIn-Version", linkedin_version_header ());
     ] in
-    
-    Config.Http.post ~headers ~body url
+
+    Config.Http.post ~headers ~body endpoint
       (fun response ->
         if response.status >= 200 && response.status < 300 then
           try
             let open Yojson.Basic.Util in
             let json = Yojson.Basic.from_string response.body in
-            let asset = json |> member "value" |> member "asset" |> to_string in
-            let upload_url = json 
-              |> member "value" 
-              |> member "uploadMechanism"
-              |> member "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
-              |> member "uploadUrl"
-              |> to_string in
-            on_success (asset, upload_url)
+            let value = json |> member "value" in
+            let asset_urn = match media_type with
+              | "video" -> value |> member "video" |> to_string
+              | "document" -> value |> member "document" |> to_string
+              | _ -> value |> member "image" |> to_string
+            in
+            let upload_url = value |> member "uploadUrl" |> to_string in
+            on_success (asset_urn, upload_url)
           with e ->
             on_error (Printf.sprintf "Failed to parse register response: %s" (Printexc.to_string e))
         else
@@ -1091,6 +1091,7 @@ module Make (Config : CONFIG) = struct
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
       ("Content-Type", "application/octet-stream");
+      ("LinkedIn-Version", linkedin_version_header ());
     ] in
     
     Config.Http.put ~headers ~body:media_data upload_url
@@ -1238,82 +1239,81 @@ module Make (Config : CONFIG) = struct
                     (* Extract URL from text for link preview *)
                     let text_url = extract_first_url text in
 
-                    (* Determine share media category and build specific content *)
-                    let specific_content =
+                    (* Build modern /rest/posts body *)
+                    let base_fields = [
+                      ("author", `String resolved_author_urn);
+                      ("commentary", `String text);
+                      ("visibility", `String "PUBLIC");
+                      ("distribution", `Assoc [
+                        ("feedDistribution", `String "MAIN_FEED");
+                        ("targetEntities", `List []);
+                        ("thirdPartyDistributionChannels", `List []);
+                      ]);
+                      ("lifecycleState", `String "PUBLISHED");
+                    ] in
+
+                    let content_fields =
                       match uploaded_media, text_url with
                       | [], Some url ->
-                          (* URL found, no uploaded media - use ARTICLE for rich link preview *)
-                          [
-                            ("shareCommentary", `Assoc [("text", `String text)]);
-                            ("shareMediaCategory", `String "ARTICLE");
-                            ("media", `List [
-                              `Assoc [
-                                ("status", `String "READY");
-                                ("originalUrl", `String url);
-                              ]
+                          (* URL found, no uploaded media - article for link preview *)
+                          [("content", `Assoc [
+                            ("article", `Assoc [
+                              ("source", `String url);
                             ]);
-                          ]
+                          ])]
                       | [], None ->
                           (* No media, no URL - text only *)
-                          [
-                            ("shareCommentary", `Assoc [("text", `String text)]);
-                            ("shareMediaCategory", `String "NONE");
-                          ]
+                          []
                       | uploaded_media, _ ->
-                          (* Has uploaded media - use existing media handling logic *)
-                          let category =
-                            match uploaded_media with
-                            | first :: _ -> if first.media_type = "video" then "VIDEO" else "IMAGE"
-                            | [] -> "NONE"
-                          in
-                          let media_json =
-                            `List
-                              (List.map
-                                 (fun media ->
-                                   let base_fields =
-                                     [
-                                       ("status", `String "READY");
-                                       ("media", `String media.asset_urn);
-                                     ]
-                                   in
-                                   let with_description =
-                                     match media.alt_text with
-                                     | Some alt when String.length alt > 0 ->
-                                         base_fields
-                                         @ [("description", `Assoc [("text", `String alt)])]
-                                     | _ -> base_fields
-                                   in
-                                   `Assoc with_description)
-                                 uploaded_media)
-                          in
-                          [
-                            ("shareCommentary", `Assoc [("text", `String text)]);
-                            ("shareMediaCategory", `String category);
-                            ("media", media_json);
-                          ]
+                          (* Has uploaded media - use appropriate content type *)
+                          let first = List.hd uploaded_media in
+                          if first.media_type = "video" then
+                            let media = first in
+                            let title_field = match media.alt_text with
+                              | Some alt when String.length alt > 0 -> [("title", `String alt)]
+                              | _ -> []
+                            in
+                            [("content", `Assoc [
+                              ("media", `Assoc ([
+                                ("id", `String media.asset_urn);
+                              ] @ title_field));
+                            ])]
+                          else if first.media_type = "document" then
+                            let media = first in
+                            let title_field = match media.alt_text with
+                              | Some alt when String.length alt > 0 -> [("title", `String alt)]
+                              | _ -> [("title", `String "Document")]
+                            in
+                            [("content", `Assoc [
+                              ("media", `Assoc ([
+                                ("id", `String media.asset_urn);
+                              ] @ title_field));
+                            ])]
+                          else
+                            (* Images - use multiImage content *)
+                            let images_json = `List (List.map (fun media ->
+                              let alt_field = match media.alt_text with
+                                | Some alt when String.length alt > 0 -> [("altText", `String alt)]
+                                | _ -> []
+                              in
+                              `Assoc ([("id", `String media.asset_urn)] @ alt_field)
+                            ) uploaded_media) in
+                            [("content", `Assoc [
+                              ("multiImage", `Assoc [
+                                ("images", images_json);
+                              ]);
+                            ])]
                     in
 
-                    let post_body =
-                      `Assoc
-                        [
-                          ("author", `String resolved_author_urn);
-                          ("lifecycleState", `String "PUBLISHED");
-                          ("specificContent", `Assoc [
-                            ("com.linkedin.ugc.ShareContent", `Assoc specific_content)
-                          ]);
-                          ("visibility", `Assoc [
-                            ("com.linkedin.ugc.MemberNetworkVisibility", `String "PUBLIC")
-                          ]);
-                        ]
-                    in
-
-                    let url = Printf.sprintf "%s/ugcPosts" linkedin_api_base in
+                    let post_body = `Assoc (base_fields @ content_fields) in
+                    let url = Printf.sprintf "%s/posts" linkedin_rest_base in
                     let body = Yojson.Basic.to_string post_body in
                     let headers =
                       [
                         ("Authorization", Printf.sprintf "Bearer %s" access_token);
                         ("Content-Type", "application/json");
                         ("X-Restli-Protocol-Version", "2.0.0");
+                        ("LinkedIn-Version", linkedin_version_header ());
                       ]
                     in
 
@@ -1322,9 +1322,14 @@ module Make (Config : CONFIG) = struct
                         if response.status >= 200 && response.status < 300 then
                           let post_id =
                             try
+                              (* Modern API returns id in header or body *)
                               let json = Yojson.Basic.from_string response.body in
                               json |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
-                            with _ -> "unknown"
+                            with _ ->
+                              (* Try x-restli-id header *)
+                              (try
+                                List.assoc "x-restli-id" response.headers
+                              with Not_found -> "unknown")
                           in
                           on_result (Error_types.Success post_id)
                         else
@@ -1650,6 +1655,7 @@ module Make (Config : CONFIG) = struct
         let url = Printf.sprintf "%s/userinfo" linkedin_api_base in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
+          ("LinkedIn-Version", linkedin_version_header ());
         ] in
         
         Config.Http.get ~headers url
@@ -1677,50 +1683,41 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error err))
   
   (** {1 Posts API} *)
-  
-  (** Get a specific post by URN
-      
-      Fetches a single post/share using its URN. Requires appropriate permissions.
-      @param post_urn The URN of the post (e.g., "urn:li:share:123456")
-  *)
+
+  (** Parse a post from the modern /rest/posts response format *)
+  let parse_post_from_rest json =
+    let open Yojson.Basic.Util in
+    {
+      id = json |> member "id" |> to_string;
+      author = json |> member "author" |> to_string;
+      created_at = (try
+        json |> member "createdAt" |> to_int_option
+        |> Option.map string_of_int
+      with _ -> None);
+      text = json |> member "commentary" |> to_string_option;
+      visibility = json |> member "visibility" |> to_string_option;
+      lifecycle_state = json |> member "lifecycleState" |> to_string_option;
+    }
+
   let get_post ~account_id ~post_urn on_result =
     match validate_required_urn ~field_name:"LinkedIn post URN" post_urn with
     | Some err -> on_result (Error (Error_types.Internal_error err))
     | None ->
     ensure_valid_token ~account_id
       (fun access_token ->
-        let url = Printf.sprintf "%s/ugcPosts/%s" linkedin_api_base (Uri.pct_encode post_urn) in
+        let url = Printf.sprintf "%s/posts/%s" linkedin_rest_base (Uri.pct_encode post_urn) in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
           ("X-Restli-Protocol-Version", "2.0.0");
+          ("LinkedIn-Version", linkedin_version_header ());
         ] in
-        
+
         Config.Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               try
                 let json = Yojson.Basic.from_string response.body in
-                let open Yojson.Basic.Util in
-                let post = {
-                  id = json |> member "id" |> to_string;
-                  author = json |> member "author" |> to_string;
-                  created_at = (try json |> member "created" |> member "time" |> to_string_option with _ -> None);
-                  text = (try
-                    json 
-                    |> member "specificContent" 
-                    |> member "com.linkedin.ugc.ShareContent"
-                    |> member "shareCommentary"
-                    |> member "text"
-                    |> to_string_option
-                  with _ -> None);
-                  visibility = (try
-                    json
-                    |> member "visibility"
-                    |> member "com.linkedin.ugc.MemberNetworkVisibility"
-                    |> to_string_option
-                  with _ -> None);
-                  lifecycle_state = json |> member "lifecycleState" |> to_string_option;
-                } in
+                let post = parse_post_from_rest json in
                 on_result (Ok post)
               with e ->
                 on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse post: %s" (Printexc.to_string e))))
@@ -1753,48 +1750,28 @@ module Make (Config : CONFIG) = struct
               ("start", string_of_int start);
               ("count", string_of_int count);
             ] in
-            let query_string = Uri.encoded_of_query 
+            let query_string = Uri.encoded_of_query
               (List.map (fun (k, v) -> (k, [v])) query_params) in
-            
-            let url = Printf.sprintf "%s/ugcPosts?%s" linkedin_api_base query_string in
+
+            let url = Printf.sprintf "%s/posts?%s" linkedin_rest_base query_string in
             let headers = [
               ("Authorization", Printf.sprintf "Bearer %s" access_token);
               ("X-Restli-Protocol-Version", "2.0.0");
+              ("LinkedIn-Version", linkedin_version_header ());
               ("X-RestLi-Method", "FINDER");
             ] in
-            
+
             Config.Http.get ~headers url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   try
                     let json = Yojson.Basic.from_string response.body in
                     let open Yojson.Basic.Util in
-                    
-                    (* Parse elements *)
+
+                    (* Parse elements using modern format *)
                     let elements_json = json |> member "elements" |> to_list in
-                    let posts = List.map (fun elem ->
-                      {
-                        id = elem |> member "id" |> to_string;
-                        author = elem |> member "author" |> to_string;
-                        created_at = (try elem |> member "created" |> member "time" |> to_string_option with _ -> None);
-                        text = (try
-                          elem 
-                          |> member "specificContent" 
-                          |> member "com.linkedin.ugc.ShareContent"
-                          |> member "shareCommentary"
-                          |> member "text"
-                          |> to_string_option
-                        with _ -> None);
-                        visibility = (try
-                          elem
-                          |> member "visibility"
-                          |> member "com.linkedin.ugc.MemberNetworkVisibility"
-                          |> to_string_option
-                        with _ -> None);
-                        lifecycle_state = elem |> member "lifecycleState" |> to_string_option;
-                      }
-                    ) elements_json in
-                    
+                    let posts = List.map parse_post_from_rest elements_json in
+
                     (* Parse paging *)
                     let paging = try
                       let paging_json = json |> member "paging" in
@@ -1804,7 +1781,7 @@ module Make (Config : CONFIG) = struct
                         total = paging_json |> member "total" |> to_int_option;
                       }
                     with _ -> None in
-                    
+
                     let collection = {
                       elements = posts;
                       paging = paging;
@@ -1900,13 +1877,14 @@ module Make (Config : CONFIG) = struct
         else
           let ids_param = Printf.sprintf "List(%s)" (String.concat "," post_urns) in
           let query_string = Uri.encoded_of_query [ ("ids", [ids_param]) ] in
-          let url = Printf.sprintf "%s/ugcPosts?%s" linkedin_api_base query_string in
+          let url = Printf.sprintf "%s/posts?%s" linkedin_rest_base query_string in
           let headers = [
             ("Authorization", Printf.sprintf "Bearer %s" access_token);
             ("X-Restli-Protocol-Version", "2.0.0");
+            ("LinkedIn-Version", linkedin_version_header ());
             ("X-RestLi-Method", "BATCH_GET");
           ] in
-          
+
           Config.Http.get ~headers url
             (fun response ->
               if response.status >= 200 && response.status < 300 then
@@ -1916,31 +1894,9 @@ module Make (Config : CONFIG) = struct
                     let json = Yojson.Basic.from_string response.body in
                     let open Yojson.Basic.Util in
                     let results = json |> member "results" |> to_assoc in
-                    
+
                     Ok (List.filter_map (fun (_id, post_json) ->
-                      try
-                        Some {
-                          id = post_json |> member "id" |> to_string;
-                          author = post_json |> member "author" |> to_string;
-                          created_at = (try
-                            post_json |> member "created" |> member "time" |> to_string_option
-                          with _ -> None);
-                          text = (try
-                            post_json 
-                            |> member "specificContent" 
-                            |> member "com.linkedin.ugc.ShareContent"
-                            |> member "shareCommentary"
-                            |> member "text"
-                            |> to_string_option
-                          with _ -> None);
-                          visibility = (try
-                            post_json
-                            |> member "visibility"
-                            |> member "com.linkedin.ugc.MemberNetworkVisibility"
-                            |> to_string_option
-                          with _ -> None);
-                          lifecycle_state = post_json |> member "lifecycleState" |> to_string_option;
-                        }
+                      try Some (parse_post_from_rest post_json)
                       with _ -> None
                     ) results)
                   with e ->
@@ -1957,9 +1913,9 @@ module Make (Config : CONFIG) = struct
   
   (** Search posts with custom criteria
       
-      Uses LinkedIn's authors finder on ugcPosts.
+      Uses LinkedIn's authors finder on /rest/posts.
       Keyword finder search is intentionally rejected because it is not
-      supported by the ugcPosts finder contract.
+      supported by the posts finder contract.
       
       @param keywords Optional keyword input (currently unsupported; returns error)
       @param author Optional author URN to filter by; defaults to current member
@@ -1984,10 +1940,11 @@ module Make (Config : CONFIG) = struct
               let query_string =
                 Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) query_params)
               in
-              let url = Printf.sprintf "%s/ugcPosts?%s" linkedin_api_base query_string in
+              let url = Printf.sprintf "%s/posts?%s" linkedin_rest_base query_string in
               let headers = [
                 ("Authorization", Printf.sprintf "Bearer %s" access_token);
                 ("X-Restli-Protocol-Version", "2.0.0");
+                ("LinkedIn-Version", linkedin_version_header ());
                 ("X-RestLi-Method", "FINDER");
               ] in
               Config.Http.get ~headers url
@@ -1997,28 +1954,7 @@ module Make (Config : CONFIG) = struct
                       let json = Yojson.Basic.from_string response.body in
                       let open Yojson.Basic.Util in
                       let elements_json = json |> member "elements" |> to_list in
-                      let posts = List.map (fun elem ->
-                        {
-                          id = elem |> member "id" |> to_string;
-                          author = elem |> member "author" |> to_string;
-                          created_at = (try elem |> member "created" |> member "time" |> to_string_option with _ -> None);
-                          text = (try
-                            elem
-                            |> member "specificContent"
-                            |> member "com.linkedin.ugc.ShareContent"
-                            |> member "shareCommentary"
-                            |> member "text"
-                            |> to_string_option
-                          with _ -> None);
-                          visibility = (try
-                            elem
-                            |> member "visibility"
-                            |> member "com.linkedin.ugc.MemberNetworkVisibility"
-                            |> to_string_option
-                          with _ -> None);
-                          lifecycle_state = elem |> member "lifecycleState" |> to_string_option;
-                        }
-                      ) elements_json in
+                      let posts = List.map parse_post_from_rest elements_json in
                       let paging = try
                         let paging_json = json |> member "paging" in
                         Some {
@@ -2039,7 +1975,7 @@ module Make (Config : CONFIG) = struct
             on_result
               (Error
                  (Error_types.Internal_error
-                    "LinkedIn UGC Posts API does not support keyword finder search; use author filtering"))
+                    "LinkedIn Posts API does not support keyword finder search; use author filtering"))
         | None ->
             (match author with
             | Some auth -> fetch_for_author auth
@@ -2112,15 +2048,16 @@ module Make (Config : CONFIG) = struct
               ("object", `String post_urn);
             ] in
             
-            let url = Printf.sprintf "%s/socialActions/%s/likes" 
+            let url = Printf.sprintf "%s/socialActions/%s/likes"
               linkedin_api_base (Uri.pct_encode post_urn) in
             let body = Yojson.Basic.to_string like_body in
             let headers = [
               ("Authorization", Printf.sprintf "Bearer %s" access_token);
               ("Content-Type", "application/json");
               ("X-Restli-Protocol-Version", "2.0.0");
+              ("LinkedIn-Version", linkedin_version_header ());
             ] in
-            
+
             Config.Http.post ~headers ~body url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
@@ -2130,7 +2067,7 @@ module Make (Config : CONFIG) = struct
               (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
-  
+
   (** Unlike a post
       
       Removes a like/reaction from the specified post.
@@ -2146,13 +2083,14 @@ module Make (Config : CONFIG) = struct
           (fun person_urn ->
             (* Build the like URN: urn:li:like:(actor,object) *)
             let like_id = Printf.sprintf "(%s,%s)" person_urn post_urn in
-            let url = Printf.sprintf "%s/socialActions/%s/likes/%s" 
-              linkedin_api_base 
+            let url = Printf.sprintf "%s/socialActions/%s/likes/%s"
+              linkedin_api_base
               (Uri.pct_encode post_urn)
               (Uri.pct_encode like_id) in
             let headers = [
               ("Authorization", Printf.sprintf "Bearer %s" access_token);
               ("X-Restli-Protocol-Version", "2.0.0");
+              ("LinkedIn-Version", linkedin_version_header ());
             ] in
             
             Config.Http.delete ~headers url
@@ -2190,13 +2128,14 @@ module Make (Config : CONFIG) = struct
               ]);
             ] in
             
-            let url = Printf.sprintf "%s/socialActions/%s/comments" 
+            let url = Printf.sprintf "%s/socialActions/%s/comments"
               linkedin_api_base (Uri.pct_encode post_urn) in
             let body = Yojson.Basic.to_string comment_body in
             let headers = [
               ("Authorization", Printf.sprintf "Bearer %s" access_token);
               ("Content-Type", "application/json");
               ("X-Restli-Protocol-Version", "2.0.0");
+              ("LinkedIn-Version", linkedin_version_header ());
             ] in
             
             Config.Http.post ~headers ~body url
@@ -2239,11 +2178,12 @@ module Make (Config : CONFIG) = struct
         let query_string = Uri.encoded_of_query 
           (List.map (fun (k, v) -> (k, [v])) query_params) in
         
-        let url = Printf.sprintf "%s/socialActions/%s/comments?%s" 
+        let url = Printf.sprintf "%s/socialActions/%s/comments?%s"
           linkedin_api_base (Uri.pct_encode post_urn) query_string in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
           ("X-Restli-Protocol-Version", "2.0.0");
+          ("LinkedIn-Version", linkedin_version_header ());
         ] in
         
         Config.Http.get ~headers url
@@ -2297,11 +2237,12 @@ module Make (Config : CONFIG) = struct
     | None ->
     ensure_valid_token ~account_id
       (fun access_token ->
-        let url = Printf.sprintf "%s/socialMetadata/%s" 
+        let url = Printf.sprintf "%s/socialMetadata/%s"
           linkedin_api_base (Uri.pct_encode post_urn) in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
           ("X-Restli-Protocol-Version", "2.0.0");
+          ("LinkedIn-Version", linkedin_version_header ());
         ] in
         
         Config.Http.get ~headers url
@@ -2458,4 +2399,264 @@ module Make (Config : CONFIG) = struct
                   (Error (Error_types.Network_error (Error_types.Connection_failed err))))
           )
           (fun err -> on_result (Error err))
+
+  (** {1 Post Deletion} *)
+
+  (** Delete a post by URN
+
+      Deletes a post using the modern /rest/posts endpoint.
+      @param post_urn The URN of the post to delete (e.g., "urn:li:share:123456")
+  *)
+  let delete_post ~account_id ~post_urn on_result =
+    match validate_required_urn ~field_name:"LinkedIn post URN" post_urn with
+    | Some err -> on_result (Error (Error_types.Internal_error err))
+    | None ->
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/posts/%s" linkedin_rest_base (Uri.pct_encode post_urn) in
+        let headers = [
+          ("Authorization", Printf.sprintf "Bearer %s" access_token);
+          ("X-Restli-Protocol-Version", "2.0.0");
+          ("LinkedIn-Version", linkedin_version_header ());
+        ] in
+
+        Config.Http.delete ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              on_result (Ok ())
+            else
+              on_result (Error (parse_api_error ~required_scopes:["w_member_social"] ~status_code:response.status ~body:response.body)))
+          (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+      (fun err -> on_result (Error err))
+
+  (** {1 Document/Carousel Posts} *)
+
+  (** Post a document (PDF carousel) to LinkedIn
+
+      Uploads a document via /rest/documents and creates a post with document content.
+      @param account_id The account identifier
+      @param text The post text/commentary
+      @param document_url URL of the document (PDF) to upload
+      @param document_title Title for the document
+      @param author_urn Optional explicit author URN
+      @param on_result Callback receiving the outcome with post ID
+  *)
+  let post_document ~account_id ~text ~document_url ~document_title ?author_urn on_result =
+    let author_validation =
+      match author_urn with
+      | None -> Ok None
+      | Some explicit_author ->
+          (match validate_author_urn explicit_author with
+          | Some err -> Error err
+          | None -> Ok (Some explicit_author))
+    in
+    match validate_post ~text (), author_validation with
+    | Error errs, _ ->
+        on_result (Error_types.Failure (Error_types.Validation_error errs))
+    | _, Error err ->
+        on_result (Error_types.Failure (Error_types.Internal_error err))
+    | Ok (), Ok validated_author_urn ->
+        ensure_valid_token ~account_id
+          (fun access_token ->
+            let resolve_author_urn on_success_author on_error_author =
+              match validated_author_urn with
+              | Some explicit_author -> on_success_author explicit_author
+              | None -> get_person_urn ~access_token on_success_author on_error_author
+            in
+            resolve_author_urn
+              (fun resolved_author_urn ->
+                (* Step 1: Download the document *)
+                Config.Http.get ~headers:[] document_url
+                  (fun doc_response ->
+                    if doc_response.status >= 200 && doc_response.status < 300 then
+                      (* Step 2: Register document upload *)
+                      register_upload ~access_token ~owner_urn:resolved_author_urn ~media_type:"document"
+                        (fun (document_urn, upload_url) ->
+                          (* Step 3: Upload the document binary *)
+                          upload_binary ~access_token ~upload_url ~media_data:doc_response.body
+                            (fun () ->
+                              (* Step 4: Create the post with document content *)
+                              let post_body = `Assoc [
+                                ("author", `String resolved_author_urn);
+                                ("commentary", `String text);
+                                ("visibility", `String "PUBLIC");
+                                ("distribution", `Assoc [
+                                  ("feedDistribution", `String "MAIN_FEED");
+                                  ("targetEntities", `List []);
+                                  ("thirdPartyDistributionChannels", `List []);
+                                ]);
+                                ("lifecycleState", `String "PUBLISHED");
+                                ("content", `Assoc [
+                                  ("media", `Assoc [
+                                    ("id", `String document_urn);
+                                    ("title", `String document_title);
+                                  ]);
+                                ]);
+                              ] in
+
+                              let url = Printf.sprintf "%s/posts" linkedin_rest_base in
+                              let body = Yojson.Basic.to_string post_body in
+                              let headers = [
+                                ("Authorization", Printf.sprintf "Bearer %s" access_token);
+                                ("Content-Type", "application/json");
+                                ("X-Restli-Protocol-Version", "2.0.0");
+                                ("LinkedIn-Version", linkedin_version_header ());
+                              ] in
+
+                              Config.Http.post ~headers ~body url
+                                (fun response ->
+                                  if response.status >= 200 && response.status < 300 then
+                                    let post_id =
+                                      try
+                                        let json = Yojson.Basic.from_string response.body in
+                                        json |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
+                                      with _ ->
+                                        (try List.assoc "x-restli-id" response.headers
+                                        with Not_found -> "unknown")
+                                    in
+                                    on_result (Error_types.Success post_id)
+                                  else
+                                    let required_scopes =
+                                      if is_organization_urn resolved_author_urn || is_organization_brand_urn resolved_author_urn
+                                      then ["w_organization_social"]
+                                      else ["w_member_social"]
+                                    in
+                                    on_result (Error_types.Failure
+                                      (parse_api_error ~required_scopes ~status_code:response.status ~body:response.body)))
+                                (fun err ->
+                                  on_result (Error_types.Failure
+                                    (Error_types.Network_error (Error_types.Connection_failed err)))))
+                            (fun err ->
+                              on_result (Error_types.Failure
+                                (Error_types.Network_error (Error_types.Connection_failed err)))))
+                        (fun err ->
+                          on_result (Error_types.Failure
+                            (Error_types.Network_error (Error_types.Connection_failed err))))
+                    else
+                      on_result (Error_types.Failure
+                        (Error_types.Network_error (Error_types.Connection_failed
+                          (Printf.sprintf "Failed to download document from %s (%d)" document_url doc_response.status)))))
+                  (fun err ->
+                    on_result (Error_types.Failure
+                      (Error_types.Network_error (Error_types.Connection_failed err)))))
+              (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+          )
+          (fun err -> on_result (Error_types.Failure err))
+
+  (** {1 Poll Posts} *)
+
+  (** Create a poll post on LinkedIn
+
+      Creates a post with a poll using the modern /rest/posts endpoint.
+      @param account_id The account identifier
+      @param text The post text/commentary
+      @param question The poll question
+      @param options List of poll option strings (2-4 options)
+      @param duration Duration in days: 1, 3, 7, or 14
+      @param author_urn Optional explicit author URN
+      @param on_result Callback receiving the outcome with post ID
+  *)
+  let post_poll ~account_id ~text ~question ~options ~duration ?author_urn on_result =
+    let author_validation =
+      match author_urn with
+      | None -> Ok None
+      | Some explicit_author ->
+          (match validate_author_urn explicit_author with
+          | Some err -> Error err
+          | None -> Ok (Some explicit_author))
+    in
+    (* Validate poll constraints *)
+    let poll_validation =
+      let num_options = List.length options in
+      if num_options < 2 then Error "Poll must have at least 2 options"
+      else if num_options > 4 then Error "Poll must have at most 4 options"
+      else if List.exists (fun o -> String.trim o = "") options then Error "Poll options must not be blank"
+      else if not (List.mem duration [1; 3; 7; 14]) then Error "Poll duration must be 1, 3, 7, or 14 days"
+      else if String.trim question = "" then Error "Poll question must not be blank"
+      else Ok ()
+    in
+    match validate_post ~text (), author_validation, poll_validation with
+    | Error errs, _, _ ->
+        on_result (Error_types.Failure (Error_types.Validation_error errs))
+    | _, Error err, _ ->
+        on_result (Error_types.Failure (Error_types.Internal_error err))
+    | _, _, Error err ->
+        on_result (Error_types.Failure (Error_types.Internal_error err))
+    | Ok (), Ok validated_author_urn, Ok () ->
+        ensure_valid_token ~account_id
+          (fun access_token ->
+            let resolve_author_urn on_success_author on_error_author =
+              match validated_author_urn with
+              | Some explicit_author -> on_success_author explicit_author
+              | None -> get_person_urn ~access_token on_success_author on_error_author
+            in
+            resolve_author_urn
+              (fun resolved_author_urn ->
+                let duration_str = match duration with
+                  | 1 -> "ONE_DAY"
+                  | 3 -> "THREE_DAYS"
+                  | 7 -> "ONE_WEEK"
+                  | 14 -> "TWO_WEEKS"
+                  | _ -> "ONE_WEEK"
+                in
+                let options_json = `List (List.map (fun opt ->
+                  `Assoc [("text", `String opt)]
+                ) options) in
+
+                let post_body = `Assoc [
+                  ("author", `String resolved_author_urn);
+                  ("commentary", `String text);
+                  ("visibility", `String "PUBLIC");
+                  ("distribution", `Assoc [
+                    ("feedDistribution", `String "MAIN_FEED");
+                    ("targetEntities", `List []);
+                    ("thirdPartyDistributionChannels", `List []);
+                  ]);
+                  ("lifecycleState", `String "PUBLISHED");
+                  ("content", `Assoc [
+                    ("poll", `Assoc [
+                      ("question", `String question);
+                      ("options", options_json);
+                      ("settings", `Assoc [
+                        ("duration", `String duration_str);
+                      ]);
+                    ]);
+                  ]);
+                ] in
+
+                let url = Printf.sprintf "%s/posts" linkedin_rest_base in
+                let body = Yojson.Basic.to_string post_body in
+                let headers = [
+                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
+                  ("Content-Type", "application/json");
+                  ("X-Restli-Protocol-Version", "2.0.0");
+                  ("LinkedIn-Version", linkedin_version_header ());
+                ] in
+
+                Config.Http.post ~headers ~body url
+                  (fun response ->
+                    if response.status >= 200 && response.status < 300 then
+                      let post_id =
+                        try
+                          let json = Yojson.Basic.from_string response.body in
+                          json |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
+                        with _ ->
+                          (try List.assoc "x-restli-id" response.headers
+                          with Not_found -> "unknown")
+                      in
+                      on_result (Error_types.Success post_id)
+                    else
+                      let required_scopes =
+                        if is_organization_urn resolved_author_urn || is_organization_brand_urn resolved_author_urn
+                        then ["w_organization_social"]
+                        else ["w_member_social"]
+                      in
+                      on_result (Error_types.Failure
+                        (parse_api_error ~required_scopes ~status_code:response.status ~body:response.body)))
+                  (fun err ->
+                    on_result (Error_types.Failure
+                      (Error_types.Network_error (Error_types.Connection_failed err)))))
+              (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+          )
+          (fun err -> on_result (Error_types.Failure err))
 end

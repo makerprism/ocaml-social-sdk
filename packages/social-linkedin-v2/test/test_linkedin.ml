@@ -1357,26 +1357,22 @@ let test_get_person_urn_rate_limited_message () =
 (** Test: Register upload *)
 let test_register_upload () =
   Mock_config.reset ();
-  
+
   let response_body = {|{
     "value": {
-      "asset": "urn:li:digitalmediaAsset:test123",
-      "uploadMechanism": {
-        "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
-          "uploadUrl": "https://upload.linkedin.com/test"
-        }
-      }
+      "image": "urn:li:image:test123",
+      "uploadUrl": "https://upload.linkedin.com/test"
     }
   }|} in
-  
+
   Mock_http.set_response { status = 200; body = response_body; headers = [] };
-  
-  LinkedIn.register_upload 
+
+  LinkedIn.register_upload
     ~access_token:"test_token"
     ~owner_urn:"urn:li:person:test"
     ~media_type:"image"
     (fun (asset, upload_url) ->
-      assert (asset = "urn:li:digitalmediaAsset:test123");
+      assert (asset = "urn:li:image:test123");
       assert (upload_url = "https://upload.linkedin.com/test");
       print_endline "✓ Register upload")
     (fun err -> failwith ("Register upload failed: " ^ err))
@@ -1671,13 +1667,10 @@ let test_get_posts () =
       {
         "id": "urn:li:share:123",
         "author": "urn:li:person:user123",
-        "created": {"time": "2024-01-01T10:00:00Z"},
+        "createdAt": 1704103200000,
         "lifecycleState": "PUBLISHED",
-        "specificContent": {
-          "com.linkedin.ugc.ShareContent": {
-            "shareCommentary": {"text": "Test post"}
-          }
-        }
+        "commentary": "Test post",
+        "visibility": "PUBLIC"
       }
     ],
     "paging": {
@@ -1877,21 +1870,15 @@ let test_batch_get_posts () =
         "id": "urn:li:share:123",
         "author": "urn:li:person:user1",
         "lifecycleState": "PUBLISHED",
-        "specificContent": {
-          "com.linkedin.ugc.ShareContent": {
-            "shareCommentary": {"text": "Post 1"}
-          }
-        }
+        "commentary": "Post 1",
+        "visibility": "PUBLIC"
       },
       "urn:li:share:456": {
         "id": "urn:li:share:456",
         "author": "urn:li:person:user2",
         "lifecycleState": "PUBLISHED",
-        "specificContent": {
-          "com.linkedin.ugc.ShareContent": {
-            "shareCommentary": {"text": "Post 2"}
-          }
-        }
+        "commentary": "Post 2",
+        "visibility": "PUBLIC"
       }
     }
   }|} in
@@ -2089,12 +2076,12 @@ let test_posts_scroller_back_from_second_page () =
       (fun page ->
         assert (List.length page.elements = 1);
         let requests = List.rev !Mock_http.requests in
-        let posts_requests = List.filter (fun (m, u, _, _) -> m = "GET" && string_contains u "ugcPosts?") requests in
+        let posts_requests = List.filter (fun (m, u, _, _) -> m = "GET" && string_contains u "/rest/posts?") requests in
         (match posts_requests with
         | _ :: _ :: (_, back_url, _, _) :: _ ->
             assert (string_contains back_url "start=1");
             print_endline "✓ Posts scroller back from second page"
-        | _ -> failwith "Expected at least three ugcPosts requests"))
+        | _ -> failwith "Expected at least three /rest/posts requests"))
       (fun err -> failwith ("Posts scroll_back failed: " ^ err)))
 
 (** Test: Posts scroller preserves position when scroll_back fails *)
@@ -3380,20 +3367,19 @@ let test_post_with_url_preview () =
     (handle_outcome
       (fun post_id ->
         assert (post_id = "urn:li:share:789");
-        
-        (* Check that the request included ARTICLE media category and originalUrl *)
+
+        (* Check that the request included article content with source URL *)
         let requests = List.rev !Mock_http.requests in
         let post_request = List.find (fun (method_, url, _, _) ->
-          method_ = "POST" && string_contains url "ugcPosts"
+          method_ = "POST" && string_contains url "/rest/posts"
         ) requests in
-        
+
         let (_, _, _, body) = post_request in
-        assert (string_contains body "shareMediaCategory");
-        assert (string_contains body "ARTICLE");
-        assert (string_contains body "originalUrl");
+        assert (string_contains body "article");
+        assert (string_contains body "source");
         assert (string_contains body "https://example.com/ocaml-article");
-        
-        print_endline "✓ Post with URL preview (ARTICLE)")
+
+        print_endline "✓ Post with URL preview (article)")
       (fun err -> failwith ("Post with URL failed: " ^ err)))
 
 (** Test: post_single maps 403 to write scope *)
@@ -3453,7 +3439,7 @@ let test_post_single_with_organization_author () =
     {
       status = 200;
       body =
-        {|{"value":{"asset":"urn:li:digitalmediaAsset:img123","uploadMechanism":{"com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest":{"uploadUrl":"https://upload.linkedin.com/test"}}}}|};
+        {|{"value":{"image":"urn:li:image:img123","uploadUrl":"https://upload.linkedin.com/test"}}|};
       headers = [];
     };
     { status = 201; body = ""; headers = [] };
@@ -3471,11 +3457,11 @@ let test_post_single_with_organization_author () =
         let requests = List.rev !Mock_http.requests in
         let register_request =
           List.find_opt (fun (method_, url, _, _) ->
-            method_ = "POST" && string_contains url "registerUpload") requests
+            method_ = "POST" && string_contains url "initializeUpload") requests
         in
         let post_request =
           List.find_opt (fun (method_, url, _, _) ->
-            method_ = "POST" && string_contains url "ugcPosts") requests
+            method_ = "POST" && string_contains url "/rest/posts") requests
         in
         (match register_request with
         | Some (_, _, _, body) -> assert (string_contains body "urn:li:organization:2414183")
@@ -4075,12 +4061,12 @@ let make_media_upload_responses ~num_images =
   let per_image_responses = List.init num_images (fun _ -> [
     (* GET media URL - fake binary data *)
     { status = 200; body = "fake_image_binary_data"; headers = [] };
-    (* POST register upload *)
-    { status = 200; body = {|{"value": {"asset": "urn:li:digitalmediaAsset:123456", "uploadMechanism": {"com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {"uploadUrl": "https://api.linkedin.com/upload/123"}}}}|}; headers = [] };
+    (* POST register upload via /rest/images *)
+    { status = 200; body = {|{"value": {"image": "urn:li:image:123456", "uploadUrl": "https://api.linkedin.com/upload/123"}}|}; headers = [] };
     (* PUT upload binary *)
     { status = 200; body = ""; headers = [] };
   ]) |> List.flatten in
-  (* Final POST to create the ugcPost *)
+  (* Final POST to create the post via /rest/posts *)
   let create_post_response = { status = 201; body = {|{"id": "urn:li:share:123456"}|}; headers = [] } in
   [userinfo_response] @ per_image_responses @ [create_post_response]
 
@@ -4616,25 +4602,25 @@ let test_finder_method_header () =
       (fun err -> failwith ("Search posts failed: " ^ err)))
 
 (** Test: Request body structure for ugcPost creation *)
-let test_ugcpost_request_body_structure () =
+let test_rest_post_request_body_structure () =
   Mock_config.reset ();
-  
-  let future_time = 
+
+  let future_time =
     let now = Ptime_clock.now () in
     match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
     | Some t -> Ptime.to_rfc3339 t
     | None -> failwith "Failed to calculate future time"
   in
-  
+
   let creds = {
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     token_type = "Bearer";
   } in
-  
+
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
-  
+
   (* Set up response queue: first person URN, then post response *)
   let person_response = {|{"sub": "user123"}|} in
   let post_response = {|{"id": "urn:li:share:789"}|} in
@@ -4642,29 +4628,33 @@ let test_ugcpost_request_body_structure () =
     { status = 200; body = person_response; headers = [] };
     { status = 201; body = post_response; headers = [] };
   ];
-  
+
   LinkedIn.post_single ~account_id:"test_account" ~text:"Test post content" ~media_urls:[]
     (handle_outcome
       (fun _post_id ->
-        (* Find the POST request to ugcPosts *)
+        (* Find the POST request to /rest/posts *)
         let requests = List.rev !Mock_http.requests in
-        let ugc_post_request = List.find_opt (fun (method_, url, _, _) ->
-          method_ = "POST" && string_contains url "ugcPosts"
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
         ) requests in
-        
-        match ugc_post_request with
-        | Some (_, _, _, body) ->
-            (* Verify required fields in request body *)
+
+        match post_request with
+        | Some (_, _, headers, body) ->
+            (* Verify modern /rest/posts body format *)
             assert (string_contains body "author");
             assert (string_contains body "lifecycleState");
             assert (string_contains body "PUBLISHED");
-            assert (string_contains body "specificContent");
-            assert (string_contains body "com.linkedin.ugc.ShareContent");
-            assert (string_contains body "shareCommentary");
+            assert (string_contains body "commentary");
+            assert (string_contains body "Test post content");
             assert (string_contains body "visibility");
-            assert (string_contains body "com.linkedin.ugc.MemberNetworkVisibility");
-            print_endline "✓ UGC Post request body structure"
-        | None -> failwith "No ugcPosts POST request found")
+            assert (string_contains body "\"PUBLIC\"");
+            assert (string_contains body "distribution");
+            assert (string_contains body "feedDistribution");
+            assert (string_contains body "MAIN_FEED");
+            (* Verify LinkedIn-Version header is present *)
+            assert (find_header headers "LinkedIn-Version" <> None);
+            print_endline "✓ REST Post request body structure"
+        | None -> failwith "No /rest/posts POST request found")
       (fun err -> failwith ("Post single failed: " ^ err)))
 
 (** Test: Comment request body structure *)
@@ -4893,21 +4883,17 @@ let test_like_request_body_structure () =
 (** Test: Register upload sends correct X-Restli-Protocol-Version *)
 let test_register_upload_headers () =
   Mock_config.reset ();
-  
+
   let response_body = {|{
     "value": {
-      "asset": "urn:li:digitalmediaAsset:test123",
-      "uploadMechanism": {
-        "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
-          "uploadUrl": "https://upload.linkedin.com/test"
-        }
-      }
+      "image": "urn:li:image:test123",
+      "uploadUrl": "https://upload.linkedin.com/test"
     }
   }|} in
-  
+
   Mock_http.set_response { status = 200; body = response_body; headers = [] };
-  
-  LinkedIn.register_upload 
+
+  LinkedIn.register_upload
     ~access_token:"test_token"
     ~owner_urn:"urn:li:person:test"
     ~media_type:"image"
@@ -4915,12 +4901,14 @@ let test_register_upload_headers () =
       let requests = !Mock_http.requests in
       match requests with
       | (_, url, headers, _) :: _ ->
-          (* Verify URL ends with action=registerUpload *)
-          assert (string_contains url "action=registerUpload");
+          (* Verify URL uses modern /rest/images endpoint *)
+          assert (string_contains url "/rest/images");
+          assert (string_contains url "action=initializeUpload");
           (* Verify headers *)
           assert (find_header headers "X-Restli-Protocol-Version" = Some "2.0.0");
           assert (find_header headers "Content-Type" = Some "application/json");
           assert (find_header headers "Authorization" <> None);
+          assert (find_header headers "LinkedIn-Version" <> None);
           print_endline "✓ Register upload headers"
       | [] -> failwith "No requests recorded")
     (fun err -> failwith ("Register upload failed: " ^ err))
@@ -5058,11 +5046,11 @@ let make_video_upload_responses () =
   let userinfo_response = { status = 200; body = {|{"sub": "user123"}|}; headers = [] } in
   (* 2. GET video URL - fake binary data *)
   let video_response = { status = 200; body = "fake_video_binary_data"; headers = [] } in
-  (* 3. POST register upload *)
-  let register_response = { status = 200; body = {|{"value": {"asset": "urn:li:digitalmediaAsset:video456", "uploadMechanism": {"com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {"uploadUrl": "https://api.linkedin.com/upload/video/123"}}}}|}; headers = [] } in
+  (* 3. POST register upload via /rest/videos *)
+  let register_response = { status = 200; body = {|{"value": {"video": "urn:li:video:video456", "uploadUrl": "https://api.linkedin.com/upload/video/123"}}|}; headers = [] } in
   (* 4. PUT upload binary *)
   let upload_response = { status = 200; body = ""; headers = [] } in
-  (* 5. POST create ugcPost *)
+  (* 5. POST create post via /rest/posts *)
   let create_response = { status = 201; body = {|{"id": "urn:li:share:video789"}|}; headers = [] } in
   [userinfo_response; video_response; register_response; upload_response; create_response]
 
@@ -5095,49 +5083,46 @@ let test_post_with_video () =
     (handle_outcome
       (fun post_id ->
         assert (post_id = "urn:li:share:video789");
-        (* Verify the request used VIDEO media category *)
+        (* Verify the request used modern /rest/posts endpoint *)
         let requests = List.rev !Mock_http.requests in
-        let ugc_post_request = List.find_opt (fun (method_, url, _, _) ->
-          method_ = "POST" && string_contains url "ugcPosts"
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
         ) requests in
-        
-        (match ugc_post_request with
+
+        (match post_request with
         | Some (_, _, _, body) ->
-            assert (string_contains body "VIDEO");
-            assert (string_contains body "urn:li:digitalmediaAsset:video456");
+            assert (string_contains body "urn:li:video:video456");
+            assert (string_contains body "commentary");
             print_endline "✓ Post with video"
-        | None -> failwith "No ugcPosts request found"))
+        | None -> failwith "No /rest/posts request found"))
       (fun err -> failwith ("Post with video failed: " ^ err)))
 
 (** Test: Register video upload uses video recipe *)
 let test_register_video_upload () =
   Mock_config.reset ();
-  
+
   let response_body = {|{
     "value": {
-      "asset": "urn:li:digitalmediaAsset:videotest123",
-      "uploadMechanism": {
-        "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
-          "uploadUrl": "https://upload.linkedin.com/video"
-        }
-      }
+      "video": "urn:li:video:videotest123",
+      "uploadUrl": "https://upload.linkedin.com/video"
     }
   }|} in
-  
+
   Mock_http.set_response { status = 200; body = response_body; headers = [] };
-  
-  LinkedIn.register_upload 
+
+  LinkedIn.register_upload
     ~access_token:"test_token"
     ~owner_urn:"urn:li:person:test"
     ~media_type:"video"
     (fun (asset, _upload_url) ->
-      assert (asset = "urn:li:digitalmediaAsset:videotest123");
-      (* Verify video recipe was used *)
+      assert (asset = "urn:li:video:videotest123");
+      (* Verify modern /rest/videos endpoint was used *)
       let requests = !Mock_http.requests in
       (match requests with
-      | (_, _, _, body) :: _ ->
-          assert (string_contains body "feedshare-video");
-          print_endline "✓ Register video upload uses video recipe"
+      | (_, url, _, body) :: _ ->
+          assert (string_contains url "/rest/videos");
+          assert (string_contains body "initializeUploadRequest");
+          print_endline "✓ Register video upload uses /rest/videos endpoint"
       | [] -> failwith "No requests recorded"))
     (fun err -> failwith ("Register video upload failed: " ^ err))
 
@@ -5215,18 +5200,554 @@ let test_post_video_detection_from_url () =
     ~alt_texts:[]
     (handle_outcome
       (fun _post_id ->
-        (* Verify video recipe was used (not image) *)
+        (* Verify /rest/videos endpoint was used (not /rest/images) *)
         let requests = List.rev !Mock_http.requests in
         let register_request = List.find_opt (fun (method_, url, _, _) ->
-          method_ = "POST" && string_contains url "registerUpload"
+          method_ = "POST" && string_contains url "initializeUpload"
         ) requests in
-        
+
         (match register_request with
-        | Some (_, _, _, body) ->
-            assert (string_contains body "feedshare-video");
+        | Some (_, url, _, _) ->
+            assert (string_contains url "/rest/videos");
             print_endline "✓ .mov URL detected as video"
-        | None -> failwith "No registerUpload request found"))
+        | None -> failwith "No initializeUpload request found"))
       (fun err -> failwith ("Video detection failed: " ^ err)))
+
+(** {1 Post Deletion Tests} *)
+
+(** Test: Delete post via /rest/posts *)
+let test_delete_post () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_http.set_response { status = 204; body = ""; headers = [] };
+
+  LinkedIn.delete_post ~account_id:"test_account" ~post_urn:"urn:li:share:123456"
+    (handle_result
+      (fun () ->
+        let requests = !Mock_http.requests in
+        (match requests with
+        | ("DELETE", url, headers, _) :: _ ->
+            assert (string_contains url "/rest/posts/");
+            assert (find_header headers "LinkedIn-Version" <> None);
+            assert (find_header headers "X-Restli-Protocol-Version" = Some "2.0.0");
+            print_endline "✓ Delete post via /rest/posts"
+        | _ -> failwith "Expected DELETE request"))
+      (fun err -> failwith ("Delete post failed: " ^ err)))
+
+(** Test: Delete post rejects blank URN *)
+let test_delete_post_rejects_blank_urn () =
+  Mock_config.reset ();
+
+  LinkedIn.delete_post ~account_id:"test_account" ~post_urn:""
+    (fun result ->
+      match result with
+      | Error (Error_types.Internal_error msg) ->
+          assert (string_contains msg "post URN");
+          assert (!Mock_http.requests = []);
+          print_endline "✓ Delete post rejects blank URN"
+      | Ok () -> failwith "Expected blank URN rejection"
+      | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: Delete post maps 403 to write scope *)
+let test_delete_post_insufficient_permissions () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_http.set_response { status = 403; body = {|{"message":"Not enough permissions"}|}; headers = [] };
+
+  LinkedIn.delete_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
+    (fun result ->
+      match result with
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+          assert (List.mem "w_member_social" scopes);
+          print_endline "✓ Delete post maps 403 to write scope"
+      | Ok () -> failwith "Expected permission error"
+      | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** {1 Document/Carousel Post Tests} *)
+
+let make_document_upload_responses () =
+  (* 1. GET userinfo *)
+  let userinfo_response = { status = 200; body = {|{"sub": "user123"}|}; headers = [] } in
+  (* 2. GET document URL - fake binary data *)
+  let doc_response = { status = 200; body = "fake_pdf_binary_data"; headers = [] } in
+  (* 3. POST register document upload via /rest/documents *)
+  let register_response = { status = 200; body = {|{"value": {"document": "urn:li:document:doc789", "uploadUrl": "https://api.linkedin.com/upload/doc/123"}}|}; headers = [] } in
+  (* 4. PUT upload binary *)
+  let upload_response = { status = 200; body = ""; headers = [] } in
+  (* 5. POST create post via /rest/posts *)
+  let create_response = { status = 201; body = {|{"id": "urn:li:share:docpost123"}|}; headers = [] } in
+  [userinfo_response; doc_response; register_response; upload_response; create_response]
+
+(** Test: Post a document (PDF carousel) *)
+let test_post_document () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_http.set_responses (make_document_upload_responses ());
+
+  LinkedIn.post_document
+    ~account_id:"test_account"
+    ~text:"Check out this PDF carousel!"
+    ~document_url:"https://example.com/slides.pdf"
+    ~document_title:"My Presentation"
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "urn:li:share:docpost123");
+        let requests = List.rev !Mock_http.requests in
+        (* Verify /rest/documents was used for registration *)
+        let register_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/documents"
+        ) requests in
+        (match register_request with
+        | Some (_, url, _, body) ->
+            assert (string_contains url "initializeUpload");
+            assert (string_contains body "initializeUploadRequest");
+        | None -> failwith "No /rest/documents request found");
+        (* Verify /rest/posts was used with document content *)
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        (match post_request with
+        | Some (_, _, headers, body) ->
+            assert (string_contains body "urn:li:document:doc789");
+            assert (string_contains body "My Presentation");
+            assert (string_contains body "commentary");
+            assert (find_header headers "LinkedIn-Version" <> None);
+        | None -> failwith "No /rest/posts request found");
+        print_endline "✓ Post document (PDF carousel)")
+      (fun err -> failwith ("Post document failed: " ^ err)))
+
+(** Test: Post document with organization author *)
+let test_post_document_with_org_author () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  (* No userinfo response needed since author_urn is explicit *)
+  Mock_http.set_responses [
+    { status = 200; body = "fake_pdf_data"; headers = [] };
+    { status = 200; body = {|{"value": {"document": "urn:li:document:orgdoc", "uploadUrl": "https://api.linkedin.com/upload/doc"}}|}; headers = [] };
+    { status = 200; body = ""; headers = [] };
+    { status = 201; body = {|{"id": "urn:li:share:orgdocpost"}|}; headers = [] };
+  ];
+
+  LinkedIn.post_document
+    ~account_id:"test_account"
+    ~text:"Organization document"
+    ~document_url:"https://example.com/report.pdf"
+    ~document_title:"Q4 Report"
+    ~author_urn:"urn:li:organization:12345"
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "urn:li:share:orgdocpost");
+        let requests = List.rev !Mock_http.requests in
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        (match post_request with
+        | Some (_, _, _, body) ->
+            assert (string_contains body "urn:li:organization:12345");
+            print_endline "✓ Post document with organization author"
+        | None -> failwith "No /rest/posts request found"))
+      (fun err -> failwith ("Post document with org author failed: " ^ err)))
+
+(** Test: Register document upload uses /rest/documents *)
+let test_register_document_upload () =
+  Mock_config.reset ();
+
+  let response_body = {|{
+    "value": {
+      "document": "urn:li:document:doctest123",
+      "uploadUrl": "https://upload.linkedin.com/document"
+    }
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  LinkedIn.register_upload
+    ~access_token:"test_token"
+    ~owner_urn:"urn:li:person:test"
+    ~media_type:"document"
+    (fun (asset, upload_url) ->
+      assert (asset = "urn:li:document:doctest123");
+      assert (upload_url = "https://upload.linkedin.com/document");
+      let requests = !Mock_http.requests in
+      (match requests with
+      | (_, url, headers, body) :: _ ->
+          assert (string_contains url "/rest/documents");
+          assert (string_contains url "initializeUpload");
+          assert (string_contains body "initializeUploadRequest");
+          assert (find_header headers "LinkedIn-Version" <> None);
+          print_endline "✓ Register document upload uses /rest/documents"
+      | [] -> failwith "No requests recorded"))
+    (fun err -> failwith ("Register document upload failed: " ^ err))
+
+(** {1 Poll Post Tests} *)
+
+(** Test: Create a poll post *)
+let test_post_poll () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_http.set_responses [
+    { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+    { status = 201; body = {|{"id": "urn:li:share:poll123"}|}; headers = [] };
+  ];
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"What is your favorite language?"
+    ~question:"Best programming language?"
+    ~options:["OCaml"; "Rust"; "Haskell"]
+    ~duration:7
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "urn:li:share:poll123");
+        let requests = List.rev !Mock_http.requests in
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        (match post_request with
+        | Some (_, _, headers, body) ->
+            assert (string_contains body "poll");
+            assert (string_contains body "Best programming language?");
+            assert (string_contains body "OCaml");
+            assert (string_contains body "Rust");
+            assert (string_contains body "Haskell");
+            assert (string_contains body "ONE_WEEK");
+            assert (string_contains body "commentary");
+            assert (string_contains body "distribution");
+            assert (find_header headers "LinkedIn-Version" <> None);
+            print_endline "✓ Post poll"
+        | None -> failwith "No /rest/posts request found"))
+      (fun err -> failwith ("Post poll failed: " ^ err)))
+
+(** Test: Poll with different durations *)
+let test_post_poll_durations () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  (* Test 1 day duration *)
+  Mock_http.set_responses [
+    { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+    { status = 201; body = {|{"id": "urn:li:share:poll1"}|}; headers = [] };
+  ];
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"Quick poll"
+    ~question:"Yes or No?"
+    ~options:["Yes"; "No"]
+    ~duration:1
+    (handle_outcome
+      (fun _post_id ->
+        let requests = List.rev !Mock_http.requests in
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        (match post_request with
+        | Some (_, _, _, body) ->
+            assert (string_contains body "ONE_DAY");
+            print_endline "✓ Poll with 1-day duration"
+        | None -> failwith "No /rest/posts request found"))
+      (fun err -> failwith ("Poll duration test failed: " ^ err)));
+
+  (* Test 14 day duration *)
+  Mock_config.reset ();
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_http.set_responses [
+    { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+    { status = 201; body = {|{"id": "urn:li:share:poll2"}|}; headers = [] };
+  ];
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"Extended poll"
+    ~question:"Long running question?"
+    ~options:["A"; "B"]
+    ~duration:14
+    (handle_outcome
+      (fun _post_id ->
+        let requests = List.rev !Mock_http.requests in
+        let post_request = List.find_opt (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        (match post_request with
+        | Some (_, _, _, body) ->
+            assert (string_contains body "TWO_WEEKS");
+            print_endline "✓ Poll with 14-day duration"
+        | None -> failwith "No /rest/posts request found"))
+      (fun err -> failwith ("Poll 14-day duration test failed: " ^ err)))
+
+(** Test: Poll validation - too few options *)
+let test_post_poll_too_few_options () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"Bad poll"
+    ~question:"Only one option?"
+    ~options:["Only choice"]
+    ~duration:7
+    (function
+      | Error_types.Failure (Error_types.Internal_error msg) ->
+          assert (string_contains msg "at least 2");
+          assert (!Mock_http.requests = []);
+          print_endline "✓ Poll rejects too few options"
+      | Error_types.Success _ -> failwith "Expected validation failure"
+      | Error_types.Partial_success _ -> failwith "Expected validation failure"
+      | Error_types.Failure err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: Poll validation - too many options *)
+let test_post_poll_too_many_options () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"Too many options"
+    ~question:"Pick one?"
+    ~options:["A"; "B"; "C"; "D"; "E"]
+    ~duration:7
+    (function
+      | Error_types.Failure (Error_types.Internal_error msg) ->
+          assert (string_contains msg "at most 4");
+          assert (!Mock_http.requests = []);
+          print_endline "✓ Poll rejects too many options"
+      | Error_types.Success _ -> failwith "Expected validation failure"
+      | Error_types.Partial_success _ -> failwith "Expected validation failure"
+      | Error_types.Failure err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: Poll validation - invalid duration *)
+let test_post_poll_invalid_duration () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"Invalid duration poll"
+    ~question:"How long?"
+    ~options:["Yes"; "No"]
+    ~duration:5
+    (function
+      | Error_types.Failure (Error_types.Internal_error msg) ->
+          assert (string_contains msg "duration");
+          assert (!Mock_http.requests = []);
+          print_endline "✓ Poll rejects invalid duration"
+      | Error_types.Success _ -> failwith "Expected validation failure"
+      | Error_types.Partial_success _ -> failwith "Expected validation failure"
+      | Error_types.Failure err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: Poll validation - blank question *)
+let test_post_poll_blank_question () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  LinkedIn.post_poll
+    ~account_id:"test_account"
+    ~text:"Blank question poll"
+    ~question:"   "
+    ~options:["Yes"; "No"]
+    ~duration:7
+    (function
+      | Error_types.Failure (Error_types.Internal_error msg) ->
+          assert (string_contains msg "question");
+          assert (!Mock_http.requests = []);
+          print_endline "✓ Poll rejects blank question"
+      | Error_types.Success _ -> failwith "Expected validation failure"
+      | Error_types.Partial_success _ -> failwith "Expected validation failure"
+      | Error_types.Failure err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: LinkedIn-Version header present on all API requests *)
+let test_linkedin_version_header_on_all_requests () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  (* Test get_profile includes LinkedIn-Version *)
+  Mock_http.set_response { status = 200; body = {|{"sub":"u1","name":"Test"}|}; headers = [] };
+  LinkedIn.get_profile ~account_id:"test_account"
+    (fun _ ->
+      let requests = !Mock_http.requests in
+      (match requests with
+      | (_, _, headers, _) :: _ ->
+          assert (find_header headers "LinkedIn-Version" <> None)
+      | [] -> failwith "No requests"));
+
+  (* Test delete_post includes LinkedIn-Version *)
+  Mock_config.reset ();
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_http.set_response { status = 204; body = ""; headers = [] };
+  LinkedIn.delete_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
+    (fun _ ->
+      let requests = !Mock_http.requests in
+      (match requests with
+      | (_, _, headers, _) :: _ ->
+          assert (find_header headers "LinkedIn-Version" <> None)
+      | [] -> failwith "No requests"));
+
+  print_endline "✓ LinkedIn-Version header present on all API requests"
 
 (** Run all tests *)
 let () =
@@ -5384,7 +5905,7 @@ let () =
   test_urn_path_encoding ();
   test_batch_urns_encoding ();
   test_finder_method_header ();
-  test_ugcpost_request_body_structure ();
+  test_rest_post_request_body_structure ();
   test_comment_request_body_structure ();
   test_unlike_post_delete ();
   test_unlike_post_insufficient_permissions_error ();
@@ -5404,5 +5925,26 @@ let () =
   test_video_validation_too_large ();
   test_video_validation_too_long ();
   test_post_video_detection_from_url ();
-  
+
+  print_endline "\n--- Post Deletion Tests ---";
+  test_delete_post ();
+  test_delete_post_rejects_blank_urn ();
+  test_delete_post_insufficient_permissions ();
+
+  print_endline "\n--- Document/Carousel Post Tests ---";
+  test_post_document ();
+  test_post_document_with_org_author ();
+  test_register_document_upload ();
+
+  print_endline "\n--- Poll Post Tests ---";
+  test_post_poll ();
+  test_post_poll_durations ();
+  test_post_poll_too_few_options ();
+  test_post_poll_too_many_options ();
+  test_post_poll_invalid_duration ();
+  test_post_poll_blank_question ();
+
+  print_endline "\n--- LinkedIn-Version Header Tests ---";
+  test_linkedin_version_header_on_all_requests ();
+
   print_endline "\n=== All tests passed! ===\n"
