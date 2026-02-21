@@ -85,6 +85,27 @@ type submitted_post = {
   subreddit: string;              (** Subreddit name *)
 }
 
+(** Gallery item for gallery posts *)
+type gallery_item = {
+  media_url: string;              (** URL of the image to upload *)
+  caption: string option;         (** Optional caption for this image *)
+  outbound_url: string option;    (** Optional outbound link for this image *)
+}
+
+(** Rate limit info parsed from Reddit response headers *)
+type rate_limit_headers = {
+  used: float option;             (** X-Ratelimit-Used: requests used in this period *)
+  remaining: float option;        (** X-Ratelimit-Remaining: requests remaining *)
+  reset: int option;              (** X-Ratelimit-Reset: seconds until period reset *)
+}
+
+(** Multi-subreddit post result *)
+type multi_post_result = {
+  subreddit: string;              (** Subreddit name *)
+  post_id: string option;         (** Post ID if successful *)
+  error: string option;           (** Error message if failed *)
+}
+
 (** Media upload result *)
 type media_upload = {
   asset_id: string;               (** Asset ID from Reddit *)
@@ -1513,8 +1534,268 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
       (fun err -> on_result (Error_types.Failure err))
   
+  (** {1 Rate Limit Header Parsing} *)
+
+  (** Parse Reddit rate limit headers from an HTTP response.
+
+      Reddit includes rate limit info in response headers:
+      - X-Ratelimit-Used: approximate number of requests used in the current period
+      - X-Ratelimit-Remaining: approximate number of requests remaining
+      - X-Ratelimit-Reset: approximate seconds until the current period ends
+  *)
+  let parse_rate_limit_headers (headers : (string * string) list) : rate_limit_headers =
+    let find_header name =
+      (* Reddit headers are case-insensitive; try lowercase lookup *)
+      let lower_name = String.lowercase_ascii name in
+      List.find_map (fun (k, v) ->
+        if String.lowercase_ascii k = lower_name then Some v
+        else None
+      ) headers
+    in
+    let parse_float_opt s =
+      try Some (float_of_string s)
+      with Failure _ -> None
+    in
+    let parse_int_opt s =
+      try Some (int_of_string s)
+      with Failure _ ->
+        (* Reset can be a float representing seconds; truncate to int *)
+        try Some (int_of_float (float_of_string s))
+        with Failure _ -> None
+    in
+    {
+      used = Option.bind (find_header "x-ratelimit-used") parse_float_opt;
+      remaining = Option.bind (find_header "x-ratelimit-remaining") parse_float_opt;
+      reset = Option.bind (find_header "x-ratelimit-reset") parse_int_opt;
+    }
+
+  (** {1 Subreddit Search} *)
+
+  (** Search for subreddits by keyword using GET /subreddits/search *)
+  let search_subreddits ~account_id ~query ?(limit=10) on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/subreddits/search?q=%s&limit=%d"
+          api_base (Uri.pct_encode query) limit in
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("User-Agent", user_agent);
+        ] in
+
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let open Yojson.Basic.Util in
+                let json = Yojson.Basic.from_string response.body in
+                let children = json |> member "data" |> member "children" |> to_list in
+                let subreddits = List.map (fun child ->
+                  let data = child |> member "data" in
+                  {
+                    id = data |> member "id" |> to_string;
+                    name = data |> member "display_name" |> to_string;
+                    display_name = data |> member "display_name" |> to_string;
+                    subscribers = (try data |> member "subscribers" |> to_int with _ -> 0);
+                    over18 = (try data |> member "over18" |> to_bool with _ -> false);
+                    user_is_moderator = (try data |> member "user_is_moderator" |> to_bool with _ -> false);
+                    submission_type = (try Some (data |> member "submission_type" |> to_string) with _ -> None);
+                    flair_enabled = (try data |> member "link_flair_enabled" |> to_bool with _ -> false);
+                  }
+                ) children in
+                on_result (Error_types.Success subreddits)
+              with e ->
+                on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse subreddit search: %s" (Printexc.to_string e))))
+            else
+              on_result (Error_types.Failure (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
+      (fun err -> on_result (Error_types.Failure err))
+
+  (** {1 Gallery Posts} *)
+
+  (** Submit a gallery post with multiple images.
+
+      Each image is uploaded via the media asset upload flow, then submitted
+      together using the POST /api/submit_gallery_post endpoint.
+
+      @param account_id Account identifier
+      @param subreddit Subreddit to post to
+      @param title Post title
+      @param items List of gallery items (images with optional captions)
+      @param flair_id Optional flair template ID
+      @param flair_text Optional flair text
+      @param nsfw Mark post as NSFW
+      @param spoiler Mark post as spoiler
+  *)
+  let submit_gallery_post ~account_id ~subreddit ~title ~(items : gallery_item list)
+      ?flair_id ?flair_text ?(nsfw=false) ?(spoiler=false) () on_result =
+    let item_count = List.length items in
+    match validate_post ~title ~media_count:item_count () with
+    | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
+    | Ok () ->
+        if item_count < 2 then
+          on_result (Error_types.Failure (Error_types.Validation_error [
+            Error_types.Too_many_media { count = item_count; max = max_gallery_images }
+          ]))
+        else
+          ensure_valid_token ~account_id
+            (fun access_token ->
+              (* Upload all images and collect their asset IDs *)
+              let uploaded = ref [] in
+              let failed = ref false in
+
+              let rec upload_items remaining_items =
+                if !failed then ()
+                else match remaining_items with
+                | [] ->
+                    (* All uploaded, submit the gallery post *)
+                    let gallery_items = List.rev !uploaded in
+                    let items_json = List.map (fun (asset_id, caption, outbound_url) ->
+                      let fields = [
+                        ("media_id", `String asset_id);
+                      ] in
+                      let fields = match caption with
+                        | Some c -> ("caption", `String c) :: fields
+                        | None -> fields
+                      in
+                      let fields = match outbound_url with
+                        | Some u -> ("outbound_url", `String u) :: fields
+                        | None -> fields
+                      in
+                      `Assoc fields
+                    ) gallery_items in
+                    let body_json = `Assoc ([
+                      ("api_type", `String "json");
+                      ("kind", `String "self");
+                      ("sr", `String subreddit);
+                      ("title", `String title);
+                      ("nsfw", `Bool nsfw);
+                      ("spoiler", `Bool spoiler);
+                      ("items", `List items_json);
+                    ] @ (match flair_id with Some id -> [("flair_id", `String id)] | None -> [])
+                      @ (match flair_text with Some t -> [("flair_text", `String t)] | None -> [])
+                    ) in
+                    let body = Yojson.Basic.to_string body_json in
+                    let api_url = api_base ^ "/api/submit_gallery_post" in
+                    let headers = [
+                      ("Authorization", "Bearer " ^ access_token);
+                      ("User-Agent", user_agent);
+                      ("Content-Type", "application/json");
+                    ] in
+                    Config.Http.post ~headers ~body api_url
+                      (fun response ->
+                        if response.status >= 200 && response.status < 300 then
+                          try
+                            let open Yojson.Basic.Util in
+                            let json = Yojson.Basic.from_string response.body in
+                            let json_obj =
+                              try json |> member "json"
+                              with _ -> json
+                            in
+                            let errors =
+                              try json_obj |> member "errors" |> to_list
+                              with _ -> []
+                            in
+                            if List.length errors > 0 then
+                              on_result (Error_types.Failure (parse_api_error ~status_code:200 ~response_body:response.body))
+                            else
+                              let data =
+                                try json_obj |> member "data"
+                                with _ -> json
+                              in
+                              let post_id = data |> member "id" |> to_string in
+                              on_result (Error_types.Success post_id)
+                          with e ->
+                            on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse gallery response: %s" (Printexc.to_string e))))
+                        else
+                          on_result (Error_types.Failure (parse_api_error ~status_code:response.status ~response_body:response.body)))
+                      (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+                | item :: rest ->
+                    (* Download this image *)
+                    download_media_url ~url:item.media_url
+                      (fun dl_outcome ->
+                        match dl_outcome with
+                        | Error_types.Failure err ->
+                            failed := true;
+                            on_result (Error_types.Failure err)
+                        | Error_types.Partial_success _ ->
+                            failed := true;
+                            on_result (Error_types.Failure (Error_types.Internal_error "Unexpected partial success downloading gallery image"))
+                        | Error_types.Success (content, mimetype) ->
+                            let filename = infer_filename_from_url item.media_url "image.jpg" in
+                            get_media_upload_lease ~account_id ~filename ~mimetype
+                              (fun lease_outcome ->
+                                match lease_outcome with
+                                | Error_types.Failure err ->
+                                    failed := true;
+                                    on_result (Error_types.Failure err)
+                                | Error_types.Partial_success _ ->
+                                    failed := true;
+                                    on_result (Error_types.Failure (Error_types.Internal_error "Unexpected partial success requesting upload lease"))
+                                | Error_types.Success lease ->
+                                    upload_media_to_s3
+                                      ~upload_url:lease.upload_url
+                                      ~upload_fields:lease.upload_fields
+                                      ~media_content:content
+                                      ~mimetype
+                                      (fun upload_outcome ->
+                                        match upload_outcome with
+                                        | Error_types.Failure err ->
+                                            failed := true;
+                                            on_result (Error_types.Failure err)
+                                        | Error_types.Partial_success _ ->
+                                            failed := true;
+                                            on_result (Error_types.Failure (Error_types.Internal_error "Unexpected partial success uploading to S3"))
+                                        | Error_types.Success () ->
+                                            uploaded := (lease.asset_id, item.caption, item.outbound_url) :: !uploaded;
+                                            upload_items rest)))
+              in
+              upload_items items)
+            (fun err -> on_result (Error_types.Failure err))
+
+  (** {1 Multi-Subreddit Posting} *)
+
+  (** Post the same content to multiple subreddits.
+
+      Posts are submitted sequentially. Results are collected for each subreddit.
+      A failure for one subreddit does not prevent posting to the others.
+
+      @param account_id Account identifier
+      @param subreddits List of subreddit names to post to
+      @param title Post title
+      @param body Optional post body for self-posts
+      @param url Optional URL for link posts
+      @param media_urls Optional list of media URLs
+      @param flair_id Optional flair template ID
+      @param flair_text Optional flair text
+      @param nsfw Mark post as NSFW
+      @param spoiler Mark post as spoiler
+  *)
+  let post_to_subreddits ~account_id ~subreddits ~title ?body ?url ?(media_urls=[])
+      ?flair_id ?flair_text ?(nsfw=false) ?(spoiler=false) () on_result =
+    let results = ref [] in
+    let rec post_next remaining =
+      match remaining with
+      | [] ->
+          on_result (Error_types.Success (List.rev !results))
+      | sub :: rest ->
+          post_single ~account_id ~subreddit:sub ~title ?body ?url ~media_urls
+            ?flair_id ?flair_text ~nsfw ~spoiler ()
+            (fun outcome ->
+              let result = match outcome with
+                | Error_types.Success post_id ->
+                    { subreddit = sub; post_id = Some post_id; error = None }
+                | Error_types.Partial_success { result = post_id; _ } ->
+                    { subreddit = sub; post_id = Some post_id; error = None }
+                | Error_types.Failure err ->
+                    { subreddit = sub; post_id = None; error = Some (Error_types.error_to_string err) }
+              in
+              results := result :: !results;
+              post_next rest)
+    in
+    post_next subreddits
+
   (** {1 OAuth Convenience Functions} *)
-  
+
   (** Generate OAuth authorization URL *)
   let get_oauth_url ~redirect_uri ~state on_success on_error =
     let client_id = Config.get_env "REDDIT_CLIENT_ID" |> Option.value ~default:"" in

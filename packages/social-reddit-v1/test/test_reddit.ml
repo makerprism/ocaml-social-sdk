@@ -1633,6 +1633,331 @@ let test_account_not_found () =
           failwith ("Wrong error type: " ^ Error_types.error_to_string err)
       | _ -> failwith "Unexpected outcome")
 
+(** {1 Rate Limit Header Parsing Tests} *)
+
+let test_parse_rate_limit_headers_all_present () =
+  let headers = [
+    ("x-ratelimit-used", "5");
+    ("x-ratelimit-remaining", "95.0");
+    ("x-ratelimit-reset", "300");
+  ] in
+  let info = Reddit.parse_rate_limit_headers headers in
+  assert (info.used = Some 5.0);
+  assert (info.remaining = Some 95.0);
+  assert (info.reset = Some 300);
+  print_endline "  ok: parse_rate_limit_headers with all headers present"
+
+let test_parse_rate_limit_headers_missing () =
+  let headers = [("content-type", "application/json")] in
+  let info = Reddit.parse_rate_limit_headers headers in
+  assert (info.used = None);
+  assert (info.remaining = None);
+  assert (info.reset = None);
+  print_endline "  ok: parse_rate_limit_headers with no rate limit headers"
+
+let test_parse_rate_limit_headers_case_insensitive () =
+  let headers = [
+    ("X-Ratelimit-Used", "10");
+    ("X-Ratelimit-Remaining", "90");
+    ("X-Ratelimit-Reset", "600");
+  ] in
+  let info = Reddit.parse_rate_limit_headers headers in
+  assert (info.used = Some 10.0);
+  assert (info.remaining = Some 90.0);
+  assert (info.reset = Some 600);
+  print_endline "  ok: parse_rate_limit_headers is case-insensitive"
+
+let test_parse_rate_limit_headers_float_reset () =
+  let headers = [
+    ("x-ratelimit-used", "1");
+    ("x-ratelimit-remaining", "99.5");
+    ("x-ratelimit-reset", "123.7");
+  ] in
+  let info = Reddit.parse_rate_limit_headers headers in
+  assert (info.used = Some 1.0);
+  assert (info.remaining = Some 99.5);
+  assert (info.reset = Some 123);
+  print_endline "  ok: parse_rate_limit_headers handles float reset value"
+
+(** {1 Subreddit Search Tests} *)
+
+let test_search_subreddits () =
+  Mock_config.setup_valid_credentials ();
+
+  let response_body = {|{
+    "kind": "Listing",
+    "data": {
+      "children": [
+        {
+          "kind": "t5",
+          "data": {
+            "id": "abc123",
+            "display_name": "ocaml",
+            "subscribers": 15000,
+            "over18": false,
+            "user_is_moderator": false,
+            "link_flair_enabled": false,
+            "submission_type": "any"
+          }
+        },
+        {
+          "kind": "t5",
+          "data": {
+            "id": "def456",
+            "display_name": "ocaml_beginners",
+            "subscribers": 3000,
+            "over18": false,
+            "user_is_moderator": true,
+            "link_flair_enabled": true,
+            "submission_type": "self"
+          }
+        }
+      ]
+    }
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Reddit.search_subreddits
+    ~account_id:"test_account"
+    ~query:"ocaml"
+    (handle_outcome
+      (fun (subreddits : Social_reddit_v1.subreddit list) ->
+        assert (List.length subreddits = 2);
+        let first = List.hd subreddits in
+        assert (first.name = "ocaml");
+        assert (first.subscribers = 15000);
+        assert (first.user_is_moderator = false);
+        let second = List.nth subreddits 1 in
+        assert (second.name = "ocaml_beginners");
+        assert (second.user_is_moderator = true);
+
+        (* Verify request URL *)
+        let (method_, url, _, _) = List.hd !Mock_http.requests in
+        assert (method_ = "GET");
+        assert (string_contains url "/subreddits/search");
+        assert (string_contains url "q=ocaml");
+        print_endline "  ok: search_subreddits returns results")
+      (fun err -> failwith ("Search subreddits failed: " ^ err)))
+
+let test_search_subreddits_custom_limit () =
+  Mock_config.setup_valid_credentials ();
+
+  let response_body = {|{
+    "kind": "Listing",
+    "data": {
+      "children": []
+    }
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Reddit.search_subreddits
+    ~account_id:"test_account"
+    ~query:"niche_topic"
+    ~limit:5
+    (handle_outcome
+      (fun (subreddits : Social_reddit_v1.subreddit list) ->
+        assert (List.length subreddits = 0);
+        let (_, url, _, _) = List.hd !Mock_http.requests in
+        assert (string_contains url "limit=5");
+        print_endline "  ok: search_subreddits passes custom limit")
+      (fun err -> failwith ("Search subreddits with limit failed: " ^ err)))
+
+(** {1 Gallery Post Tests} *)
+
+let test_submit_gallery_post () =
+  Mock_config.setup_valid_credentials ();
+
+  let img1_download = { status = 200; body = "img1_bytes"; headers = [("content-type", "image/jpeg")] } in
+  let img1_lease = {
+    status = 200;
+    body = {|{
+      "args": {
+        "action": "https://reddit-upload.s3.amazonaws.com",
+        "fields": [{"name": "key", "value": "uploads/img1.jpg"}],
+        "asset": {"asset_id": "asset_img1"}
+      }
+    }|};
+    headers = [];
+  } in
+  let img1_s3 = { status = 204; body = ""; headers = [] } in
+  let img2_download = { status = 200; body = "img2_bytes"; headers = [("content-type", "image/png")] } in
+  let img2_lease = {
+    status = 200;
+    body = {|{
+      "args": {
+        "action": "https://reddit-upload.s3.amazonaws.com",
+        "fields": [{"name": "key", "value": "uploads/img2.png"}],
+        "asset": {"asset_id": "asset_img2"}
+      }
+    }|};
+    headers = [];
+  } in
+  let img2_s3 = { status = 204; body = ""; headers = [] } in
+  let submit_response = {
+    status = 200;
+    body = {|{
+      "json": {
+        "errors": [],
+        "data": {"id": "gallery123", "name": "t3_gallery123", "url": "https://reddit.com/r/test/gallery123"}
+      }
+    }|};
+    headers = [];
+  } in
+
+  Mock_http.set_responses [
+    img1_download; img1_lease; img1_s3;
+    img2_download; img2_lease; img2_s3;
+    submit_response;
+  ];
+
+  let items : Social_reddit_v1.gallery_item list = [
+    { media_url = "https://cdn.example.com/img1.jpg"; caption = Some "First image"; outbound_url = None };
+    { media_url = "https://cdn.example.com/img2.png"; caption = None; outbound_url = Some "https://example.com" };
+  ] in
+
+  Reddit.submit_gallery_post
+    ~account_id:"test_account"
+    ~subreddit:"test"
+    ~title:"Gallery Post"
+    ~items
+    ()
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "gallery123");
+        let chronological = List.rev !Mock_http.requests in
+        assert (List.length chronological = 7);
+
+        (* Verify the final submit request *)
+        let (method_, url, _, body) = List.nth chronological 6 in
+        assert (method_ = "POST");
+        assert (string_contains url "/api/submit_gallery_post");
+        assert (string_contains body "asset_img1");
+        assert (string_contains body "asset_img2");
+        assert (string_contains body "First image");
+        assert (string_contains body "Gallery Post");
+        print_endline "  ok: submit_gallery_post uploads images and submits")
+      (fun err -> failwith ("Gallery post failed: " ^ err)))
+
+let test_submit_gallery_post_too_few_items () =
+  Mock_config.setup_valid_credentials ();
+
+  let items : Social_reddit_v1.gallery_item list = [
+    { media_url = "https://cdn.example.com/img1.jpg"; caption = None; outbound_url = None };
+  ] in
+
+  Reddit.submit_gallery_post
+    ~account_id:"test_account"
+    ~subreddit:"test"
+    ~title:"Too Few Images"
+    ~items
+    ()
+    (fun outcome ->
+      match outcome with
+      | Error_types.Failure (Error_types.Validation_error _) ->
+          print_endline "  ok: submit_gallery_post rejects fewer than 2 items"
+      | Error_types.Success _ ->
+          failwith "Gallery with 1 image should fail validation"
+      | _ -> failwith "Unexpected outcome for single-image gallery")
+
+(** {1 Multi-Subreddit Posting Tests} *)
+
+let test_post_to_subreddits () =
+  Mock_config.setup_valid_credentials ();
+
+  let response1 = {
+    status = 200;
+    body = {|{"json":{"errors":[],"data":{"id":"post1","name":"t3_post1","url":"..."}}}|};
+    headers = [];
+  } in
+  let response2 = {
+    status = 200;
+    body = {|{"json":{"errors":[],"data":{"id":"post2","name":"t3_post2","url":"..."}}}|};
+    headers = [];
+  } in
+
+  Mock_http.set_responses [response1; response2];
+
+  Reddit.post_to_subreddits
+    ~account_id:"test_account"
+    ~subreddits:["sub1"; "sub2"]
+    ~title:"Multi Post"
+    ~body:"Body text"
+    ()
+    (handle_outcome
+      (fun (results : Social_reddit_v1.multi_post_result list) ->
+        assert (List.length results = 2);
+        let r1 = List.hd results in
+        assert (r1.subreddit = "sub1");
+        assert (r1.post_id = Some "post1");
+        assert (r1.error = None);
+        let r2 = List.nth results 1 in
+        assert (r2.subreddit = "sub2");
+        assert (r2.post_id = Some "post2");
+        assert (r2.error = None);
+        print_endline "  ok: post_to_subreddits posts to multiple subreddits")
+      (fun err -> failwith ("Multi-subreddit post failed: " ^ err)))
+
+let test_post_to_subreddits_partial_failure () =
+  Mock_config.setup_valid_credentials ();
+
+  let response1 = {
+    status = 200;
+    body = {|{"json":{"errors":[],"data":{"id":"post1","name":"t3_post1","url":"..."}}}|};
+    headers = [];
+  } in
+  let response2 = {
+    status = 403;
+    body = {|{"message": "Forbidden", "error": 403}|};
+    headers = [];
+  } in
+  let response3 = {
+    status = 200;
+    body = {|{"json":{"errors":[],"data":{"id":"post3","name":"t3_post3","url":"..."}}}|};
+    headers = [];
+  } in
+
+  Mock_http.set_responses [response1; response2; response3];
+
+  Reddit.post_to_subreddits
+    ~account_id:"test_account"
+    ~subreddits:["sub1"; "sub2"; "sub3"]
+    ~title:"Partial Fail"
+    ~body:"Body"
+    ()
+    (handle_outcome
+      (fun (results : Social_reddit_v1.multi_post_result list) ->
+        assert (List.length results = 3);
+        let r1 = List.hd results in
+        assert (r1.subreddit = "sub1");
+        assert (r1.post_id = Some "post1");
+        assert (r1.error = None);
+        let r2 = List.nth results 1 in
+        assert (r2.subreddit = "sub2");
+        assert (r2.post_id = None);
+        assert (r2.error <> None);
+        let r3 = List.nth results 2 in
+        assert (r3.subreddit = "sub3");
+        assert (r3.post_id = Some "post3");
+        assert (r3.error = None);
+        print_endline "  ok: post_to_subreddits continues after partial failure")
+      (fun err -> failwith ("Multi-subreddit partial failure test failed: " ^ err)))
+
+let test_post_to_subreddits_empty_list () =
+  Mock_config.setup_valid_credentials ();
+
+  Reddit.post_to_subreddits
+    ~account_id:"test_account"
+    ~subreddits:[]
+    ~title:"Empty List"
+    ()
+    (handle_outcome
+      (fun (results : Social_reddit_v1.multi_post_result list) ->
+        assert (List.length results = 0);
+        print_endline "  ok: post_to_subreddits with empty list returns empty results")
+      (fun err -> failwith ("Empty subreddit list test failed: " ^ err)))
+
 (** {1 Run All Tests} *)
 
 let () =
@@ -1706,7 +2031,26 @@ let () =
   print_endline "\n--- Credentials Tests ---";
   test_missing_credentials ();
   test_account_not_found ();
-  
+
+  print_endline "\n--- Rate Limit Header Parsing Tests ---";
+  test_parse_rate_limit_headers_all_present ();
+  test_parse_rate_limit_headers_missing ();
+  test_parse_rate_limit_headers_case_insensitive ();
+  test_parse_rate_limit_headers_float_reset ();
+
+  print_endline "\n--- Subreddit Search Tests ---";
+  test_search_subreddits ();
+  test_search_subreddits_custom_limit ();
+
+  print_endline "\n--- Gallery Post Tests ---";
+  test_submit_gallery_post ();
+  test_submit_gallery_post_too_few_items ();
+
+  print_endline "\n--- Multi-Subreddit Posting Tests ---";
+  test_post_to_subreddits ();
+  test_post_to_subreddits_partial_failure ();
+  test_post_to_subreddits_empty_list ();
+
   print_endline "\n=== All tests passed! ===";
   print_endline "\nTest Coverage Summary:";
   print_endline "  - OAuth 2.0 with Basic Auth (5 tests)";
@@ -1720,5 +2064,9 @@ let () =
   print_endline "  - Token refresh (2 tests)";
   print_endline "  - Header verification (2 tests)";
   print_endline "  - Credentials handling (2 tests)";
+  print_endline "  - Rate limit header parsing (4 tests)";
+  print_endline "  - Subreddit search (2 tests)";
+  print_endline "  - Gallery posts (2 tests)";
+  print_endline "  - Multi-subreddit posting (3 tests)";
   print_endline "";
-  print_endline "Total: 47 test functions\n"
+  print_endline "Total: 58 test functions\n"
