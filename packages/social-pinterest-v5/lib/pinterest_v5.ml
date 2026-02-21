@@ -1,11 +1,15 @@
 (** Pinterest API v5 Provider
-    
-    This implementation supports Pinterest pin creation.
-    
+
+    This implementation supports Pinterest pin creation, board management,
+    rate limit parsing, and automatic retry for transient failures.
+
     - OAuth 2.0 with Basic Auth
     - Long-lived access tokens (no defined expiration)
     - Requires boards for all pins
-    - Multipart image upload
+    - Uses image_url source type for image pins (no download-reupload)
+    - Board creation and section management
+    - Rate limit header parsing (X-RateLimit-Limit, Remaining, Reset)
+    - Retry wrapper for 429 and 5xx errors
 *)
 
 open Social_core
@@ -432,6 +436,70 @@ module Make (Config : CONFIG) = struct
         request_id = None;
       }
 
+  (** {1 Rate Limit Header Parsing} *)
+
+  (** Parsed rate limit information from response headers *)
+  type rate_limit_info = {
+    limit: int option;
+    remaining: int option;
+    reset: int option;
+  }
+
+  (** Parse rate limit headers from an HTTP response.
+
+      Pinterest returns:
+      - X-RateLimit-Limit: requests allowed per interval
+      - X-RateLimit-Remaining: requests remaining
+      - X-RateLimit-Reset: seconds until the limit resets
+  *)
+  let parse_rate_limit_headers (headers : (string * string) list) : rate_limit_info =
+    let find_int name =
+      let lower_name = String.lowercase_ascii name in
+      List.find_map (fun (k, v) ->
+        if String.lowercase_ascii k = lower_name then
+          (try Some (int_of_string (String.trim v)) with _ -> None)
+        else
+          None
+      ) headers
+    in
+    {
+      limit = find_int "x-ratelimit-limit";
+      remaining = find_int "x-ratelimit-remaining";
+      reset = find_int "x-ratelimit-reset";
+    }
+
+  (** {1 Retry Logic} *)
+
+  (** Retry a request-making function on transient failures (429 and 5xx).
+
+      @param max_retries Maximum number of retry attempts (default: 3)
+      @param initial_delay_seconds Initial delay before first retry (default: 1.0)
+      @param make_request Function that issues the HTTP request and calls on_result
+      @param on_result Final continuation receiving the outcome
+  *)
+  let with_retry ?(max_retries=3) ?(initial_delay_seconds=1.0) ~make_request on_result =
+    let rec loop attempt delay =
+      make_request (fun response ->
+        if response.status = 429 || response.status >= 500 then begin
+          if attempt < max_retries then begin
+            let actual_delay =
+              if response.status = 429 then
+                let rl = parse_rate_limit_headers response.headers in
+                match rl.reset with
+                | Some secs when secs > 0 -> float_of_int secs
+                | _ -> delay
+              else
+                delay
+            in
+            let _ = Unix.select [] [] [] actual_delay in
+            loop (attempt + 1) (delay *. 2.0)
+          end else
+            on_result response
+        end else
+          on_result response)
+    in
+    loop 0 initial_delay_seconds
+
   let normalize_content_type content_type =
     let lowered = String.lowercase_ascii content_type in
     let without_params =
@@ -728,6 +796,94 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Failed to get boards (%d): %s" response.status response.body))
       on_error
   
+  (** {1 Board Management} *)
+
+  (** Create a new board.
+
+      @param access_token Valid access token
+      @param name Board name (required)
+      @param description Optional board description
+      @param privacy Optional privacy setting: "PUBLIC" (default) or "SECRET"
+      @param on_result Continuation receiving api_result with created board JSON
+  *)
+  let create_board ~access_token ~name ?(description="") ?(privacy="PUBLIC") on_result =
+    let url = pinterest_api_base ^ "/boards" in
+    let fields = [
+      ("name", `String name);
+      ("privacy", `String privacy);
+    ] in
+    let fields =
+      if description <> "" then ("description", `String description) :: fields
+      else fields
+    in
+    let headers = [
+      ("Authorization", "Bearer " ^ access_token);
+      ("Content-Type", "application/json");
+    ] in
+    let body = Yojson.Basic.to_string (`Assoc fields) in
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let json = Yojson.Basic.from_string response.body in
+            on_result (Ok json)
+          with e ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse board response: %s" (Printexc.to_string e))))
+        else
+          on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+      (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+  (** {1 Board Section Management} *)
+
+  (** Get sections for a board.
+
+      @param access_token Valid access token
+      @param board_id The board identifier
+      @param on_result Continuation receiving api_result with sections list JSON
+  *)
+  let get_board_sections ~access_token ~board_id on_result =
+    let url = Printf.sprintf "%s/boards/%s/sections" pinterest_api_base (Uri.pct_encode board_id) in
+    let headers = [
+      ("Authorization", "Bearer " ^ access_token);
+    ] in
+    Config.Http.get ~headers url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let json = Yojson.Basic.from_string response.body in
+            on_result (Ok json)
+          with e ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse board sections: %s" (Printexc.to_string e))))
+        else
+          on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+      (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+  (** Create a new section in a board.
+
+      @param access_token Valid access token
+      @param board_id The board identifier
+      @param name Section name (required)
+      @param on_result Continuation receiving api_result with created section JSON
+  *)
+  let create_board_section ~access_token ~board_id ~name on_result =
+    let url = Printf.sprintf "%s/boards/%s/sections" pinterest_api_base (Uri.pct_encode board_id) in
+    let headers = [
+      ("Authorization", "Bearer " ^ access_token);
+      ("Content-Type", "application/json");
+    ] in
+    let body = Yojson.Basic.to_string (`Assoc [("name", `String name)]) in
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let json = Yojson.Basic.from_string response.body in
+            on_result (Ok json)
+          with e ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse board section response: %s" (Printexc.to_string e))))
+        else
+          on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+      (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
   (** Upload image to Pinterest with optional alt text *)
   let upload_image ~access_token ~image_url ~alt_text ?(validate_before_upload=false) on_success on_error =
     (* Download image first *)
@@ -1007,7 +1163,7 @@ module Make (Config : CONFIG) = struct
     else
       msg
 
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(board_id="") ?(title="") ?(link="") ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(board_id="") ?(section_id="") ?(title="") ?(link="") ?(validate_media_before_upload=false) on_result =
     let media_count = List.length media_urls in
     match validate_post ~text ~media_count () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1030,6 +1186,10 @@ module Make (Config : CONFIG) = struct
                     ("description", `String text);
                     ("media_source", media_source);
                   ] in
+                  let base_fields =
+                    if section_id <> "" then ("board_section_id", `String section_id) :: base_fields
+                    else base_fields
+                  in
                   let base_fields =
                     if link <> "" then ("link", `String link) :: base_fields
                     else base_fields
@@ -1058,16 +1218,12 @@ module Make (Config : CONFIG) = struct
                     (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
                 in
                 let post_as_image ~image_url =
-                  upload_image ~access_token ~image_url ~alt_text
-                    ~validate_before_upload:validate_media_before_upload
-                    (fun (media_id, alt_text_opt) ->
-                      create_pin_with_media
-                        ~media_source:(`Assoc [
-                          ("source_type", `String "image_base64");
-                          ("media_id", `String media_id);
-                        ])
-                        ~alt_text_opt)
-                    (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+                  create_pin_with_media
+                    ~media_source:(`Assoc [
+                      ("source_type", `String "image_url");
+                      ("url", `String image_url);
+                    ])
+                    ~alt_text_opt:alt_text
                 in
                 let post_as_video ~video_url ?thumbnail_url ?(on_video_error=None) () =
                   let handle_video_error err =

@@ -242,12 +242,6 @@ let test_post_single_refreshes_expired_token () =
   let boards_response =
     { status = 200; body = {|{"items":[{"id":"board_123"}]}|}; headers = [] }
   in
-  let image_download_response =
-    { status = 200; body = "fake_image_binary"; headers = [ ("content-type", "image/jpeg") ] }
-  in
-  let media_upload_response =
-    { status = 201; body = {|{"media_id":"media_456"}|}; headers = [] }
-  in
   let pin_create_response =
     { status = 201; body = {|{"id":"pin_789"}|}; headers = [] }
   in
@@ -255,8 +249,6 @@ let test_post_single_refreshes_expired_token () =
   Mock_http.set_responses [
     refresh_response;
     boards_response;
-    image_download_response;
-    media_upload_response;
     pin_create_response;
   ];
 
@@ -591,20 +583,12 @@ let test_post_single_full_image_flow_with_alt_text () =
   let boards_response =
     { status = 200; body = {|{"items":[{"id":"board_123"}]}|}; headers = [] }
   in
-  let image_download_response =
-    { status = 200; body = "fake_image_binary"; headers = [ ("content-type", "image/jpeg; charset=binary") ] }
-  in
-  let media_upload_response =
-    { status = 201; body = {|{"media_id":"media_456"}|}; headers = [] }
-  in
   let pin_create_response =
     { status = 201; body = {|{"id":"pin_789"}|}; headers = [] }
   in
 
   Mock_http.set_responses [
     boards_response;
-    image_download_response;
-    media_upload_response;
     pin_create_response;
   ];
 
@@ -618,34 +602,25 @@ let test_post_single_full_image_flow_with_alt_text () =
       | Error_types.Success pin_id ->
           assert (pin_id = "pin_789");
           let chronological = List.rev !Mock_http.requests in
-          assert (List.length chronological = 4);
+          assert (List.length chronological = 2);
 
           let (m1, u1, h1, _) = List.nth chronological 0 in
           assert (m1 = "GET");
           assert (string_contains u1 "/boards");
           assert (List.assoc_opt "Authorization" h1 = Some "Bearer test_access_token");
 
-          let (m2, u2, _, _) = List.nth chronological 1 in
-          assert (m2 = "GET");
-          assert (u2 = "https://example.com/image.jpg");
+          let (m2, u2, h2, body2) = List.nth chronological 1 in
+          assert (m2 = "POST");
+          assert (string_contains u2 "/pins");
+          assert (List.assoc_opt "Authorization" h2 = Some "Bearer test_access_token");
 
-          let (m3, u3, h3, _) = List.nth chronological 2 in
-          assert (m3 = "POST_MULTIPART");
-          assert (string_contains u3 "/media");
-          assert (List.assoc_opt "Authorization" h3 = Some "Bearer test_access_token");
-
-          let (m4, u4, h4, body4) = List.nth chronological 3 in
-          assert (m4 = "POST");
-          assert (string_contains u4 "/pins");
-          assert (List.assoc_opt "Authorization" h4 = Some "Bearer test_access_token");
-
-          let json = Yojson.Basic.from_string body4 in
+          let json = Yojson.Basic.from_string body2 in
           let open Yojson.Basic.Util in
           assert ((json |> member "board_id" |> to_string) = "board_123");
           assert ((json |> member "alt_text" |> to_string) = "Accessible alt text");
-          assert ((json |> member "media_source" |> member "source_type" |> to_string) = "image_base64");
-          assert ((json |> member "media_source" |> member "media_id" |> to_string) = "media_456");
-          print_endline "✓ post_single full image flow with alt text"
+          assert ((json |> member "media_source" |> member "source_type" |> to_string) = "image_url");
+          assert ((json |> member "media_source" |> member "url" |> to_string) = "https://example.com/image.jpg");
+          print_endline "✓ post_single uses image_url source type with alt text"
       | Error_types.Failure err ->
           failwith ("post_single full flow failed: " ^ Error_types.error_to_string err)
       | Error_types.Partial_success _ ->
@@ -657,20 +632,12 @@ let test_post_single_truncates_title_to_100_chars () =
   let boards_response =
     { status = 200; body = {|{"items":[{"id":"board_123"}]}|}; headers = [] }
   in
-  let image_download_response =
-    { status = 200; body = "fake_image_binary"; headers = [ ("content-type", "image/jpeg") ] }
-  in
-  let media_upload_response =
-    { status = 201; body = {|{"media_id":"media_456"}|}; headers = [] }
-  in
   let pin_create_response =
     { status = 201; body = {|{"id":"pin_789"}|}; headers = [] }
   in
 
   Mock_http.set_responses [
     boards_response;
-    image_download_response;
-    media_upload_response;
     pin_create_response;
   ];
 
@@ -684,7 +651,7 @@ let test_post_single_truncates_title_to_100_chars () =
       match outcome with
       | Error_types.Success _ ->
           let chronological = List.rev !Mock_http.requests in
-          let (_, _, _, body) = List.nth chronological 3 in
+          let (_, _, _, body) = List.nth chronological 1 in
           let json = Yojson.Basic.from_string body in
           let open Yojson.Basic.Util in
           let title = json |> member "title" |> to_string in
@@ -697,46 +664,47 @@ let test_post_single_truncates_title_to_100_chars () =
       | Error_types.Partial_success _ ->
           failwith "Expected full success for single pin flow")
 
-let test_post_single_validation_before_upload_blocks_large_image () =
+let test_post_single_image_url_skips_download () =
   setup_valid_credentials ();
 
   let boards_response =
     { status = 200; body = {|{"items":[{"id":"board_123"}]}|}; headers = [] }
   in
-  let oversized_image = String.make ((20 * 1024 * 1024) + 1) 'x' in
-  let image_download_response =
-    { status = 200; body = oversized_image; headers = [ ("content-type", "image/jpeg") ] }
+  let pin_create_response =
+    { status = 201; body = {|{"id":"pin_url_direct"}|}; headers = [] }
   in
 
   Mock_http.set_responses [
     boards_response;
-    image_download_response;
+    pin_create_response;
   ];
 
   Pinterest.post_single
     ~account_id:"test_account"
-    ~text:"Large image pin"
-    ~media_urls:["https://example.com/oversized.jpg"]
-    ~validate_media_before_upload:true
+    ~text:"Image URL pin"
+    ~media_urls:["https://example.com/large-image.jpg"]
     (fun outcome ->
       match outcome with
-      | Error_types.Failure (Error_types.Internal_error msg) ->
-          assert (string_contains msg "Validation failed");
+      | Error_types.Success pin_id ->
+          assert (pin_id = "pin_url_direct");
           let chronological = List.rev !Mock_http.requests in
+          (* Only 2 requests: GET /boards and POST /pins -- no image download *)
           assert (List.length chronological = 2);
           let (m1, u1, _, _) = List.nth chronological 0 in
-          let (m2, u2, _, _) = List.nth chronological 1 in
           assert (m1 = "GET");
           assert (string_contains u1 "/boards");
-          assert (m2 = "GET");
-          assert (u2 = "https://example.com/oversized.jpg");
-          print_endline "✓ Validation blocks oversized image before media upload"
+          let (m2, u2, _, body2) = List.nth chronological 1 in
+          assert (m2 = "POST");
+          assert (string_contains u2 "/pins");
+          let json = Yojson.Basic.from_string body2 in
+          let open Yojson.Basic.Util in
+          assert ((json |> member "media_source" |> member "source_type" |> to_string) = "image_url");
+          assert ((json |> member "media_source" |> member "url" |> to_string) = "https://example.com/large-image.jpg");
+          print_endline "✓ image_url source type skips download and uploads URL directly"
       | Error_types.Failure err ->
-          failwith ("Wrong error type for oversized validation: " ^ Error_types.error_to_string err)
-      | Error_types.Success _ ->
-          failwith "Oversized image should fail before upload"
+          failwith ("image_url flow should succeed: " ^ Error_types.error_to_string err)
       | Error_types.Partial_success _ ->
-          failwith "Oversized image should not produce partial success")
+          failwith "Expected full success for image_url flow")
 
 let test_post_thread_partial_success_posts_only_first () =
   setup_valid_credentials ();
@@ -744,20 +712,12 @@ let test_post_thread_partial_success_posts_only_first () =
   let boards_response =
     { status = 200; body = {|{"items":[{"id":"board_123"}]}|}; headers = [] }
   in
-  let image_download_response =
-    { status = 200; body = "fake_image_binary"; headers = [ ("content-type", "image/jpeg") ] }
-  in
-  let media_upload_response =
-    { status = 201; body = {|{"media_id":"media_456"}|}; headers = [] }
-  in
   let pin_create_response =
     { status = 201; body = {|{"id":"pin_789"}|}; headers = [] }
   in
 
   Mock_http.set_responses [
     boards_response;
-    image_download_response;
-    media_upload_response;
     pin_create_response;
   ];
 
@@ -779,7 +739,7 @@ let test_post_thread_partial_success_posts_only_first () =
            | Error_types.Generic_warning { code; _ } -> assert (code = "pinterest_no_threads")
            | _ -> failwith "Expected Generic_warning for thread fallback");
           let chronological = List.rev !Mock_http.requests in
-          assert (List.length chronological = 4);
+          assert (List.length chronological = 2);
           print_endline "✓ post_thread returns partial success and posts only first item"
       | Error_types.Success _ ->
           failwith "Expected partial success when posting multi-item thread"
@@ -907,9 +867,6 @@ let test_post_single_unknown_extension_image_falls_back_to_image_flow () =
   let first_download_image_response =
     { status = 200; body = "fake_image_binary"; headers = [ ("content-type", "image/jpeg") ] }
   in
-  let image_media_upload_response =
-    { status = 201; body = {|{"media_id":"media_img_001"}|}; headers = [] }
-  in
   let pin_create_response =
     { status = 201; body = {|{"id":"pin_img_001"}|}; headers = [] }
   in
@@ -917,8 +874,6 @@ let test_post_single_unknown_extension_image_falls_back_to_image_flow () =
   Mock_http.set_responses [
     boards_response;
     first_download_image_response;
-    first_download_image_response;
-    image_media_upload_response;
     pin_create_response;
   ];
 
@@ -931,23 +886,21 @@ let test_post_single_unknown_extension_image_falls_back_to_image_flow () =
       | Error_types.Success pin_id ->
           assert (pin_id = "pin_img_001");
           let chronological = List.rev !Mock_http.requests in
-          assert (List.length chronological = 5);
+          (* 3 requests: GET /boards, GET url (video attempt), POST /pins (image_url fallback) *)
+          assert (List.length chronological = 3);
 
           let (m2, _, _, _) = List.nth chronological 1 in
           assert (m2 = "GET");
 
-          let (m3, _, _, _) = List.nth chronological 2 in
-          assert (m3 = "GET");
+          let (m3, u3, _, pin_body) = List.nth chronological 2 in
+          assert (m3 = "POST");
+          assert (string_contains u3 "/pins");
 
-          let (m4, u4, _, _) = List.nth chronological 3 in
-          assert (m4 = "POST_MULTIPART");
-          assert (string_contains u4 "/media");
-
-          let (_, _, _, pin_body) = List.nth chronological 4 in
           let pin_json = Yojson.Basic.from_string pin_body in
           let open Yojson.Basic.Util in
-          assert ((pin_json |> member "media_source" |> member "source_type" |> to_string) = "image_base64");
-          print_endline "✓ Unknown extension media falls back to image flow on image content-type"
+          assert ((pin_json |> member "media_source" |> member "source_type" |> to_string) = "image_url");
+          assert ((pin_json |> member "media_source" |> member "url" |> to_string) = "https://example.com/asset?id=42");
+          print_endline "✓ Unknown extension media falls back to image_url on image content-type"
       | Error_types.Failure err ->
           failwith ("Unknown-extension image fallback failed: " ^ Error_types.error_to_string err)
       | Error_types.Partial_success _ ->
@@ -1171,6 +1124,316 @@ let test_validate_media_file_rejects_oversized_video () =
   | Ok () ->
       failwith "Oversized video should fail media validation"
 
+(** Test: parse_rate_limit_headers *)
+let test_parse_rate_limit_headers () =
+  let headers = [
+    ("X-RateLimit-Limit", "200");
+    ("X-RateLimit-Remaining", "150");
+    ("X-RateLimit-Reset", "30");
+    ("Content-Type", "application/json");
+  ] in
+  let rl = Pinterest.parse_rate_limit_headers headers in
+  assert (rl.Pinterest.limit = Some 200);
+  assert (rl.Pinterest.remaining = Some 150);
+  assert (rl.Pinterest.reset = Some 30);
+  print_endline "✓ parse_rate_limit_headers extracts all three headers"
+
+let test_parse_rate_limit_headers_missing () =
+  let headers = [
+    ("Content-Type", "application/json");
+  ] in
+  let rl = Pinterest.parse_rate_limit_headers headers in
+  assert (rl.Pinterest.limit = None);
+  assert (rl.Pinterest.remaining = None);
+  assert (rl.Pinterest.reset = None);
+  print_endline "✓ parse_rate_limit_headers returns None for missing headers"
+
+let test_parse_rate_limit_headers_case_insensitive () =
+  let headers = [
+    ("x-ratelimit-limit", "100");
+    ("x-ratelimit-remaining", "50");
+    ("x-ratelimit-reset", "10");
+  ] in
+  let rl = Pinterest.parse_rate_limit_headers headers in
+  assert (rl.Pinterest.limit = Some 100);
+  assert (rl.Pinterest.remaining = Some 50);
+  assert (rl.Pinterest.reset = Some 10);
+  print_endline "✓ parse_rate_limit_headers is case-insensitive"
+
+let test_parse_rate_limit_headers_invalid_values () =
+  let headers = [
+    ("X-RateLimit-Limit", "not-a-number");
+    ("X-RateLimit-Remaining", "50");
+    ("X-RateLimit-Reset", "");
+  ] in
+  let rl = Pinterest.parse_rate_limit_headers headers in
+  assert (rl.Pinterest.limit = None);
+  assert (rl.Pinterest.remaining = Some 50);
+  assert (rl.Pinterest.reset = None);
+  print_endline "✓ parse_rate_limit_headers handles invalid values gracefully"
+
+(** Test: with_retry *)
+let test_with_retry_no_retry_on_success () =
+  Mock_config.reset ();
+
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    on_result { status = 200; body = {|{"ok":true}|}; headers = [] }
+  in
+  Pinterest.with_retry ~max_retries:3 ~make_request (fun response ->
+    assert (response.status = 200);
+    assert (!call_count = 1);
+    print_endline "✓ with_retry does not retry on success")
+
+let test_with_retry_retries_on_429 () =
+  Mock_config.reset ();
+
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    if !call_count < 3 then
+      on_result { status = 429; body = "rate limited"; headers = [("X-RateLimit-Reset", "0")] }
+    else
+      on_result { status = 200; body = {|{"ok":true}|}; headers = [] }
+  in
+  Pinterest.with_retry ~max_retries:3 ~initial_delay_seconds:0.001 ~make_request (fun response ->
+    assert (response.status = 200);
+    assert (!call_count = 3);
+    print_endline "✓ with_retry retries on 429 and succeeds")
+
+let test_with_retry_retries_on_500 () =
+  Mock_config.reset ();
+
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    if !call_count < 2 then
+      on_result { status = 500; body = "server error"; headers = [] }
+    else
+      on_result { status = 200; body = {|{"ok":true}|}; headers = [] }
+  in
+  Pinterest.with_retry ~max_retries:3 ~initial_delay_seconds:0.001 ~make_request (fun response ->
+    assert (response.status = 200);
+    assert (!call_count = 2);
+    print_endline "✓ with_retry retries on 500 and succeeds")
+
+let test_with_retry_gives_up_after_max_retries () =
+  Mock_config.reset ();
+
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    on_result { status = 503; body = "service unavailable"; headers = [] }
+  in
+  Pinterest.with_retry ~max_retries:2 ~initial_delay_seconds:0.001 ~make_request (fun response ->
+    assert (response.status = 503);
+    (* Initial call + 2 retries = 3 total *)
+    assert (!call_count = 3);
+    print_endline "✓ with_retry gives up after max retries and returns last response")
+
+let test_with_retry_no_retry_on_4xx () =
+  Mock_config.reset ();
+
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    on_result { status = 400; body = "bad request"; headers = [] }
+  in
+  Pinterest.with_retry ~max_retries:3 ~make_request (fun response ->
+    assert (response.status = 400);
+    assert (!call_count = 1);
+    print_endline "✓ with_retry does not retry on 400")
+
+(** Test: create_board *)
+let test_create_board () =
+  Mock_config.reset ();
+
+  let board_response =
+    { status = 201; body = {|{"id":"board_new_1","name":"My Board","privacy":"PUBLIC"}|}; headers = [] }
+  in
+  Mock_http.set_responses [ board_response ];
+
+  Pinterest.create_board
+    ~access_token:"test_token"
+    ~name:"My Board"
+    (function
+      | Ok json ->
+          let open Yojson.Basic.Util in
+          assert ((json |> member "id" |> to_string) = "board_new_1");
+          assert ((json |> member "name" |> to_string) = "My Board");
+
+          let chronological = List.rev !Mock_http.requests in
+          assert (List.length chronological = 1);
+          let (method_name, url, headers, body) = List.hd chronological in
+          assert (method_name = "POST");
+          assert (string_contains url "/boards");
+          assert (List.assoc_opt "Authorization" headers = Some "Bearer test_token");
+          assert (List.assoc_opt "Content-Type" headers = Some "application/json");
+          let body_json = Yojson.Basic.from_string body in
+          assert ((body_json |> member "name" |> to_string) = "My Board");
+          assert ((body_json |> member "privacy" |> to_string) = "PUBLIC");
+          print_endline "✓ create_board sends correct request and parses response"
+      | Error err ->
+          failwith ("create_board failed: " ^ Error_types.error_to_string err))
+
+let test_create_board_with_description_and_secret () =
+  Mock_config.reset ();
+
+  let board_response =
+    { status = 201; body = {|{"id":"board_secret_1","name":"Secret Board","privacy":"SECRET","description":"My secret board"}|}; headers = [] }
+  in
+  Mock_http.set_responses [ board_response ];
+
+  Pinterest.create_board
+    ~access_token:"test_token"
+    ~name:"Secret Board"
+    ~description:"My secret board"
+    ~privacy:"SECRET"
+    (function
+      | Ok json ->
+          let open Yojson.Basic.Util in
+          assert ((json |> member "id" |> to_string) = "board_secret_1");
+          assert ((json |> member "privacy" |> to_string) = "SECRET");
+
+          let chronological = List.rev !Mock_http.requests in
+          let (_, _, _, body) = List.hd chronological in
+          let body_json = Yojson.Basic.from_string body in
+          assert ((body_json |> member "description" |> to_string) = "My secret board");
+          assert ((body_json |> member "privacy" |> to_string) = "SECRET");
+          print_endline "✓ create_board with description and SECRET privacy"
+      | Error err ->
+          failwith ("create_board with description failed: " ^ Error_types.error_to_string err))
+
+(** Test: get_board_sections *)
+let test_get_board_sections () =
+  Mock_config.reset ();
+
+  let sections_response =
+    { status = 200; body = {|{"items":[{"id":"section_1","name":"Section A"},{"id":"section_2","name":"Section B"}]}|}; headers = [] }
+  in
+  Mock_http.set_responses [ sections_response ];
+
+  Pinterest.get_board_sections
+    ~access_token:"test_token"
+    ~board_id:"board_123"
+    (function
+      | Ok json ->
+          let open Yojson.Basic.Util in
+          let items = json |> member "items" |> to_list in
+          assert (List.length items = 2);
+          assert ((List.nth items 0 |> member "id" |> to_string) = "section_1");
+          assert ((List.nth items 1 |> member "name" |> to_string) = "Section B");
+
+          let chronological = List.rev !Mock_http.requests in
+          assert (List.length chronological = 1);
+          let (method_name, url, headers, _) = List.hd chronological in
+          assert (method_name = "GET");
+          assert (string_contains url "/boards/board_123/sections");
+          assert (List.assoc_opt "Authorization" headers = Some "Bearer test_token");
+          print_endline "✓ get_board_sections retrieves sections for a board"
+      | Error err ->
+          failwith ("get_board_sections failed: " ^ Error_types.error_to_string err))
+
+(** Test: create_board_section *)
+let test_create_board_section () =
+  Mock_config.reset ();
+
+  let section_response =
+    { status = 201; body = {|{"id":"section_new_1","name":"New Section"}|}; headers = [] }
+  in
+  Mock_http.set_responses [ section_response ];
+
+  Pinterest.create_board_section
+    ~access_token:"test_token"
+    ~board_id:"board_123"
+    ~name:"New Section"
+    (function
+      | Ok json ->
+          let open Yojson.Basic.Util in
+          assert ((json |> member "id" |> to_string) = "section_new_1");
+          assert ((json |> member "name" |> to_string) = "New Section");
+
+          let chronological = List.rev !Mock_http.requests in
+          assert (List.length chronological = 1);
+          let (method_name, url, headers, body) = List.hd chronological in
+          assert (method_name = "POST");
+          assert (string_contains url "/boards/board_123/sections");
+          assert (List.assoc_opt "Authorization" headers = Some "Bearer test_token");
+          assert (List.assoc_opt "Content-Type" headers = Some "application/json");
+          let body_json = Yojson.Basic.from_string body in
+          assert ((body_json |> member "name" |> to_string) = "New Section");
+          print_endline "✓ create_board_section sends correct request"
+      | Error err ->
+          failwith ("create_board_section failed: " ^ Error_types.error_to_string err))
+
+(** Test: post_single with section_id *)
+let test_post_single_with_section_id () =
+  setup_valid_credentials ();
+
+  let pin_create_response =
+    { status = 201; body = {|{"id":"pin_section_1"}|}; headers = [] }
+  in
+
+  Mock_http.set_responses [
+    pin_create_response;
+  ];
+
+  Pinterest.post_single
+    ~account_id:"test_account"
+    ~text:"Pin in a section"
+    ~media_urls:["https://example.com/image.jpg"]
+    ~board_id:"board_123"
+    ~section_id:"section_456"
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success pin_id ->
+          assert (pin_id = "pin_section_1");
+          let chronological = List.rev !Mock_http.requests in
+          assert (List.length chronological = 1);
+          let (_, _, _, body) = List.hd chronological in
+          let json = Yojson.Basic.from_string body in
+          let open Yojson.Basic.Util in
+          assert ((json |> member "board_id" |> to_string) = "board_123");
+          assert ((json |> member "board_section_id" |> to_string) = "section_456");
+          assert ((json |> member "media_source" |> member "source_type" |> to_string) = "image_url");
+          print_endline "✓ post_single includes board_section_id when section_id provided"
+      | Error_types.Failure err ->
+          failwith ("post_single with section_id failed: " ^ Error_types.error_to_string err)
+      | Error_types.Partial_success _ ->
+          failwith "Expected full success for post with section_id")
+
+let test_post_single_omits_section_id_when_empty () =
+  setup_valid_credentials ();
+
+  let pin_create_response =
+    { status = 201; body = {|{"id":"pin_no_section"}|}; headers = [] }
+  in
+
+  Mock_http.set_responses [
+    pin_create_response;
+  ];
+
+  Pinterest.post_single
+    ~account_id:"test_account"
+    ~text:"Pin without section"
+    ~media_urls:["https://example.com/image.jpg"]
+    ~board_id:"board_123"
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success pin_id ->
+          assert (pin_id = "pin_no_section");
+          let chronological = List.rev !Mock_http.requests in
+          let (_, _, _, body) = List.hd chronological in
+          let json = Yojson.Basic.from_string body in
+          let open Yojson.Basic.Util in
+          assert ((json |> member "board_section_id") = `Null);
+          print_endline "✓ post_single omits board_section_id when section_id is empty"
+      | Error_types.Failure err ->
+          failwith ("post_single without section_id failed: " ^ Error_types.error_to_string err)
+      | Error_types.Partial_success _ ->
+          failwith "Expected full success")
+
 (** Run all tests *)
 let () =
   print_endline "\n=== Pinterest Provider Tests ===\n";
@@ -1190,7 +1453,7 @@ let () =
   test_validate_media_file_rejects_large_image ();
   test_post_single_full_image_flow_with_alt_text ();
   test_post_single_truncates_title_to_100_chars ();
-  test_post_single_validation_before_upload_blocks_large_image ();
+  test_post_single_image_url_skips_download ();
   test_post_thread_partial_success_posts_only_first ();
   test_validate_media_file_accepts_video ();
   test_validate_media_file_rejects_oversized_video ();
@@ -1200,4 +1463,19 @@ let () =
   test_post_single_unknown_extension_non_media_returns_clean_error ();
   test_post_single_video_content_type_with_charset_is_supported ();
   test_post_single_video_ignores_non_image_thumbnail_url ();
+  test_parse_rate_limit_headers ();
+  test_parse_rate_limit_headers_missing ();
+  test_parse_rate_limit_headers_case_insensitive ();
+  test_parse_rate_limit_headers_invalid_values ();
+  test_with_retry_no_retry_on_success ();
+  test_with_retry_retries_on_429 ();
+  test_with_retry_retries_on_500 ();
+  test_with_retry_gives_up_after_max_retries ();
+  test_with_retry_no_retry_on_4xx ();
+  test_create_board ();
+  test_create_board_with_description_and_secret ();
+  test_get_board_sections ();
+  test_create_board_section ();
+  test_post_single_with_section_id ();
+  test_post_single_omits_section_id_when_empty ();
   print_endline "\n=== All tests passed! ===\n"
