@@ -731,7 +731,7 @@ let test_authorization_header () =
            | [] -> failwith "No requests made")
       | Error e -> failwith ("Authorization header test failed: " ^ Error_types.error_to_string e))
 
-(** Test: Account analytics request contract (v20 insights endpoint) *)
+(** Test: Account analytics request contract (v21 insights endpoint) *)
 let test_account_analytics_request_contract () =
   Mock_config.reset ();
 
@@ -760,12 +760,12 @@ let test_account_analytics_request_contract () =
               assert (headers = []);
               assert (body = "");
               assert (url =
-                "https://graph.facebook.com/v20.0/12345/insights?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views&period=day&since=2024-01-01&until=2024-01-07&access_token=acct_token");
+                "https://graph.facebook.com/v21.0/12345/insights?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views&period=day&since=2024-01-01&until=2024-01-07&access_token=acct_token");
               print_endline "✓ Account analytics request contract"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Account analytics contract test failed: " ^ Error_types.error_to_string e))
 
-(** Test: Post analytics request contract (v20 insights endpoint) *)
+(** Test: Post analytics request contract (v21 insights endpoint) *)
 let test_post_analytics_request_contract () =
   Mock_config.reset ();
 
@@ -791,7 +791,7 @@ let test_post_analytics_request_contract () =
               assert (headers = []);
               assert (body = "");
               assert (url =
-                "https://graph.facebook.com/v20.0/12345_67890/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
+                "https://graph.facebook.com/v21.0/12345_67890/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
               print_endline "✓ Post analytics request contract"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Post analytics contract test failed: " ^ Error_types.error_to_string e))
@@ -921,7 +921,7 @@ let test_canonical_analytics_adapters () =
 let test_analytics_network_error_redacts_query_token () =
   Mock_config.reset ();
   Mock_http.set_errors
-    [ "GET https://graph.facebook.com/v20.0/123/insights?access_token=secret_token_123 failed" ];
+    [ "GET https://graph.facebook.com/v21.0/123/insights?access_token=secret_token_123 failed" ];
 
   Facebook.get_account_analytics
     ~id:"123"
@@ -939,7 +939,7 @@ let test_analytics_network_error_redacts_query_token () =
       | Ok _ -> failwith "Expected network error"
       | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
 
-(** Test: Version policy guard - analytics remain pinned to v20 while OAuth uses v21 *)
+(** Test: Version policy guard - analytics and OAuth both use v21 *)
 let test_graph_version_policy_guard () =
   Mock_config.reset ();
   Mock_config.set_env "FACEBOOK_APP_ID" "app_123";
@@ -965,8 +965,8 @@ let test_graph_version_policy_guard () =
   (match requests with
    | [ ("GET", account_url, _, _); ("GET", post_url, _, _) ] ->
        assert (string_contains !oauth_url "/v21.0/dialog/oauth");
-       assert (string_contains account_url "graph.facebook.com/v20.0/");
-       assert (string_contains post_url "graph.facebook.com/v20.0/");
+       assert (string_contains account_url "graph.facebook.com/v21.0/");
+       assert (string_contains post_url "graph.facebook.com/v21.0/");
        print_endline "✓ Graph version policy guard"
    | _ -> failwith "Expected two analytics requests for version policy guard")
 
@@ -2379,6 +2379,230 @@ let test_video_media_validation () =
    | Error _ -> print_endline "✓ Invalid URL rejected"
    | Ok () -> failwith "Invalid URL should fail")
 
+(** Test: Post comment *)
+let test_post_comment () =
+  Mock_config.reset ();
+
+  let response_body = {|{"id": "12345_67890"}|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.post_comment
+    ~post_id:"12345"
+    ~access_token:"test_token"
+    ~message:"Great post!"
+    (function
+      | Ok response ->
+          assert (string_contains response.body "12345_67890");
+          (* Verify the request went to the right endpoint *)
+          let requests = !Mock_http.requests in
+          (match requests with
+          | (method_, url, _, body) :: _ ->
+              assert (method_ = "POST");
+              assert (string_contains url "12345/comments");
+              assert (string_contains body "message");
+              assert (string_contains body "Great");
+              print_endline "✓ Post comment"
+          | [] -> failwith "No requests made")
+      | Error e -> failwith ("Post comment failed: " ^ Error_types.error_to_string e))
+
+(** Test: Get comments *)
+let test_get_comments () =
+  Mock_config.reset ();
+
+  let response_body = {|{
+    "data": [
+      {
+        "id": "comment_1",
+        "message": "Nice!",
+        "created_time": "2024-01-15T10:00:00+0000",
+        "from": {"name": "Alice", "id": "user_1"}
+      },
+      {
+        "id": "comment_2",
+        "message": "Love it!",
+        "created_time": "2024-01-15T11:00:00+0000",
+        "from": {"name": "Bob", "id": "user_2"}
+      }
+    ]
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.get_comments
+    ~post_id:"12345"
+    ~access_token:"test_token"
+    (function
+      | Ok comments ->
+          assert (List.length comments = 2);
+          let c1 = List.hd comments in
+          assert (c1.comment_id = "comment_1");
+          assert (c1.comment_message = "Nice!");
+          assert (c1.comment_created_time = Some "2024-01-15T10:00:00+0000");
+          assert (c1.comment_from = Some "Alice");
+          let c2 = List.nth comments 1 in
+          assert (c2.comment_id = "comment_2");
+          assert (c2.comment_message = "Love it!");
+          assert (c2.comment_from = Some "Bob");
+          (* Verify the request URL *)
+          let requests = !Mock_http.requests in
+          (match requests with
+          | (method_, url, _, _) :: _ ->
+              assert (method_ = "GET");
+              assert (string_contains url "12345/comments");
+              assert (string_contains url "fields=");
+              print_endline "✓ Get comments"
+          | [] -> failwith "No requests made")
+      | Error e -> failwith ("Get comments failed: " ^ Error_types.error_to_string e))
+
+(** Test: Post with link *)
+let test_post_with_link () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page123";
+
+  Mock_http.set_response { status = 200; body = {|{"id": "post_link_123"}|}; headers = [] };
+
+  Facebook.post_single
+    ~account_id:"test_account"
+    ~text:"Check out this article!"
+    ~media_urls:[]
+    ~link:"https://example.com/article"
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "post_link_123");
+        (* Verify the request body contains the link parameter *)
+        let requests = !Mock_http.requests in
+        let feed_request =
+          List.find_opt (fun (m, u, _, _) -> m = "POST" && string_contains u "/feed") requests
+        in
+        (match feed_request with
+        | Some (_, _, _, body) ->
+            assert (string_contains body "link=");
+            assert (string_contains body "example.com");
+            print_endline "✓ Post with link"
+        | None -> failwith "Feed request not found"))
+      (fun err -> failwith ("Post with link failed: " ^ err)))
+
+(** Test: Post with scheduled publish time *)
+let test_post_with_scheduled_publish_time () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    token_type = "Bearer";
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page123";
+
+  Mock_http.set_response { status = 200; body = {|{"id": "scheduled_post_123"}|}; headers = [] };
+
+  Facebook.post_single
+    ~account_id:"test_account"
+    ~text:"This is a scheduled post"
+    ~media_urls:[]
+    ~scheduled_publish_time:1735689600
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "scheduled_post_123");
+        (* Verify the request body contains scheduling parameters *)
+        let requests = !Mock_http.requests in
+        let feed_request =
+          List.find_opt (fun (m, u, _, _) -> m = "POST" && string_contains u "/feed") requests
+        in
+        (match feed_request with
+        | Some (_, _, _, body) ->
+            assert (string_contains body "scheduled_publish_time=1735689600");
+            assert (string_contains body "published=false");
+            print_endline "✓ Post with scheduled publish time"
+        | None -> failwith "Feed request not found"))
+      (fun err -> failwith ("Scheduled post failed: " ^ err)))
+
+(** Test: Get page info *)
+let test_get_page_info () =
+  Mock_config.reset ();
+
+  let response_body = {|{
+    "id": "page_123",
+    "name": "My Awesome Page",
+    "about": "This is a test page",
+    "fan_count": 5000,
+    "followers_count": 4500
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.get_page_info
+    ~page_id:"page_123"
+    ~access_token:"test_token"
+    (function
+      | Ok detail ->
+          assert (detail.page_detail_id = "page_123");
+          assert (detail.page_detail_name = Some "My Awesome Page");
+          assert (detail.page_detail_about = Some "This is a test page");
+          assert (detail.page_detail_fan_count = Some 5000);
+          assert (detail.page_detail_followers_count = Some 4500);
+          (* Verify the request URL contains proper fields *)
+          let requests = !Mock_http.requests in
+          (match requests with
+          | (method_, url, _, _) :: _ ->
+              assert (method_ = "GET");
+              assert (string_contains url "page_123");
+              assert (string_contains url "fields=");
+              assert (string_contains url "fan_count");
+              assert (string_contains url "followers_count");
+              print_endline "✓ Get page info"
+          | [] -> failwith "No requests made")
+      | Error e -> failwith ("Get page info failed: " ^ Error_types.error_to_string e))
+
+(** Test: Get page info with partial fields *)
+let test_get_page_info_partial () =
+  Mock_config.reset ();
+
+  let response_body = {|{
+    "id": "page_456",
+    "name": "Minimal Page"
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.get_page_info
+    ~page_id:"page_456"
+    ~access_token:"test_token"
+    (function
+      | Ok detail ->
+          assert (detail.page_detail_id = "page_456");
+          assert (detail.page_detail_name = Some "Minimal Page");
+          assert (detail.page_detail_about = None);
+          assert (detail.page_detail_fan_count = None);
+          assert (detail.page_detail_followers_count = None);
+          print_endline "✓ Get page info with partial fields"
+      | Error e -> failwith ("Get page info partial failed: " ^ Error_types.error_to_string e))
+
 (** Run all tests *)
 let () =
   print_endline "\n=== Facebook Provider Tests ===\n";
@@ -2462,5 +2686,17 @@ let () =
   test_reel_caption_validation ();
   test_video_media_validation ();
   test_rate_limit_error_code_80001 ();
-  
-  print_endline "\n=== All 69 tests passed! ===\n"
+
+  print_endline "\n--- Comment Management Tests ---";
+  test_post_comment ();
+  test_get_comments ();
+
+  print_endline "\n--- Link Posts and Scheduling Tests ---";
+  test_post_with_link ();
+  test_post_with_scheduled_publish_time ();
+
+  print_endline "\n--- Page Info Tests ---";
+  test_get_page_info ();
+  test_get_page_info_partial ();
+
+  print_endline "\n=== All 75 tests passed! ===\n"

@@ -1429,7 +1429,7 @@ module Make (Config : CONFIG) = struct
              download but before upload. Facebook limits: 4MB images, 1GB video.
              Default: false
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?link ?scheduled_publish_time ?(validate_media_before_upload=false) on_result =
     let media_count = List.length media_urls in
     
     (* Validate content first *)
@@ -1506,11 +1506,19 @@ module Make (Config : CONFIG) = struct
                           ) photo_ids
                         in
                         
-                        let params = 
+                        let params =
                           [
                             ("message", [text]);
                           ] @
                           attached_media_params @
+                          (* Add link parameter for link posts *)
+                          (match link with
+                           | Some l -> [("link", [l])]
+                           | None -> []) @
+                          (* Add scheduled publishing parameters *)
+                          (match scheduled_publish_time with
+                           | Some t -> [("scheduled_publish_time", [string_of_int t]); ("published", ["false"])]
+                           | None -> []) @
                           (* Add app secret proof *)
                           (match compute_app_secret_proof ~access_token:token with
                            | Some proof -> [("appsecret_proof", [proof])]
@@ -1916,7 +1924,7 @@ module Make (Config : CONFIG) = struct
   (** Account analytics via page insights endpoint.
 
       Contract:
-      GET https://graph.facebook.com/v20.0/{id}/insights
+      GET https://graph.facebook.com/v21.0/{id}/insights
           ?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views
           &period=day
           &since=...
@@ -1926,7 +1934,7 @@ module Make (Config : CONFIG) = struct
   let get_account_analytics ~id ~since ~until ~access_token on_result =
     let url =
       Printf.sprintf
-        "https://graph.facebook.com/v20.0/%s/insights?metric=%s&period=day&since=%s&until=%s&access_token=%s"
+        "https://graph.facebook.com/v21.0/%s/insights?metric=%s&period=day&since=%s&until=%s&access_token=%s"
         id
         account_analytics_metrics
         since
@@ -1979,14 +1987,14 @@ module Make (Config : CONFIG) = struct
   (** Post analytics via post insights endpoint.
 
       Contract:
-      GET https://graph.facebook.com/v20.0/{post_id}/insights
+      GET https://graph.facebook.com/v21.0/{post_id}/insights
           ?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type
           &access_token=...
   *)
   let get_post_analytics ~post_id ~access_token on_result =
     let url =
       Printf.sprintf
-        "https://graph.facebook.com/v20.0/%s/insights?metric=%s&access_token=%s"
+        "https://graph.facebook.com/v21.0/%s/insights?metric=%s&access_token=%s"
         post_id
         post_analytics_metrics
         access_token
@@ -2227,4 +2235,92 @@ module Make (Config : CONFIG) = struct
               ~status_code:response.status
               ~response_body:response.body)))
         (fun err -> on_result (Error (Error_types.Internal_error err)))
+
+  (** {1 Comment Management} *)
+
+  (** Comment on a post *)
+  type comment = {
+    comment_id : string;
+    comment_message : string;
+    comment_created_time : string option;
+    comment_from : string option;
+  }
+
+  (** Post a comment on a post
+
+      @param post_id The ID of the post to comment on
+      @param access_token Page access token
+      @param message The comment text
+      @param on_result Continuation receiving Ok response or Error
+  *)
+  let post_comment ~post_id ~access_token ~message on_result =
+    let path = Printf.sprintf "%s/comments" post_id in
+    let params = [("message", [message])] in
+    post ~path ~access_token ~params on_result
+
+  (** Get comments on a post
+
+      @param post_id The ID of the post to read comments from
+      @param access_token Page access token
+      @param on_result Continuation receiving Ok with list of comments or Error
+  *)
+  let get_comments ~post_id ~access_token on_result =
+    let path = Printf.sprintf "%s/comments" post_id in
+    get ~path ~access_token ~fields:["id"; "message"; "created_time"; "from"]
+      (function
+        | Ok response ->
+            (try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let data = json |> member "data" |> to_list in
+              let comments = List.map (fun item ->
+                {
+                  comment_id = item |> member "id" |> to_string;
+                  comment_message = item |> member "message" |> to_string_option |> Option.value ~default:"";
+                  comment_created_time = item |> member "created_time" |> to_string_option;
+                  comment_from =
+                    (try Some (item |> member "from" |> member "name" |> to_string)
+                     with _ -> None);
+                }
+              ) data in
+              on_result (Ok comments)
+            with e ->
+              on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse comments response: %s" (Printexc.to_string e)))))
+        | Error e -> on_result (Error e))
+
+  (** {1 Page Info} *)
+
+  (** Page detail information *)
+  type page_detail = {
+    page_detail_id : string;
+    page_detail_name : string option;
+    page_detail_about : string option;
+    page_detail_fan_count : int option;
+    page_detail_followers_count : int option;
+  }
+
+  (** Fetch page info
+
+      @param page_id The Facebook Page ID
+      @param access_token Page access token
+      @param on_result Continuation receiving Ok with page detail or Error
+  *)
+  let get_page_info ~page_id ~access_token on_result =
+    get ~path:page_id ~access_token ~fields:["id"; "name"; "about"; "fan_count"; "followers_count"]
+      (function
+        | Ok response ->
+            (try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let detail = {
+                page_detail_id = json |> member "id" |> to_string;
+                page_detail_name = json |> member "name" |> to_string_option;
+                page_detail_about = json |> member "about" |> to_string_option;
+                page_detail_fan_count = json |> member "fan_count" |> to_int_option;
+                page_detail_followers_count = json |> member "followers_count" |> to_int_option;
+              } in
+              on_result (Ok detail)
+            with e ->
+              on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse page info response: %s" (Printexc.to_string e)))))
+        | Error e -> on_result (Error e))
 end
