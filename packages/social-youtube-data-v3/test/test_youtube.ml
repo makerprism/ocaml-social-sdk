@@ -905,16 +905,358 @@ let test_thread_youtube_single_post () =
       | Error_types.Failure err ->
           failwith ("Thread failed: " ^ Error_types.error_to_string err))
 
+(** Test: yt-analytics.readonly scope is included *)
+let test_analytics_scope () =
+  assert (List.mem "https://www.googleapis.com/auth/yt-analytics.readonly"
+    Social_youtube_data_v3.OAuth.Scopes.all);
+  assert (List.mem "https://www.googleapis.com/auth/yt-analytics.readonly"
+    Social_youtube_data_v3.OAuth.Scopes.analytics);
+  let ops_scopes = Social_youtube_data_v3.OAuth.Scopes.for_operations
+    [Social_youtube_data_v3.OAuth.Scopes.Read_analytics] in
+  assert (List.mem "https://www.googleapis.com/auth/yt-analytics.readonly" ops_scopes);
+  print_endline "PASS yt-analytics.readonly scope present"
+
+(** Test: Scheduled publishing sets publishAt and forces privacy to private *)
+let test_scheduled_publishing () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  (* Mock responses: download, init, upload *)
+  Mock_http.set_responses [
+    { status = 200; body = "vid"; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/x")] };
+    { status = 200; body = {|{"id":"sched_1"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Scheduled video"
+    ~media_urls:["https://example.com/v.mp4"]
+    ~publish_at:"2026-03-01T12:00:00Z"
+    ~privacy_status:"public"
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid ->
+          assert (vid = "sched_1");
+          (* Check that the init POST body contains publishAt and private *)
+          let requests = List.rev !Mock_http.requests in
+          let init_req = List.nth requests 1 in
+          let (_, _, _, body) = init_req in
+          assert (string_contains body "publishAt");
+          assert (string_contains body "2026-03-01T12:00:00Z");
+          assert (string_contains body "\"privacyStatus\":\"private\"");
+          print_endline "PASS scheduled publishing sets publishAt and forces private"
+      | Error_types.Failure err ->
+          failwith ("Scheduled publishing failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for scheduled publishing")
+
+(** Test: notifySubscribers=false is sent as query parameter *)
+let test_notify_subscribers_false () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = "vid"; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/y")] };
+    { status = 200; body = {|{"id":"ns_1"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Silent video"
+    ~media_urls:["https://example.com/v.mp4"]
+    ~notify_subscribers:false
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid ->
+          assert (vid = "ns_1");
+          let requests = List.rev !Mock_http.requests in
+          let (_, init_url, _, _) = List.nth requests 1 in
+          assert (string_contains init_url "notifySubscribers=false");
+          print_endline "PASS notifySubscribers=false in upload URL"
+      | Error_types.Failure err ->
+          failwith ("notify_subscribers test failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for notify_subscribers")
+
+(** Test: notifySubscribers defaults to true *)
+let test_notify_subscribers_default () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = "vid"; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/z")] };
+    { status = 200; body = {|{"id":"nsd_1"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Default notify"
+    ~media_urls:["https://example.com/v.mp4"]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success _ ->
+          let requests = List.rev !Mock_http.requests in
+          let (_, init_url, _, _) = List.nth requests 1 in
+          assert (string_contains init_url "notifySubscribers=true");
+          print_endline "PASS notifySubscribers defaults to true"
+      | Error_types.Failure err ->
+          failwith ("notify_subscribers default test failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for notify_subscribers default")
+
+(** Test: update_video sends PUT to /youtube/v3/videos *)
+let test_update_video () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id":"vid_1"}|}; headers = [] };
+  ];
+
+  YouTube.update_video
+    ~account_id:"test_account"
+    ~video_id:"vid_1"
+    ~title:"New Title"
+    ~description:"New Description"
+    ~tags:["tag1"; "tag2"]
+    ~privacy_status:"unlisted"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [("PUT", url, headers, body)] ->
+               assert (string_contains url "/youtube/v3/videos?");
+               assert (string_contains url "part=");
+               assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
+               assert (List.assoc_opt "Content-Type" headers = Some "application/json");
+               assert (string_contains body "\"id\":\"vid_1\"");
+               assert (string_contains body "\"title\":\"New Title\"");
+               assert (string_contains body "\"description\":\"New Description\"");
+               assert (string_contains body "\"privacyStatus\":\"unlisted\"");
+               assert (string_contains body "tag1");
+               print_endline "PASS update_video sends correct PUT request"
+           | _ -> failwith "Expected exactly one PUT request for update_video")
+      | Error err ->
+          failwith ("update_video failed: " ^ Error_types.error_to_string err))
+
+(** Test: update_video with no fields returns error *)
+let test_update_video_no_fields () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  YouTube.update_video
+    ~account_id:"test_account"
+    ~video_id:"vid_1"
+    (function
+      | Error (Error_types.Internal_error msg) ->
+          assert (string_contains msg "No fields to update");
+          print_endline "PASS update_video with no fields returns error"
+      | Ok () -> failwith "update_video with no fields should fail"
+      | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: list_playlists sends correct GET request *)
+let test_list_playlists () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  let response_body = {|{
+    "items": [
+      {"id": "PL_abc", "snippet": {"title": "My Playlist"}}
+    ]
+  }|} in
+  Mock_http.set_responses [
+    { status = 200; body = response_body; headers = [] };
+  ];
+
+  YouTube.list_playlists ~account_id:"test_account"
+    (function
+      | Ok json ->
+          let open Yojson.Basic.Util in
+          let items = json |> member "items" |> to_list in
+          assert (List.length items = 1);
+          let first = List.hd items in
+          assert (first |> member "id" |> to_string = "PL_abc");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [("GET", url, headers, _)] ->
+               assert (string_contains url "/youtube/v3/playlists?");
+               assert (string_contains url "mine=true");
+               assert (string_contains url "snippet");
+               assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
+               print_endline "PASS list_playlists sends correct GET request"
+           | _ -> failwith "Expected one GET request for list_playlists")
+      | Error err ->
+          failwith ("list_playlists failed: " ^ Error_types.error_to_string err))
+
+(** Test: create_playlist sends correct POST request *)
+let test_create_playlist () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "PL_new_123"}|}; headers = [] };
+  ];
+
+  YouTube.create_playlist
+    ~account_id:"test_account"
+    ~title:"Test Playlist"
+    ~description:"A test playlist"
+    ~privacy_status:"public"
+    (function
+      | Ok playlist_id ->
+          assert (playlist_id = "PL_new_123");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [("POST", url, headers, body)] ->
+               assert (string_contains url "/youtube/v3/playlists?");
+               assert (string_contains url "part=snippet");
+               assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
+               assert (List.assoc_opt "Content-Type" headers = Some "application/json");
+               assert (string_contains body "\"title\":\"Test Playlist\"");
+               assert (string_contains body "\"description\":\"A test playlist\"");
+               assert (string_contains body "\"privacyStatus\":\"public\"");
+               print_endline "PASS create_playlist sends correct POST request"
+           | _ -> failwith "Expected one POST request for create_playlist")
+      | Error err ->
+          failwith ("create_playlist failed: " ^ Error_types.error_to_string err))
+
+(** Test: add_to_playlist sends correct POST request *)
+let test_add_to_playlist () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "PLI_item_42"}|}; headers = [] };
+  ];
+
+  YouTube.add_to_playlist
+    ~account_id:"test_account"
+    ~playlist_id:"PL_abc"
+    ~video_id:"vid_xyz"
+    (function
+      | Ok item_id ->
+          assert (item_id = "PLI_item_42");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [("POST", url, headers, body)] ->
+               assert (string_contains url "/youtube/v3/playlistItems?");
+               assert (string_contains url "part=snippet");
+               assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
+               assert (string_contains body "\"playlistId\":\"PL_abc\"");
+               assert (string_contains body "\"videoId\":\"vid_xyz\"");
+               assert (string_contains body "youtube#video");
+               print_endline "PASS add_to_playlist sends correct POST request"
+           | _ -> failwith "Expected one POST request for add_to_playlist")
+      | Error err ->
+          failwith ("add_to_playlist failed: " ^ Error_types.error_to_string err))
+
+(** Test: remove_from_playlist sends correct DELETE request *)
+let test_remove_from_playlist () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 204; body = ""; headers = [] };
+  ];
+
+  YouTube.remove_from_playlist
+    ~account_id:"test_account"
+    ~playlist_item_id:"PLI_item_42"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [("DELETE", url, headers, _)] ->
+               assert (string_contains url "/youtube/v3/playlistItems?");
+               assert (string_contains url "id=PLI_item_42");
+               assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
+               print_endline "PASS remove_from_playlist sends correct DELETE request"
+           | _ -> failwith "Expected one DELETE request for remove_from_playlist")
+      | Error err ->
+          failwith ("remove_from_playlist failed: " ^ Error_types.error_to_string err))
+
+(** Test: Upload recovery queries byte offset and resumes *)
+let test_upload_recovery () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  let video_data = String.make 100 'V' in
+  (* Responses: download, init, upload fails with 503, resume query returns 308 with Range, resume upload succeeds *)
+  Mock_http.set_responses [
+    { status = 200; body = video_data; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/resume")] };
+    { status = 503; body = "Service Unavailable"; headers = [] };
+    (* Resume query: 308 with range indicating 50 bytes received *)
+    { status = 308; body = ""; headers = [("range", "bytes=0-49")] };
+    (* Resume upload succeeds *)
+    { status = 200; body = {|{"id": "recovered_vid"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Recoverable upload"
+    ~media_urls:["https://example.com/v.mp4"]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid ->
+          assert (vid = "recovered_vid");
+          let requests = List.rev !Mock_http.requests in
+          (* Expect: GET download, POST init, PUT upload (fails), PUT resume query, PUT resume upload *)
+          assert (List.length requests = 5);
+          let (method4, _, headers4, _) = List.nth requests 3 in
+          assert (method4 = "PUT");
+          (* Resume query sends Content-Range: bytes */total *)
+          let cr4 = List.assoc_opt "Content-Range" headers4 in
+          assert (cr4 = Some ("bytes */" ^ string_of_int (String.length video_data)));
+          let (method5, _, headers5, body5) = List.nth requests 4 in
+          assert (method5 = "PUT");
+          (* Resume upload sends the remaining 50 bytes *)
+          assert (String.length body5 = 50);
+          let cr5 = List.assoc_opt "Content-Range" headers5 in
+          assert (cr5 = Some "bytes 50-99/100");
+          print_endline "PASS upload recovery queries byte offset and resumes"
+      | Error_types.Failure err ->
+          failwith ("Upload recovery failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for upload recovery")
+
+(** Test: Upload recovery on network error *)
+let test_upload_recovery_network_error () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  let video_data = String.make 80 'D' in
+  (* download, init, upload network error (no response queued), resume query 200 means already done *)
+  Mock_http.set_responses [
+    { status = 200; body = video_data; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/netfail")] };
+    (* No response for initial upload -> triggers on_error -> attempt_resume *)
+    (* Resume query returns 200 meaning upload was complete *)
+    { status = 200; body = {|{"id": "net_recovered"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Network fail upload"
+    ~media_urls:["https://example.com/v.mp4"]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid ->
+          assert (vid = "net_recovered");
+          print_endline "PASS upload recovery on network error"
+      | Error_types.Failure err ->
+          failwith ("Network recovery failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for network recovery")
+
 (** Run all tests *)
 let () =
   print_endline "\n=== YouTube Provider Tests ===\n";
-  
+
   (* OAuth tests *)
   print_endline "--- OAuth Tests ---";
   test_oauth_url ();
   test_token_exchange ();
   test_token_refresh ();
-  
+
   (* Validation tests *)
   print_endline "";
   print_endline "--- Validation Tests ---";
@@ -935,7 +1277,7 @@ let () =
   test_canonical_analytics_adapters ();
   test_build_thumbnail_upload_request_contract ();
   test_upload_thumbnail_contract ();
-  
+
   (* Video upload tests *)
   print_endline "";
   print_endline "--- Video Upload Tests ---";
@@ -946,7 +1288,38 @@ let () =
   test_video_privacy_status ();
   test_video_category ();
   test_thread_youtube_single_post ();
-  
+
+  (* New feature tests *)
+  print_endline "";
+  print_endline "--- Scopes Tests ---";
+  test_analytics_scope ();
+
+  print_endline "";
+  print_endline "--- Scheduled Publishing Tests ---";
+  test_scheduled_publishing ();
+
+  print_endline "";
+  print_endline "--- Notify Subscribers Tests ---";
+  test_notify_subscribers_false ();
+  test_notify_subscribers_default ();
+
+  print_endline "";
+  print_endline "--- Video Update Tests ---";
+  test_update_video ();
+  test_update_video_no_fields ();
+
+  print_endline "";
+  print_endline "--- Playlist Management Tests ---";
+  test_list_playlists ();
+  test_create_playlist ();
+  test_add_to_playlist ();
+  test_remove_from_playlist ();
+
+  print_endline "";
+  print_endline "--- Upload Recovery Tests ---";
+  test_upload_recovery ();
+  test_upload_recovery_network_error ();
+
   print_endline "";
   print_endline "=== All tests passed! ===";
   print_endline "";
@@ -955,5 +1328,11 @@ let () =
   print_endline "  - Content validation (4 tests)";
   print_endline "  - Analytics + reports + thumbnail contracts (8 tests)";
   print_endline "  - Video upload/resumable (7 tests)";
+  print_endline "  - Scopes (1 test)";
+  print_endline "  - Scheduled publishing (1 test)";
+  print_endline "  - Notify subscribers (2 tests)";
+  print_endline "  - Video update (2 tests)";
+  print_endline "  - Playlist management (4 tests)";
+  print_endline "  - Upload recovery (2 tests)";
   print_endline "";
-  print_endline "Total: 22 test functions"
+  print_endline "Total: 34 test functions"

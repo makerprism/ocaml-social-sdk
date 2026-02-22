@@ -36,6 +36,11 @@ module OAuth = struct
     let read = [
       "https://www.googleapis.com/auth/youtube.readonly";
     ]
+
+    (** Scope for accessing YouTube Analytics data *)
+    let analytics = [
+      "https://www.googleapis.com/auth/yt-analytics.readonly";
+    ]
     
     (** Scopes required for video upload *)
     let write = [
@@ -49,23 +54,27 @@ module OAuth = struct
       "https://www.googleapis.com/auth/youtube.upload";
       "https://www.googleapis.com/auth/youtube.readonly";
       "https://www.googleapis.com/auth/youtube.force-ssl";
+      "https://www.googleapis.com/auth/yt-analytics.readonly";
     ]
     
     (** Operations that can be performed with YouTube API *)
-    type operation = 
+    type operation =
       | Upload_video
       | Read_channel
       | Read_videos
       | Manage_videos
-    
+      | Read_analytics
+
     (** Get scopes required for specific operations *)
     let for_operations ops =
       let needs_upload = List.exists (fun o -> o = Upload_video) ops in
       let needs_read = List.exists (fun o -> o = Read_channel || o = Read_videos) ops in
       let needs_manage = List.exists (fun o -> o = Manage_videos) ops in
+      let needs_analytics = List.exists (fun o -> o = Read_analytics) ops in
       (if needs_manage then ["https://www.googleapis.com/auth/youtube"] else []) @
       (if needs_upload then ["https://www.googleapis.com/auth/youtube.upload"] else []) @
-      (if needs_read && not needs_manage then ["https://www.googleapis.com/auth/youtube.readonly"] else [])
+      (if needs_read && not needs_manage then ["https://www.googleapis.com/auth/youtube.readonly"] else []) @
+      (if needs_analytics then ["https://www.googleapis.com/auth/yt-analytics.readonly"] else [])
   end
   
   (** Platform metadata for YouTube OAuth *)
@@ -1260,12 +1269,16 @@ module Make (Config : CONFIG) = struct
         (fun err -> on_result (Error err))
   
   (** Upload video to YouTube Shorts
-      
-      @param validate_media_before_upload When true, validates video file size after 
+
+      @param validate_media_before_upload When true, validates video file size after
              download but before upload. Practical limit: 2GB.
              Default: false
+      @param publish_at Optional ISO 8601 timestamp for scheduled publishing.
+             When set, privacy is automatically forced to "private".
+      @param notify_subscribers When false, suppresses subscriber notifications.
+             Default: true
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(title="") ?(description="") ?(privacy_status="public") ?(tags=[]) ?(made_for_kids=false) ?(category_id="22") ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(title="") ?(description="") ?(privacy_status="public") ?(tags=[]) ?(made_for_kids=false) ?(category_id="22") ?(validate_media_before_upload=false) ?publish_at ?(notify_subscribers=true) on_result =
     let _ = alt_texts in (* YouTube doesn't support alt text for videos *)
     let media_count = List.length media_urls in
     match validate_post ~text ~media_count () with
@@ -1323,6 +1336,21 @@ module Make (Config : CONFIG) = struct
                     else [`String "shorts"; `String "short"]
                   in
 
+                  (* When publish_at is set, force privacy to "private" per YouTube API requirement *)
+                  let effective_privacy = match publish_at with
+                    | Some _ -> "private"
+                    | None -> privacy_status
+                  in
+
+                  (* Build status fields, optionally including publishAt *)
+                  let status_fields =
+                    [("privacyStatus", `String effective_privacy);
+                     ("selfDeclaredMadeForKids", `Bool made_for_kids)]
+                    @ (match publish_at with
+                       | Some ts -> [("publishAt", `String ts)]
+                       | None -> [])
+                  in
+
                   (* Step 1: Initialize resumable upload with metadata *)
                   let video_metadata = `Assoc [
                     ("snippet", `Assoc [
@@ -1331,22 +1359,70 @@ module Make (Config : CONFIG) = struct
                       ("tags", `List resolved_tags);
                       ("categoryId", `String category_id);
                     ]);
-                    ("status", `Assoc [
-                      ("privacyStatus", `String privacy_status);
-                      ("selfDeclaredMadeForKids", `Bool made_for_kids);
-                    ]);
+                    ("status", `Assoc status_fields);
                   ] in
-                  
-                  let init_url = youtube_upload_base ^ "/videos?uploadType=resumable&part=snippet,status" in
+
+                  let notify_param = if notify_subscribers then "true" else "false" in
+                  let init_url = youtube_upload_base ^ "/videos?uploadType=resumable&part=snippet,status&notifySubscribers=" ^ notify_param in
                   let init_headers = [
                     ("Authorization", "Bearer " ^ access_token);
                     ("Content-Type", "application/json");
                     ("X-Upload-Content-Length", string_of_int (String.length video_data));
                     ("X-Upload-Content-Type", content_type);
                   ] in
-                  
+
                   let metadata_str = Yojson.Basic.to_string video_metadata in
-                  
+
+                  let parse_upload_response upload_response =
+                    if upload_response.status >= 200 && upload_response.status < 300 then
+                      try
+                        let open Yojson.Basic.Util in
+                        let json = Yojson.Basic.from_string upload_response.body in
+                        let video_id = json |> member "id" |> to_string in
+                        on_result (Error_types.Success video_id)
+                      with _e ->
+                        on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse response: %s" upload_response.body)))
+                    else
+                      on_result (Error_types.Failure (parse_api_error ~status_code:upload_response.status ~response_body:upload_response.body))
+                  in
+
+                  (* H5: Resumable upload recovery - query upload URI for byte offset and resume *)
+                  let attempt_resume upload_url =
+                    let resume_headers = [
+                      ("Content-Range", "bytes */" ^ string_of_int (String.length video_data));
+                    ] in
+                    Config.Http.put ~headers:resume_headers ~body:"" upload_url
+                      (fun resume_response ->
+                        if resume_response.status = 308 then
+                          (* Server reports partial upload via Range header *)
+                          let received =
+                            match List.assoc_opt "range" resume_response.headers with
+                            | Some range_hdr ->
+                                (try
+                                   let dash = String.index range_hdr '-' in
+                                   int_of_string (String.sub range_hdr (dash + 1) (String.length range_hdr - dash - 1)) + 1
+                                 with _ -> 0)
+                            | None -> 0
+                          in
+                          let total = String.length video_data in
+                          let remaining = total - received in
+                          let remaining_data = String.sub video_data received remaining in
+                          let resume_upload_headers = [
+                            ("Content-Type", content_type);
+                            ("Content-Length", string_of_int remaining);
+                            ("Content-Range", Printf.sprintf "bytes %d-%d/%d" received (total - 1) total);
+                          ] in
+                          Config.Http.put ~headers:resume_upload_headers ~body:remaining_data upload_url
+                            parse_upload_response
+                            (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+                        else if resume_response.status >= 200 && resume_response.status < 300 then
+                          (* Upload was already complete *)
+                          parse_upload_response resume_response
+                        else
+                          on_result (Error_types.Failure (parse_api_error ~status_code:resume_response.status ~response_body:resume_response.body)))
+                      (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+                  in
+
                   Config.Http.post ~headers:init_headers ~body:metadata_str init_url
                     (fun init_response ->
                       if init_response.status >= 200 && init_response.status < 300 then
@@ -1358,20 +1434,19 @@ module Make (Config : CONFIG) = struct
                               ("Content-Type", content_type);
                               ("Content-Length", string_of_int (String.length video_data));
                             ] in
-                            
+
                             Config.Http.put ~headers:upload_headers ~body:video_data upload_url
                               (fun upload_response ->
                                 if upload_response.status >= 200 && upload_response.status < 300 then
-                                  try
-                                    let open Yojson.Basic.Util in
-                                    let json = Yojson.Basic.from_string upload_response.body in
-                                    let video_id = json |> member "id" |> to_string in
-                                    on_result (Error_types.Success video_id)
-                                  with _e ->
-                                    on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse response: %s" upload_response.body)))
+                                  parse_upload_response upload_response
+                                else if upload_response.status >= 500 || upload_response.status = 408 then
+                                  (* Server error or timeout - attempt resumable recovery *)
+                                  attempt_resume upload_url
                                 else
                                   on_result (Error_types.Failure (parse_api_error ~status_code:upload_response.status ~response_body:upload_response.body)))
-                              (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+                              (fun _err ->
+                                (* Network error during upload - attempt resumable recovery *)
+                                attempt_resume upload_url)
                         | None ->
                             on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "No upload URL in response: %s" init_response.body)))
                       else
@@ -1520,6 +1595,186 @@ module Make (Config : CONFIG) = struct
         on_error
     )
   
+  (** Update video metadata via PUT /youtube/v3/videos
+
+      @param account_id Account to authenticate as
+      @param video_id ID of the video to update
+      @param title Optional new title
+      @param description Optional new description
+      @param tags Optional new tags list
+      @param privacy_status Optional new privacy status
+      @param on_result Continuation receiving api_result
+  *)
+  let update_video ~account_id ~video_id ?title ?description ?tags ?privacy_status on_result =
+    let normalized_video_id = String.trim video_id in
+    if normalized_video_id = "" then
+      on_result (Error (Error_types.Internal_error "video_id is required"))
+    else
+      ensure_valid_token ~account_id
+        (fun access_token ->
+          let snippet_fields =
+            (match title with Some t -> [("title", `String t)] | None -> []) @
+            (match description with Some d -> [("description", `String d)] | None -> []) @
+            (match tags with Some ts -> [("tags", `List (List.map (fun t -> `String t) ts))] | None -> [])
+          in
+          let status_fields =
+            match privacy_status with Some ps -> [("privacyStatus", `String ps)] | None -> []
+          in
+          let parts = ref [] in
+          let body_fields = ref [("id", `String normalized_video_id)] in
+          if snippet_fields <> [] then begin
+            parts := "snippet" :: !parts;
+            body_fields := ("snippet", `Assoc snippet_fields) :: !body_fields
+          end;
+          if status_fields <> [] then begin
+            parts := "status" :: !parts;
+            body_fields := ("status", `Assoc status_fields) :: !body_fields
+          end;
+          let part_str = String.concat "," (List.rev !parts) in
+          if part_str = "" then
+            on_result (Error (Error_types.Internal_error "No fields to update"))
+          else
+            let url = Printf.sprintf "%s/videos?part=%s" youtube_api_base part_str in
+            let body = Yojson.Basic.to_string (`Assoc (List.rev !body_fields)) in
+            let headers = [
+              ("Authorization", "Bearer " ^ access_token);
+              ("Content-Type", "application/json");
+            ] in
+            Config.Http.put ~headers ~body url
+              (fun response ->
+                if response.status >= 200 && response.status < 300 then
+                  on_result (Ok ())
+                else
+                  on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+              (fun err -> on_result (Error (Error_types.Internal_error err))))
+        (fun err -> on_result (Error err))
+
+  (** List playlists for the authenticated user's channel
+
+      @param account_id Account to authenticate as
+      @param on_result Continuation receiving api_result with playlists JSON
+  *)
+  let list_playlists ~account_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/playlists?part=snippet,contentDetails&mine=true" youtube_api_base in
+        let headers = [("Authorization", "Bearer " ^ access_token)] in
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (try
+                let json = Yojson.Basic.from_string response.body in
+                on_result (Ok json)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse playlists response: %s" (Printexc.to_string e)))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Create a new playlist
+
+      @param account_id Account to authenticate as
+      @param title Playlist title
+      @param description Optional playlist description
+      @param privacy_status Privacy status (default "private")
+      @param on_result Continuation receiving api_result with playlist id
+  *)
+  let create_playlist ~account_id ~title ?(description="") ?(privacy_status="private") on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/playlists?part=snippet,status" youtube_api_base in
+        let body = Yojson.Basic.to_string (`Assoc [
+          ("snippet", `Assoc [
+            ("title", `String title);
+            ("description", `String description);
+          ]);
+          ("status", `Assoc [
+            ("privacyStatus", `String privacy_status);
+          ]);
+        ]) in
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json");
+        ] in
+        Config.Http.post ~headers ~body url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (try
+                let open Yojson.Basic.Util in
+                let json = Yojson.Basic.from_string response.body in
+                let playlist_id = json |> member "id" |> to_string in
+                on_result (Ok playlist_id)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse create playlist response: %s" (Printexc.to_string e)))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Add a video to a playlist
+
+      @param account_id Account to authenticate as
+      @param playlist_id The playlist to add to
+      @param video_id The video to add
+      @param on_result Continuation receiving api_result with playlistItem id
+  *)
+  let add_to_playlist ~account_id ~playlist_id ~video_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/playlistItems?part=snippet" youtube_api_base in
+        let body = Yojson.Basic.to_string (`Assoc [
+          ("snippet", `Assoc [
+            ("playlistId", `String playlist_id);
+            ("resourceId", `Assoc [
+              ("kind", `String "youtube#video");
+              ("videoId", `String video_id);
+            ]);
+          ]);
+        ]) in
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json");
+        ] in
+        Config.Http.post ~headers ~body url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (try
+                let open Yojson.Basic.Util in
+                let json = Yojson.Basic.from_string response.body in
+                let item_id = json |> member "id" |> to_string in
+                on_result (Ok item_id)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse playlistItem response: %s" (Printexc.to_string e)))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Remove a video from a playlist by deleting the playlistItem
+
+      @param account_id Account to authenticate as
+      @param playlist_item_id The playlistItem ID to remove (not the video ID)
+      @param on_result Continuation receiving api_result
+  *)
+  let remove_from_playlist ~account_id ~playlist_item_id on_result =
+    let normalized_id = String.trim playlist_item_id in
+    if normalized_id = "" then
+      on_result (Error (Error_types.Internal_error "playlist_item_id is required"))
+    else
+      ensure_valid_token ~account_id
+        (fun access_token ->
+          let url = Printf.sprintf "%s/playlistItems?id=%s" youtube_api_base (Uri.pct_encode normalized_id) in
+          let headers = [("Authorization", "Bearer " ^ access_token)] in
+          Config.Http.delete ~headers url
+            (fun response ->
+              if response.status >= 200 && response.status < 300 then
+                on_result (Ok ())
+              else
+                on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+            (fun err -> on_result (Error (Error_types.Internal_error err))))
+        (fun err -> on_result (Error err))
+
   (** Validate content length *)
   let validate_content ~text =
     let len = String.length text in
