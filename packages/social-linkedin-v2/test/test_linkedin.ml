@@ -3117,10 +3117,13 @@ let test_get_post_engagement () =
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
 
   let engagement_response = {|{
-    "totalLikes": 12,
-    "totalComments": 3,
-    "totalShares": 2,
-    "totalImpressions": 100
+    "reactionSummaries": {
+      "LIKE": {"reactionType": "LIKE", "count": 10},
+      "EMPATHY": {"reactionType": "EMPATHY", "count": 2}
+    },
+    "commentSummary": {"count": 3, "topLevelCount": 2},
+    "commentsState": "OPEN",
+    "entity": "urn:li:activity:123"
   }|} in
   Mock_http.set_response { status = 200; body = engagement_response; headers = [] };
 
@@ -3129,8 +3132,8 @@ let test_get_post_engagement () =
       (fun (engagement : engagement_info) ->
         assert (engagement.like_count = Some 12);
         assert (engagement.comment_count = Some 3);
-        assert (engagement.share_count = Some 2);
-        assert (engagement.impression_count = Some 100);
+        assert (engagement.share_count = None);
+        assert (engagement.impression_count = None);
         let requests = !Mock_http.requests in
         (match requests with
         | (_, url, headers, _) :: _ ->
@@ -3162,7 +3165,7 @@ let test_get_post_engagement_missing_fields () =
   Mock_http.set_response {
     status = 200;
     headers = [];
-    body = {|{"totalLikes": 5}|};
+    body = {|{"reactionSummaries": {"LIKE": {"reactionType": "LIKE", "count": 5}}, "commentsState": "OPEN"}|};
   };
 
   LinkedIn.get_post_engagement ~account_id:"test_account" ~post_urn:"urn:li:share:123"
@@ -4601,7 +4604,7 @@ let test_finder_method_header () =
         | [] -> failwith "No requests recorded")
       (fun err -> failwith ("Search posts failed: " ^ err)))
 
-(** Test: Request body structure for ugcPost creation *)
+(** Test: Request body structure for REST post creation *)
 let test_rest_post_request_body_structure () =
   Mock_config.reset ();
 

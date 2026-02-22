@@ -2049,7 +2049,7 @@ module Make (Config : CONFIG) = struct
             ] in
             
             let url = Printf.sprintf "%s/socialActions/%s/likes"
-              linkedin_api_base (Uri.pct_encode post_urn) in
+              linkedin_rest_base (Uri.pct_encode post_urn) in
             let body = Yojson.Basic.to_string like_body in
             let headers = [
               ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -2084,7 +2084,7 @@ module Make (Config : CONFIG) = struct
             (* Build the like URN: urn:li:like:(actor,object) *)
             let like_id = Printf.sprintf "(%s,%s)" person_urn post_urn in
             let url = Printf.sprintf "%s/socialActions/%s/likes/%s"
-              linkedin_api_base
+              linkedin_rest_base
               (Uri.pct_encode post_urn)
               (Uri.pct_encode like_id) in
             let headers = [
@@ -2129,7 +2129,7 @@ module Make (Config : CONFIG) = struct
             ] in
             
             let url = Printf.sprintf "%s/socialActions/%s/comments"
-              linkedin_api_base (Uri.pct_encode post_urn) in
+              linkedin_rest_base (Uri.pct_encode post_urn) in
             let body = Yojson.Basic.to_string comment_body in
             let headers = [
               ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -2179,7 +2179,7 @@ module Make (Config : CONFIG) = struct
           (List.map (fun (k, v) -> (k, [v])) query_params) in
         
         let url = Printf.sprintf "%s/socialActions/%s/comments?%s"
-          linkedin_api_base (Uri.pct_encode post_urn) query_string in
+          linkedin_rest_base (Uri.pct_encode post_urn) query_string in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
           ("X-Restli-Protocol-Version", "2.0.0");
@@ -2238,7 +2238,7 @@ module Make (Config : CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_token ->
         let url = Printf.sprintf "%s/socialMetadata/%s"
-          linkedin_api_base (Uri.pct_encode post_urn) in
+          linkedin_rest_base (Uri.pct_encode post_urn) in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" access_token);
           ("X-Restli-Protocol-Version", "2.0.0");
@@ -2252,11 +2252,25 @@ module Make (Config : CONFIG) = struct
                 let json = Yojson.Basic.from_string response.body in
                 let open Yojson.Basic.Util in
                 
+                (* socialMetadata returns reactionSummaries and commentSummary *)
+                let total_reactions =
+                  try
+                    let summaries = json |> member "reactionSummaries" |> to_assoc in
+                    let total = List.fold_left (fun acc (_key, v) ->
+                      acc + (try v |> member "count" |> to_int with _ -> 0)
+                    ) 0 summaries in
+                    Some total
+                  with _ -> None
+                in
+                let comment_count =
+                  try Some (json |> member "commentSummary" |> member "count" |> to_int)
+                  with _ -> None
+                in
                 let engagement : engagement_info = {
-                  like_count = json |> member "totalLikes" |> to_int_option;
-                  comment_count = json |> member "totalComments" |> to_int_option;
-                  share_count = json |> member "totalShares" |> to_int_option;
-                  impression_count = json |> member "totalImpressions" |> to_int_option;
+                  like_count = total_reactions;
+                  comment_count = comment_count;
+                  share_count = None;
+                  impression_count = None;
                 } in
                 on_result (Ok engagement)
               with e ->
@@ -2279,12 +2293,12 @@ module Make (Config : CONFIG) = struct
             in
             let follower_url =
               Printf.sprintf "%s/organizationalEntityFollowerStatistics?%s"
-                linkedin_api_base
+                linkedin_rest_base
                 finder_query
             in
             let share_url =
               Printf.sprintf "%s/organizationalEntityShareStatistics?%s"
-                linkedin_api_base
+                linkedin_rest_base
                 finder_query
             in
             let headers =
