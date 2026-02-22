@@ -3489,7 +3489,7 @@ let test_post_carousel_rejects_single_media () =
           let has_count_error =
             List.exists
               (function
-                | Error_types.Too_many_media { count; max = _ } -> count = 1
+                | Error_types.Too_many_media { count; max } -> count = 1 && max = 2
                 | _ -> false)
               errs
           in
@@ -3886,6 +3886,136 @@ let test_post_thread_with_topic_tag () =
           print_endline "ok: post thread with topic tag"
       | _ -> failwith "expected successful thread with topic tag")
 
+let test_post_carousel_rejects_empty_media () =
+  Mock_config.reset ();
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"no media"
+    ~media_urls:[]
+    (function
+      | Error_types.Failure (Error_types.Validation_error errs) ->
+          let has_count_error =
+            List.exists
+              (function
+                | Error_types.Too_many_media { count; max } -> count = 0 && max = 2
+                | _ -> false)
+              errs
+          in
+          assert has_count_error;
+          print_endline "ok: post carousel rejects empty media"
+      | _ -> failwith "expected validation error for empty media carousel")
+
+let test_get_replies_rejects_empty_media_id () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Threads.get_replies ~account_id:"acct-1" ~media_id:"   "
+    (function
+      | Error (Error_types.Validation_error _) ->
+          print_endline "ok: get replies rejects empty media id"
+      | _ -> failwith "expected validation error for empty media_id in get_replies")
+
+let test_get_conversation_rejects_empty_media_id () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Threads.get_conversation ~account_id:"acct-1" ~media_id:"   "
+    (function
+      | Error (Error_types.Validation_error _) ->
+          print_endline "ok: get conversation rejects empty media id"
+      | _ -> failwith "expected validation error for empty media_id in get_conversation")
+
+let test_get_replies_api_error () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 400;
+        headers = [];
+        body = "{\"error\":{\"message\":\"invalid media id\",\"code\":100}}";
+      };
+    ];
+  Threads.get_replies ~account_id:"acct-1" ~media_id:"bad-id"
+    (function
+      | Error (Error_types.Api_error _) ->
+          print_endline "ok: get replies api error"
+      | _ -> failwith "expected api error for get_replies")
+
+let test_get_conversation_api_error () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 400;
+        headers = [];
+        body = "{\"error\":{\"message\":\"invalid media id\",\"code\":100}}";
+      };
+    ];
+  Threads.get_conversation ~account_id:"acct-1" ~media_id:"bad-id"
+    (function
+      | Error (Error_types.Api_error _) ->
+          print_endline "ok: get conversation api error"
+      | _ -> failwith "expected api error for get_conversation")
+
+let test_poll_container_status_checks_before_sleeping () =
+  (* Verify that when status is immediately FINISHED, no sleep is needed *)
+  Mock_config.reset ();
+  let sleep_calls = ref 0 in
+  let module Track_config = struct
+    include Mock_config
+    let sleep _delay f = incr sleep_calls; f ()
+  end in
+  let module Track_threads = Social_threads_v1.Make (Track_config) in
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+    ];
+  Track_threads.poll_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok container_id ->
+          assert (container_id = "container-1");
+          assert (!sleep_calls = 0);
+          print_endline "ok: poll checks before sleeping"
+      | Error _ -> failwith "expected successful poll without sleep")
+
 let () =
   test_oauth_url ();
   test_oauth_url_encodes_special_characters ();
@@ -4033,4 +4163,10 @@ let () =
   test_get_publishing_limit_api_error ();
   test_validate_media_urls_allows_20_for_carousel ();
   test_post_thread_with_topic_tag ();
+  test_post_carousel_rejects_empty_media ();
+  test_get_replies_rejects_empty_media_id ();
+  test_get_conversation_rejects_empty_media_id ();
+  test_get_replies_api_error ();
+  test_get_conversation_api_error ();
+  test_poll_container_status_checks_before_sleeping ();
   print_endline "Threads tests passed"

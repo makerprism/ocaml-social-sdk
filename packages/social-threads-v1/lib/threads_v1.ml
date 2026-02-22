@@ -1086,16 +1086,16 @@ module Make (Config : CONFIG) = struct
         on_result (Error (Error_types.Internal_error
           (Printf.sprintf "Container %s still processing after %d attempts" container_id max_attempts)))
       else
-        let delay = poll_interval *. (float_of_int (min attempt 5)) in
-        Config.sleep delay (fun () ->
-          check_container_status ~access_token ~container_id
-            (function
-              | Ok Finished -> on_result (Ok container_id)
-              | Ok In_progress -> loop (attempt + 1)
-              | Ok (Error_status msg) ->
-                  on_result (Error (Error_types.Internal_error
-                    (Printf.sprintf "Container %s processing failed: %s" container_id msg)))
-              | Error err -> on_result (Error err)))
+        check_container_status ~access_token ~container_id
+          (function
+            | Ok Finished -> on_result (Ok container_id)
+            | Ok In_progress ->
+                let delay = poll_interval *. (float_of_int (min attempt 5)) in
+                Config.sleep delay (fun () -> loop (attempt + 1))
+            | Ok (Error_status msg) ->
+                on_result (Error (Error_types.Internal_error
+                  (Printf.sprintf "Container %s processing failed: %s" container_id msg)))
+            | Error err -> on_result (Error err))
     in
     loop 1
 
@@ -1200,7 +1200,7 @@ module Make (Config : CONFIG) = struct
     let count = List.length media_urls in
     let validation_errors =
       if count < 2 then
-        (Error_types.Too_many_media { count; max = 20 }) :: validation_errors
+        (Error_types.Too_many_media { count; max = 2 }) :: validation_errors
       else
         validation_errors
     in
@@ -1247,6 +1247,9 @@ module Make (Config : CONFIG) = struct
         (fun err -> on_result (Error_types.Failure err))
 
   let get_replies ~account_id ~media_id ?after ?(limit = 20) on_result =
+    if String.trim media_id = "" then
+      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
+    else
     with_valid_credentials ~account_id
       (fun creds ->
         let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
@@ -1311,6 +1314,9 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error err))
 
   let get_conversation ~account_id ~media_id ?after ?(limit = 20) on_result =
+    if String.trim media_id = "" then
+      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
+    else
     with_valid_credentials ~account_id
       (fun creds ->
         let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
