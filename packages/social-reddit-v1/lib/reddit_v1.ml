@@ -1633,9 +1633,14 @@ module Make (Config : CONFIG) = struct
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
         if item_count < 2 then
-          on_result (Error_types.Failure (Error_types.Validation_error [
-            Error_types.Too_many_media { count = item_count; max = max_gallery_images }
-          ]))
+          (* Gallery posts require at least 2 images per Reddit API. *)
+          on_result (Error_types.Failure (Error_types.Api_error {
+            status_code = 0;
+            message = Printf.sprintf "Gallery posts require at least 2 images, got %d" item_count;
+            platform = Platform_types.Reddit;
+            raw_response = None;
+            request_id = None;
+          }))
         else
           ensure_valid_token ~account_id
             (fun access_token ->
@@ -1650,26 +1655,20 @@ module Make (Config : CONFIG) = struct
                     (* All uploaded, submit the gallery post *)
                     let gallery_items = List.rev !uploaded in
                     let items_json = List.map (fun (asset_id, caption, outbound_url) ->
-                      let fields = [
+                      `Assoc [
                         ("media_id", `String asset_id);
-                      ] in
-                      let fields = match caption with
-                        | Some c -> ("caption", `String c) :: fields
-                        | None -> fields
-                      in
-                      let fields = match outbound_url with
-                        | Some u -> ("outbound_url", `String u) :: fields
-                        | None -> fields
-                      in
-                      `Assoc fields
+                        ("caption", `String (Option.value ~default:"" caption));
+                        ("outbound_url", `String (Option.value ~default:"" outbound_url));
+                      ]
                     ) gallery_items in
                     let body_json = `Assoc ([
                       ("api_type", `String "json");
-                      ("kind", `String "self");
                       ("sr", `String subreddit);
                       ("title", `String title);
                       ("nsfw", `Bool nsfw);
                       ("spoiler", `Bool spoiler);
+                      ("validate_on_submit", `Bool true);
+                      ("show_error_list", `Bool true);
                       ("items", `List items_json);
                     ] @ (match flair_id with Some id -> [("flair_id", `String id)] | None -> [])
                       @ (match flair_text with Some t -> [("flair_text", `String t)] | None -> [])

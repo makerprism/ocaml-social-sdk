@@ -1837,6 +1837,13 @@ let test_submit_gallery_post () =
         assert (string_contains body "asset_img2");
         assert (string_contains body "First image");
         assert (string_contains body "Gallery Post");
+        (* Gallery endpoint should NOT include "kind" field *)
+        assert (not (string_contains body "\"kind\""));
+        (* Should include validate_on_submit for proper error reporting *)
+        assert (string_contains body "validate_on_submit");
+        (* Each item should have caption and outbound_url fields *)
+        assert (string_contains body "\"caption\"");
+        assert (string_contains body "\"outbound_url\"");
         print_endline "  ok: submit_gallery_post uploads images and submits")
       (fun err -> failwith ("Gallery post failed: " ^ err)))
 
@@ -1855,10 +1862,12 @@ let test_submit_gallery_post_too_few_items () =
     ()
     (fun outcome ->
       match outcome with
-      | Error_types.Failure (Error_types.Validation_error _) ->
+      | Error_types.Failure (Error_types.Api_error { message; _ }) when string_contains message "at least 2" ->
           print_endline "  ok: submit_gallery_post rejects fewer than 2 items"
       | Error_types.Success _ ->
           failwith "Gallery with 1 image should fail validation"
+      | Error_types.Failure err ->
+          failwith ("Unexpected error type for single-image gallery: " ^ Error_types.error_to_string err)
       | _ -> failwith "Unexpected outcome for single-image gallery")
 
 (** {1 Multi-Subreddit Posting Tests} *)
