@@ -1089,7 +1089,9 @@ module Make (Config : CONFIG) = struct
     in
     let collab_params = match collaborators with
       | [] -> []
-      | collabs -> [("collaborators", [String.concat "," collabs])]
+      | collabs ->
+          let json_collabs = List.map (fun c -> Printf.sprintf {|"%s"|} c) collabs in
+          [("collaborators", [Printf.sprintf "[%s]" (String.concat "," json_collabs)])]
     in
     user_tag_params @ location_params @ collab_params
 
@@ -1564,7 +1566,11 @@ module Make (Config : CONFIG) = struct
     let query = Uri.encoded_of_query params in
     let url = Printf.sprintf "%s/%s/media?%s" graph_api_base ig_user_id query in
 
-    Config.Http.get url
+    let headers = [
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+
+    Config.Http.get ~headers url
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then

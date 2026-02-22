@@ -56,7 +56,9 @@ module OAuth = struct
       | None -> None
     in
     let token_type =
-      try json |> member "token_type" |> to_string
+      try
+        let t = json |> member "token_type" |> to_string in
+        if String.lowercase_ascii t = "bearer" then "Bearer" else t
       with _ -> "Bearer"
     in
     ({
@@ -704,7 +706,6 @@ module Make (Config : CONFIG) = struct
             let credentials =
               OAuth.parse_credentials_from_json ~default_expires_in:5184000 json
             in
-            let credentials = { credentials with token_type = "Bearer" } in
             on_success credentials
           with e ->
             on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
@@ -1135,7 +1136,9 @@ module Make (Config : CONFIG) = struct
     in
     let collab_params = match collaborators with
       | [] -> []
-      | collabs -> [("collaborators", [String.concat "," collabs])]
+      | collabs ->
+          let json_collabs = List.map (fun c -> Printf.sprintf {|"%s"|} c) collabs in
+          [("collaborators", [Printf.sprintf "[%s]" (String.concat "," json_collabs)])]
     in
     user_tag_params @ location_params @ collab_params
 
@@ -1615,7 +1618,11 @@ module Make (Config : CONFIG) = struct
     let query = Uri.encoded_of_query params in
     let url = Printf.sprintf "%s/%s/media?%s" graph_api_base ig_user_id query in
 
-    Config.Http.get url
+    let headers = [
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+
+    Config.Http.get ~headers url
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then
@@ -2041,8 +2048,7 @@ module Make (Config : CONFIG) = struct
       OAuth_http.exchange_for_long_lived_token ~client_id ~client_secret ~short_lived_token
         (function
           | Ok credentials ->
-              let normalized = { credentials with token_type = "Bearer" } in
-              on_success normalized
+              on_success credentials
           | Error err -> on_error (Error_types.error_to_string err))
   
   (** Validate content length and hashtags *)
