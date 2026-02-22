@@ -29,6 +29,9 @@ let handle_api_result on_success on_error result =
   | Ok value -> on_success value
   | Error err -> on_error (Error_types.error_to_string err)
 
+(** Ref to capture the last POST body sent to the statuses endpoint *)
+let last_post_body : string option ref = ref None
+
 (** Mock HTTP client for testing *)
 module Mock_http : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success _on_error =
@@ -53,14 +56,16 @@ module Mock_http : Social_core.HTTP_CLIENT = struct
         body = {|{"id":"123","username":"testuser"}|};
       }
   
-  let post ?headers:_ ?body:_ url on_success _on_error =
+  let post ?headers:_ ?body url on_success _on_error =
     (* Check if this is a status post *)
-    if String.ends_with ~suffix:"api/v1/statuses" url then
+    if String.ends_with ~suffix:"api/v1/statuses" url then begin
+      last_post_body := body;
       on_success {
         Social_core.status = 200;
         headers = [("content-type", "application/json")];
         body = {|{"id":"54321","created_at":"2024-01-01T00:00:00Z","content":"Test post","url":"https://mastodon.social/@user/54321"}|};
       }
+    end
     (* OAuth token exchange *)
     else if String.ends_with ~suffix:"oauth/token" url then
       on_success {
@@ -1275,6 +1280,7 @@ let test_verify_credentials () =
 let test_reply_to_status () =
   Printf.printf "Test: reply_to_status with @mention... ";
   let success_called = ref false in
+  last_post_body := None;
   Mastodon.reply_to_status
     ~account_id:"test_account"
     ~status_id:"99999"
@@ -1282,6 +1288,15 @@ let test_reply_to_status () =
     (handle_outcome
       (fun post_url ->
         success_called := true;
+        (* Verify the @mention was prepended in the POST body *)
+        (match !last_post_body with
+         | Some body ->
+           assert (string_contains body {|@originalauthor Great post!|});
+           assert (string_contains body {|"in_reply_to_id"|});
+           assert (string_contains body {|"99999"|})
+         | None ->
+           Printf.printf "✗ No POST body captured\n";
+           assert false);
         Printf.printf "✓ (post_url: %s)\n" post_url)
       (fun err ->
         Printf.printf "✗ Error: %s\n" err;
@@ -1292,6 +1307,7 @@ let test_reply_to_status () =
 let test_reply_to_status_no_double_mention () =
   Printf.printf "Test: reply_to_status skips duplicate @mention... ";
   let success_called = ref false in
+  last_post_body := None;
   Mastodon.reply_to_status
     ~account_id:"test_account"
     ~status_id:"99999"
@@ -1299,6 +1315,15 @@ let test_reply_to_status_no_double_mention () =
     (handle_outcome
       (fun post_url ->
         success_called := true;
+        (* Verify no double @mention: the text should remain unchanged *)
+        (match !last_post_body with
+         | Some body ->
+           assert (string_contains body {|@originalauthor Great post!|});
+           (* Make sure there's no double mention like @@originalauthor or @originalauthor @originalauthor *)
+           assert (not (string_contains body {|@originalauthor @originalauthor|}))
+         | None ->
+           Printf.printf "✗ No POST body captured\n";
+           assert false);
         Printf.printf "✓ (post_url: %s)\n" post_url)
       (fun err ->
         Printf.printf "✗ Error: %s\n" err;
@@ -1309,6 +1334,7 @@ let test_reply_to_status_no_double_mention () =
 let test_reply_to_status_with_media () =
   Printf.printf "Test: reply_to_status with media... ";
   let success_called = ref false in
+  last_post_body := None;
   Mastodon.reply_to_status
     ~account_id:"test_account"
     ~status_id:"99999"
@@ -1319,7 +1345,42 @@ let test_reply_to_status_with_media () =
     (handle_outcome
       (fun post_url ->
         success_called := true;
+        (* Verify mention, in_reply_to_id, and visibility in the POST body *)
+        (match !last_post_body with
+         | Some body ->
+           assert (string_contains body {|@originalauthor Here is a photo reply|});
+           assert (string_contains body {|"in_reply_to_id"|});
+           assert (string_contains body {|"unlisted"|})
+         | None ->
+           Printf.printf "✗ No POST body captured\n";
+           assert false);
         Printf.printf "✓ (post_url: %s)\n" post_url)
+      (fun err ->
+        Printf.printf "✗ Error: %s\n" err;
+        assert false));
+  assert !success_called
+
+(** Test: reply_to_status still prepends @mention when text starts with a similar but different username *)
+let test_reply_to_status_different_prefix_user () =
+  Printf.printf "Test: reply_to_status with similar but different username prefix... ";
+  let success_called = ref false in
+  last_post_body := None;
+  Mastodon.reply_to_status
+    ~account_id:"test_account"
+    ~status_id:"99999"
+    ~text:"@originalauthority Something"
+    (handle_outcome
+      (fun _post_url ->
+        success_called := true;
+        (* @originalauthority is a different user than @originalauthor,
+           so the mention should still be prepended *)
+        (match !last_post_body with
+         | Some body ->
+           assert (string_contains body {|@originalauthor @originalauthority Something|})
+         | None ->
+           Printf.printf "✗ No POST body captured\n";
+           assert false);
+        Printf.printf "✓\n")
       (fun err ->
         Printf.printf "✗ Error: %s\n" err;
         assert false));
@@ -1412,5 +1473,6 @@ let () =
   test_reply_to_status ();
   test_reply_to_status_no_double_mention ();
   test_reply_to_status_with_media ();
+  test_reply_to_status_different_prefix_user ();
 
-  Printf.printf "\n✓ All 62 tests passed!\n"
+  Printf.printf "\n✓ All 63 tests passed!\n"

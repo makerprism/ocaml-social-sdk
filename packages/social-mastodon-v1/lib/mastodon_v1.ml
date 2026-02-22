@@ -747,7 +747,7 @@ module Make (Config : CONFIG) = struct
           with e ->
             on_error (Printf.sprintf "Failed to parse verify_credentials response: %s" (Printexc.to_string e))
         else
-          on_error (Printf.sprintf "Invalid credentials (%d): %s" response.status response.body))
+          on_error (Printf.sprintf "Invalid credentials (%d): %s" response.status (redact_sensitive_text response.body)))
       on_error
   
   (** Upload media to Mastodon *)
@@ -3138,9 +3138,17 @@ module Make (Config : CONFIG) = struct
           (* Build the reply text with @mention prefix *)
           let reply_text = match original_status.account_acct with
             | Some acct when acct <> "" ->
-              let mention = Printf.sprintf "@%s " acct in
-              if String.starts_with ~prefix:mention text
-                || String.starts_with ~prefix:(Printf.sprintf "@%s" acct) text then
+              let mention_prefix = Printf.sprintf "@%s" acct in
+              let already_mentioned =
+                if not (String.starts_with ~prefix:mention_prefix text) then false
+                else
+                  (* Ensure the match is an exact mention, not a prefix of a longer username *)
+                  let prefix_len = String.length mention_prefix in
+                  prefix_len >= String.length text
+                  || (let next_char = String.get text prefix_len in
+                      next_char = ' ' || next_char = '\t' || next_char = '\n')
+              in
+              if already_mentioned then
                 text  (* Already mentions the author *)
               else
                 Printf.sprintf "@%s %s" acct text
