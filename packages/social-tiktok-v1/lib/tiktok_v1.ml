@@ -313,6 +313,33 @@ let privacy_level_of_string = function
   | "SELF_ONLY" -> SelfOnly
   | _ -> SelfOnly
 
+(** Video source type for upload *)
+type video_source =
+  | File_upload   (** Upload video binary directly *)
+  | Pull_from_url (** TikTok pulls video from a URL *)
+
+let string_of_video_source = function
+  | File_upload -> "FILE_UPLOAD"
+  | Pull_from_url -> "PULL_FROM_URL"
+
+(** Post mode for publishing *)
+type post_mode =
+  | Direct_post   (** Publish directly to the creator's profile *)
+  | Media_upload  (** Upload to the creator's inbox/drafts *)
+
+let string_of_post_mode = function
+  | Direct_post -> "DIRECT_POST"
+  | Media_upload -> "MEDIA_UPLOAD"
+
+(** Media type for posts *)
+type media_type =
+  | Video  (** Video content *)
+  | Photo  (** Photo/image content *)
+
+let string_of_media_type = function
+  | Video -> "VIDEO"
+  | Photo -> "PHOTO"
+
 (** Post information for video uploads *)
 type post_info = {
   title : string;  (** Caption with hashtags and mentions *)
@@ -456,7 +483,7 @@ let auth_base_url = "https://www.tiktok.com/v2/auth/authorize"
 
 let max_video_duration_sec = 600  (* 10 minutes, varies by user *)
 let min_video_duration_sec = 3
-let max_video_size_bytes = 50 * 1024 * 1024  (* 50MB default, TikTok allows up to 4GB *)
+let max_video_size_bytes = 4_294_967_296  (* 4GB - TikTok's actual limit *)
 let default_upload_chunk_size_bytes = 10 * 1024 * 1024  (* 10MB *)
 let max_caption_length = 2200
 let supported_formats = ["mp4"; "webm"; "mov"]
@@ -510,6 +537,41 @@ let post_info_to_json info =
     | None -> base
   in
   `Assoc with_cover
+
+(** Photo post information *)
+type photo_post_info = {
+  title : string;  (** Caption with hashtags and mentions *)
+  privacy_level : privacy_level;
+  disable_comment : bool;
+  is_aigc : bool;  (** Whether the content is AI-generated *)
+  photo_images : string list;  (** List of photo image URLs *)
+  photo_cover_index : int;  (** Index of the cover photo in photo_images *)
+  post_mode : post_mode;  (** DIRECT_POST or MEDIA_UPLOAD *)
+}
+
+(** Create photo_post_info with defaults *)
+let make_photo_post_info ~title ~photo_images ?(privacy_level=SelfOnly)
+    ?(disable_comment=false) ?(is_aigc=false) ?(photo_cover_index=0)
+    ?(post_mode=Direct_post) () =
+  { title; privacy_level; disable_comment; is_aigc; photo_images;
+    photo_cover_index; post_mode }
+
+let photo_post_info_to_json info =
+  `Assoc [
+    ("post_info", `Assoc [
+      ("title", `String info.title);
+      ("privacy_level", `String (string_of_privacy_level info.privacy_level));
+      ("disable_comment", `Bool info.disable_comment);
+      ("is_aigc", `Bool info.is_aigc);
+    ]);
+    ("source_info", `Assoc [
+      ("source", `String "PULL_FROM_URL");
+      ("photo_images", `List (List.map (fun url -> `String url) info.photo_images));
+      ("photo_cover_index", `Int info.photo_cover_index);
+    ]);
+    ("post_mode", `String (string_of_post_mode info.post_mode));
+    ("media_type", `String "PHOTO");
+  ]
 
 let parse_creator_info json =
   let open Yojson.Basic.Util in
@@ -732,6 +794,8 @@ module Make (Config : CONFIG) = struct
   let token_url = api_base_url ^ "/oauth/token/"
   let creator_info_url = api_base_url ^ "/post/publish/creator_info/query/"
   let video_init_url = api_base_url ^ "/post/publish/video/init/"
+  let content_publish_url = api_base_url ^ "/post/publish/content/init/"
+  let inbox_video_init_url = api_base_url ^ "/post/publish/inbox/video/init/"
   let status_fetch_url = api_base_url ^ "/post/publish/status/fetch/"
   let user_info_analytics_url = api_base_url ^ "/user/info/?fields=follower_count,following_count,likes_count,video_count"
   let video_list_url = api_base_url ^ "/video/list/?fields=id"
@@ -1068,7 +1132,113 @@ module Make (Config : CONFIG) = struct
               on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
-  
+
+  (** Initialize video upload via PULL_FROM_URL - TikTok downloads the video from the given URL *)
+  let init_video_pull_from_url ~account_id ~post_info ~video_url on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json; charset=UTF-8");
+        ] in
+        let body = `Assoc [
+          ("post_info", post_info_to_json post_info);
+          ("source_info", `Assoc [
+            ("source", `String "PULL_FROM_URL");
+            ("video_url", `String video_url);
+          ]);
+        ] |> Yojson.Basic.to_string in
+
+        Config.Http.post ~headers ~body video_init_url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let data = json |> member "data" in
+                let publish_id = data |> member "publish_id" |> to_string in
+                on_result (Ok publish_id)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse pull-from-url init response: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Initialize a photo post via content/init endpoint *)
+  let init_photo_post ~account_id ~photo_post_info on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json; charset=UTF-8");
+        ] in
+        let body = photo_post_info_to_json photo_post_info |> Yojson.Basic.to_string in
+
+        Config.Http.post ~headers ~body content_publish_url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let data = json |> member "data" in
+                let publish_id = data |> member "publish_id" |> to_string in
+                on_result (Ok publish_id)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse photo post init response: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Initialize a video upload to the creator's inbox/drafts instead of publishing directly.
+
+      Uses the /v2/post/publish/inbox/video/init/ endpoint with post_mode MEDIA_UPLOAD.
+  *)
+  let init_inbox_video_upload ~account_id ~post_info ~video_size ?chunk_size ?total_chunk_count on_result =
+    let resolved_chunk_size =
+      match chunk_size with
+      | Some cs when cs > 0 -> cs
+      | _ -> video_size
+    in
+    let resolved_total_chunk_count =
+      match total_chunk_count with
+      | Some c when c > 0 -> c
+      | _ -> 1
+    in
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json; charset=UTF-8");
+        ] in
+        let body = `Assoc [
+          ("post_info", post_info_to_json post_info);
+          ("source_info", `Assoc [
+            ("source", `String "FILE_UPLOAD");
+            ("video_size", `Int video_size);
+            ("chunk_size", `Int resolved_chunk_size);
+            ("total_chunk_count", `Int resolved_total_chunk_count);
+          ]);
+        ] |> Yojson.Basic.to_string in
+
+        Config.Http.post ~headers ~body inbox_video_init_url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let data = json |> member "data" in
+                let publish_id = data |> member "publish_id" |> to_string in
+                let upload_url = data |> member "upload_url" |> to_string in
+                on_result (Ok (publish_id, upload_url))
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse inbox init response: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
   (** Upload video content to the upload URL *)
   let upload_video_chunk
       ~upload_url
@@ -1323,7 +1493,7 @@ module Make (Config : CONFIG) = struct
         | Ok analytics -> on_success analytics
         | Error err -> on_error err)
 
-  let validate_post_info_against_creator ~post_info ~creator_info =
+  let validate_post_info_against_creator ~(post_info : post_info) ~creator_info =
     let privacy_allowed =
       List.exists (fun p -> p = post_info.privacy_level) creator_info.privacy_level_options
     in

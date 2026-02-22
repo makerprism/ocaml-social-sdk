@@ -205,7 +205,7 @@ let test_validate_video_too_short () =
 
 let test_validate_video_too_large () =
   print_string "Test: validate_video too large... ";
-  match Social_tiktok_v1.validate_video ~duration_sec:30 ~file_size_bytes:100_000_000 ~width:1080 ~height:1920 with
+  match Social_tiktok_v1.validate_video ~duration_sec:30 ~file_size_bytes:5_000_000_000 ~width:1080 ~height:1920 with
   | Error _ -> print_endline "PASSED"
   | Ok () -> failwith "Expected Error for too large video"
 
@@ -2204,11 +2204,11 @@ let test_validate_video_duration_too_long () =
 (** Test: Video at exact limits *)
 let test_validate_video_at_limits () =
   print_string "Test: validate_video at exact limits... ";
-  (* Exactly at max duration (600s), max size (50MB), max resolution (4096) *)
-  match Social_tiktok_v1.validate_video 
-    ~duration_sec:600 
-    ~file_size_bytes:(50 * 1024 * 1024)
-    ~width:4096 
+  (* Exactly at max duration (600s), max size (4GB), max resolution (4096) *)
+  match Social_tiktok_v1.validate_video
+    ~duration_sec:600
+    ~file_size_bytes:4_294_967_296
+    ~width:4096
     ~height:2160 with
   | Ok () -> print_endline "PASSED"
   | Error msg -> failwith ("Expected Ok at limits, got Error: " ^ msg)
@@ -2397,6 +2397,214 @@ let test_validate_content () =
   
   print_endline "PASSED"
 
+(** {1 Photo Post Tests} *)
+
+let test_make_photo_post_info_defaults () =
+  print_string "Test: make_photo_post_info with defaults... ";
+  let info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Photo post"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    () in
+  assert (info.title = "Photo post");
+  assert (info.privacy_level = Social_tiktok_v1.SelfOnly);
+  assert (info.disable_comment = false);
+  assert (info.is_aigc = false);
+  assert (info.photo_images = ["https://example.com/photo1.jpg"]);
+  assert (info.photo_cover_index = 0);
+  assert (info.post_mode = Social_tiktok_v1.Direct_post);
+  print_endline "PASSED"
+
+let test_make_photo_post_info_all_options () =
+  print_string "Test: make_photo_post_info with all options... ";
+  let info = Social_tiktok_v1.make_photo_post_info
+    ~title:"My photo carousel"
+    ~photo_images:["https://example.com/photo1.jpg"; "https://example.com/photo2.jpg"]
+    ~privacy_level:Social_tiktok_v1.PublicToEveryone
+    ~disable_comment:true
+    ~is_aigc:true
+    ~photo_cover_index:1
+    ~post_mode:Social_tiktok_v1.Media_upload
+    () in
+  assert (info.title = "My photo carousel");
+  assert (info.privacy_level = Social_tiktok_v1.PublicToEveryone);
+  assert (info.disable_comment = true);
+  assert (info.is_aigc = true);
+  assert (List.length info.photo_images = 2);
+  assert (info.photo_cover_index = 1);
+  assert (info.post_mode = Social_tiktok_v1.Media_upload);
+  print_endline "PASSED"
+
+let test_photo_post_info_to_json () =
+  print_string "Test: photo_post_info_to_json... ";
+  let info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Photo test"
+    ~photo_images:["https://example.com/img1.jpg"; "https://example.com/img2.jpg"]
+    ~privacy_level:Social_tiktok_v1.SelfOnly
+    () in
+  let json = Social_tiktok_v1.photo_post_info_to_json info in
+  let json_str = Yojson.Basic.to_string json in
+  let open Yojson.Basic.Util in
+  let parsed = Yojson.Basic.from_string json_str in
+  assert ((parsed |> member "media_type" |> to_string) = "PHOTO");
+  assert ((parsed |> member "post_mode" |> to_string) = "DIRECT_POST");
+  assert ((parsed |> member "source_info" |> member "source" |> to_string) = "PULL_FROM_URL");
+  let images = parsed |> member "source_info" |> member "photo_images" |> to_list |> List.map to_string in
+  assert (images = ["https://example.com/img1.jpg"; "https://example.com/img2.jpg"]);
+  assert ((parsed |> member "source_info" |> member "photo_cover_index" |> to_int) = 0);
+  assert ((parsed |> member "post_info" |> member "title" |> to_string) = "Photo test");
+  assert ((parsed |> member "post_info" |> member "privacy_level" |> to_string) = "SELF_ONLY");
+  print_endline "PASSED"
+
+let test_init_photo_post_request_contract () =
+  print_string "Test: init_photo_post request contract... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"content/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      assert ((json |> member "media_type" |> to_string) = "PHOTO");
+      assert ((json |> member "post_mode" |> to_string) = "DIRECT_POST");
+      assert ((json |> member "source_info" |> member "source" |> to_string) = "PULL_FROM_URL");
+      assert ((json |> member "source_info" |> member "photo_cover_index" |> to_int) = 0);
+      let images = json |> member "source_info" |> member "photo_images" |> to_list |> List.map to_string in
+      assert (images = ["https://example.com/photo1.jpg"]);
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"photo_pub_123"}}|};
+      }
+    ) else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Photo post"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    () in
+  let success_called = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (handle_api_result
+      (fun publish_id ->
+        assert (publish_id = "photo_pub_123");
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+(** {1 PULL_FROM_URL Tests} *)
+
+let test_init_video_pull_from_url_request_contract () =
+  print_string "Test: init_video_pull_from_url request contract... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"video/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      let source_json = json |> member "source_info" in
+      assert ((source_json |> member "source" |> to_string) = "PULL_FROM_URL");
+      assert ((source_json |> member "video_url" |> to_string) = "https://example.com/video.mp4");
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"pull_pub_456"}}|};
+      }
+    ) else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let post_info = Social_tiktok_v1.make_post_info ~title:"Pull from URL" ~privacy_level:Social_tiktok_v1.SelfOnly () in
+  let success_called = ref false in
+  TikTok.init_video_pull_from_url
+    ~account_id:"test_account"
+    ~post_info
+    ~video_url:"https://example.com/video.mp4"
+    (handle_api_result
+      (fun publish_id ->
+        assert (publish_id = "pull_pub_456");
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+(** {1 Inbox/Draft Upload Tests} *)
+
+let test_init_inbox_video_upload_request_contract () =
+  print_string "Test: init_inbox_video_upload request contract... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"inbox/video/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      let source_json = json |> member "source_info" in
+      assert ((source_json |> member "source" |> to_string) = "FILE_UPLOAD");
+      assert ((source_json |> member "video_size" |> to_int) = 5000);
+      assert ((json |> member "post_info" |> member "title" |> to_string) = "Draft upload");
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"inbox_pub_789","upload_url":"https://upload.tiktok.com/inbox"}}|};
+      }
+    ) else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let post_info = Social_tiktok_v1.make_post_info ~title:"Draft upload" ~privacy_level:Social_tiktok_v1.SelfOnly () in
+  let success_called = ref false in
+  TikTok.init_inbox_video_upload
+    ~account_id:"test_account"
+    ~post_info
+    ~video_size:5000
+    (handle_api_result
+      (fun (publish_id, upload_url) ->
+        assert (publish_id = "inbox_pub_789");
+        assert (upload_url = "https://upload.tiktok.com/inbox");
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+(** {1 Video Source / Media Type / Post Mode Type Tests} *)
+
+let test_video_source_string_roundtrip () =
+  print_string "Test: video_source string values... ";
+  assert (Social_tiktok_v1.string_of_video_source Social_tiktok_v1.File_upload = "FILE_UPLOAD");
+  assert (Social_tiktok_v1.string_of_video_source Social_tiktok_v1.Pull_from_url = "PULL_FROM_URL");
+  print_endline "PASSED"
+
+let test_post_mode_string_values () =
+  print_string "Test: post_mode string values... ";
+  assert (Social_tiktok_v1.string_of_post_mode Social_tiktok_v1.Direct_post = "DIRECT_POST");
+  assert (Social_tiktok_v1.string_of_post_mode Social_tiktok_v1.Media_upload = "MEDIA_UPLOAD");
+  print_endline "PASSED"
+
+let test_media_type_string_values () =
+  print_string "Test: media_type string values... ";
+  assert (Social_tiktok_v1.string_of_media_type Social_tiktok_v1.Video = "VIDEO");
+  assert (Social_tiktok_v1.string_of_media_type Social_tiktok_v1.Photo = "PHOTO");
+  print_endline "PASSED"
+
+let test_max_video_size_is_4gb () =
+  print_string "Test: max_video_size_bytes is 4GB... ";
+  assert (Social_tiktok_v1.max_video_size_bytes = 4_294_967_296);
+  print_endline "PASSED"
+
+let test_validate_video_accepts_large_file_under_4gb () =
+  print_string "Test: validate_video accepts large file under 4GB... ";
+  match Social_tiktok_v1.validate_video ~duration_sec:30 ~file_size_bytes:3_000_000_000 ~width:1080 ~height:1920 with
+  | Ok () -> print_endline "PASSED"
+  | Error msg -> failwith ("Expected Ok for 3GB file, got Error: " ^ msg)
+
 let () =
   print_endline "\n=== TikTok Provider Tests ===\n";
   
@@ -2502,5 +2710,26 @@ let () =
   test_refresh_without_expires_in_uses_default ();
   test_get_oauth_url_missing_client_key ();
   test_post_single_multiple_media_rejected ();
+
+  print_endline "\n--- Photo Post Support ---";
+  test_make_photo_post_info_defaults ();
+  test_make_photo_post_info_all_options ();
+  test_photo_post_info_to_json ();
+  test_init_photo_post_request_contract ();
+
+  print_endline "\n--- PULL_FROM_URL Support ---";
+  test_init_video_pull_from_url_request_contract ();
+
+  print_endline "\n--- Inbox/Draft Upload ---";
+  test_init_inbox_video_upload_request_contract ();
+
+  print_endline "\n--- Type String Values ---";
+  test_video_source_string_roundtrip ();
+  test_post_mode_string_values ();
+  test_media_type_string_values ();
+
+  print_endline "\n--- Video Size Limit Fix ---";
+  test_max_video_size_is_4gb ();
+  test_validate_video_accepts_large_file_under_4gb ();
 
   print_endline "\n=== All tests passed! ==="
