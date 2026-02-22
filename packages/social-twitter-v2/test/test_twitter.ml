@@ -5492,10 +5492,11 @@ let test_canonical_analytics_adapters () =
 (* NEW TESTS: Batch lookup (M1)                *)
 (* ============================================ *)
 
-(** Test: get_tweets batch lookup with multiple IDs *)
+(** Test: get_tweets batch lookup with multiple IDs - verifies URL contract *)
 let test_get_tweets_batch () =
+  captured_get_urls := [];
   let result = ref None in
-  Twitter.get_tweets ~account_id:"test_account"
+  Twitter_request_contract.get_tweets ~account_id:"test_account"
     ~ids:["111"; "222"; "333"] ()
     (function
       | Ok json ->
@@ -5508,6 +5509,14 @@ let test_get_tweets_batch () =
    | Some (Ok false) -> failwith "Expected data in batch lookup response"
    | Some (Error err) -> failwith ("Batch lookup failed: " ^ err)
    | None -> failwith "No result from batch lookup");
+  (* Verify URL contains correct ids parameter *)
+  (match !captured_get_urls with
+   | url :: _ ->
+       let uri = Uri.of_string url in
+       let ids_param = Uri.get_query_param uri "ids" |> Option.value ~default:"" in
+       assert (ids_param = "111,222,333");
+       assert (string_contains url "/tweets")
+   | [] -> failwith "Expected captured GET URL for get_tweets");
   print_endline "✓ Batch tweet lookup test passed"
 
 (** Test: get_tweets with empty list returns error *)
@@ -5523,10 +5532,11 @@ let test_get_tweets_empty_ids () =
    | None -> failwith "No result from empty ids test");
   print_endline "✓ Batch tweet lookup empty IDs test passed"
 
-(** Test: get_tweets with optional fields *)
+(** Test: get_tweets with optional fields - verifies URL contract *)
 let test_get_tweets_with_fields () =
+  captured_get_urls := [];
   let result = ref None in
-  Twitter.get_tweets ~account_id:"test_account"
+  Twitter_request_contract.get_tweets ~account_id:"test_account"
     ~ids:["111"]
     ~expansions:["author_id"]
     ~tweet_fields:["created_at"; "public_metrics"] ()
@@ -5537,16 +5547,25 @@ let test_get_tweets_with_fields () =
    | Some (Ok ()) -> ()
    | Some (Error err) -> failwith ("Batch lookup with fields failed: " ^ err)
    | None -> failwith "No result from batch lookup with fields");
+  (* Verify URL has correct query parameters *)
+  (match !captured_get_urls with
+   | url :: _ ->
+       let uri = Uri.of_string url in
+       assert ((Uri.get_query_param uri "ids" |> Option.value ~default:"") = "111");
+       assert ((Uri.get_query_param uri "expansions" |> Option.value ~default:"") = "author_id");
+       assert ((Uri.get_query_param uri "tweet.fields" |> Option.value ~default:"") = "created_at,public_metrics")
+   | [] -> failwith "Expected captured GET URL for get_tweets with fields");
   print_endline "✓ Batch tweet lookup with fields test passed"
 
 (* ============================================ *)
 (* NEW TESTS: Time-filtered timelines (M2)     *)
 (* ============================================ *)
 
-(** Test: get_user_timeline with start_time and end_time *)
+(** Test: get_user_timeline with start_time and end_time - verifies URL contract *)
 let test_timeline_with_time_filters () =
+  captured_get_urls := [];
   let result = ref None in
-  Twitter.get_user_timeline ~account_id:"test_account"
+  Twitter_request_contract.get_user_timeline ~account_id:"test_account"
     ~user_id:"user_123"
     ~start_time:(Some "2024-01-01T00:00:00Z")
     ~end_time:(Some "2024-12-31T23:59:59Z") ()
@@ -5557,12 +5576,21 @@ let test_timeline_with_time_filters () =
    | Some (Ok ()) -> ()
    | Some (Error err) -> failwith ("Timeline with time filters failed: " ^ err)
    | None -> failwith "No result from time-filtered timeline");
+  (* Verify URL contains start_time and end_time parameters *)
+  (match !captured_get_urls with
+   | url :: _ ->
+       let uri = Uri.of_string url in
+       assert ((Uri.get_query_param uri "start_time" |> Option.value ~default:"") = "2024-01-01T00:00:00Z");
+       assert ((Uri.get_query_param uri "end_time" |> Option.value ~default:"") = "2024-12-31T23:59:59Z");
+       assert (string_contains url "/users/user_123/tweets")
+   | [] -> failwith "Expected captured GET URL for timeline with time filters");
   print_endline "✓ Timeline with time filters test passed"
 
-(** Test: get_user_timeline with exclude parameter *)
+(** Test: get_user_timeline with exclude parameter - verifies URL contract *)
 let test_timeline_with_exclude () =
+  captured_get_urls := [];
   let result = ref None in
-  Twitter.get_user_timeline ~account_id:"test_account"
+  Twitter_request_contract.get_user_timeline ~account_id:"test_account"
     ~user_id:"user_123"
     ~exclude:["retweets"; "replies"] ()
     (function
@@ -5572,12 +5600,19 @@ let test_timeline_with_exclude () =
    | Some (Ok ()) -> ()
    | Some (Error err) -> failwith ("Timeline with exclude failed: " ^ err)
    | None -> failwith "No result from timeline with exclude");
+  (* Verify URL contains exclude parameter *)
+  (match !captured_get_urls with
+   | url :: _ ->
+       let uri = Uri.of_string url in
+       assert ((Uri.get_query_param uri "exclude" |> Option.value ~default:"") = "retweets,replies")
+   | [] -> failwith "Expected captured GET URL for timeline with exclude");
   print_endline "✓ Timeline with exclude parameter test passed"
 
-(** Test: get_user_timeline with all new filters combined *)
+(** Test: get_user_timeline with all new filters combined - verifies URL contract *)
 let test_timeline_combined_filters () =
+  captured_get_urls := [];
   let result = ref None in
-  Twitter.get_user_timeline ~account_id:"test_account"
+  Twitter_request_contract.get_user_timeline ~account_id:"test_account"
     ~user_id:"user_123"
     ~max_results:20
     ~start_time:(Some "2024-06-01T00:00:00Z")
@@ -5591,6 +5626,17 @@ let test_timeline_combined_filters () =
    | Some (Ok ()) -> ()
    | Some (Error err) -> failwith ("Timeline combined filters failed: " ^ err)
    | None -> failwith "No result from timeline combined filters");
+  (* Verify URL contains all combined filter parameters *)
+  (match !captured_get_urls with
+   | url :: _ ->
+       let uri = Uri.of_string url in
+       assert ((Uri.get_query_param uri "max_results" |> Option.value ~default:"") = "20");
+       assert ((Uri.get_query_param uri "start_time" |> Option.value ~default:"") = "2024-06-01T00:00:00Z");
+       assert ((Uri.get_query_param uri "end_time" |> Option.value ~default:"") = "2024-06-30T23:59:59Z");
+       assert ((Uri.get_query_param uri "exclude" |> Option.value ~default:"") = "retweets");
+       assert ((Uri.get_query_param uri "tweet.fields" |> Option.value ~default:"") = "created_at,public_metrics");
+       assert (string_contains url "/users/user_123/tweets")
+   | [] -> failwith "Expected captured GET URL for timeline combined filters");
   print_endline "✓ Timeline combined filters test passed"
 
 (* ============================================ *)
@@ -5739,6 +5785,8 @@ let test_retry_on_401 () =
    | None -> failwith "No result from retry on 401 test");
   (* The action should have been called twice: once failing, once succeeding *)
   assert (!retry_401_api_calls = 2);
+  (* A forced token refresh must have been triggered by the 401 *)
+  assert (!retry_401_refresh_calls = 1);
   print_endline "✓ Retry on 401 with token refresh test passed"
 
 (* ============================================ *)

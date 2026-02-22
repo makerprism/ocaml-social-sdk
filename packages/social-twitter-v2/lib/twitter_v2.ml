@@ -668,14 +668,14 @@ module Make (Config : CONFIG) = struct
     else Error (List.rev !errors)
   
   (** Validate a thread before posting *)
-  let validate_thread ~texts ?(media_counts=[]) () =
+  let validate_thread ~texts ?(media_counts=[]) ?(premium=false) () =
     if texts = [] then
       Error [Error_types.Thread_empty]
     else
       let errors = List.mapi (fun i text ->
         let media_count = try List.nth media_counts i with _ -> 0 in
         let is_reply = i > 0 in  (* Replies in thread don't count leading @mentions *)
-        match validate_post ~text ~media_count ~is_reply () with
+        match validate_post ~text ~media_count ~is_reply ~premium () with
         | Ok () -> None
         | Error errs -> Some (Error_types.Thread_post_invalid { index = i; errors = errs })
       ) texts |> List.filter_map Fun.id in
@@ -907,8 +907,9 @@ module Make (Config : CONFIG) = struct
   (** Retry-on-401 wrapper.
 
       Performs [action] with the current access token.  If the HTTP response
-      returns status 401 the wrapper refreshes the token once via
-      {!ensure_valid_token} and retries the action with the new token.
+      returns status 401 the wrapper force-refreshes the token (bypassing the
+      local expiry check, since the server rejected the token) and retries
+      the action once with the new token.
       If the retry also returns 401, the error is returned without further
       retries.
 
@@ -924,14 +925,39 @@ module Make (Config : CONFIG) = struct
         action access_token
           (fun response ->
             if response.Social_core.status = 401 then
-              (* Force a token refresh by invalidating cache, then retry once *)
-              ensure_valid_token ~account_id
-                (fun new_access_token ->
-                  action new_access_token
-                    (fun retry_response ->
-                      handle_response retry_response on_result)
-                    (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
-                (fun err -> on_result (Error err))
+              (* Force a token refresh: the server rejected the token even if
+                 it has not expired locally (e.g. revoked, rotated).  We call
+                 refresh_access_token directly instead of ensure_valid_token
+                 so that we always hit the token endpoint. *)
+              Config.get_credentials ~account_id
+                (fun creds ->
+                  let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
+                  let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
+                  match creds.refresh_token with
+                  | None ->
+                      on_result (Error (Error_types.Auth_error Error_types.Missing_credentials))
+                  | Some _ when client_id = "" || client_secret = "" ->
+                      on_result (Error (Error_types.Auth_error
+                        (Error_types.Refresh_failed "TWITTER_CLIENT_ID or TWITTER_CLIENT_SECRET is missing")))
+                  | Some rt ->
+                      refresh_access_token ~client_id ~client_secret ~refresh_token:rt
+                        (fun (new_access, new_refresh, expires_at) ->
+                          let updated_creds = {
+                            access_token = new_access;
+                            refresh_token = Some new_refresh;
+                            expires_at = Some expires_at;
+                            token_type = "Bearer";
+                          } in
+                          Config.update_credentials ~account_id ~credentials:updated_creds
+                            (fun () ->
+                              action new_access
+                                (fun retry_response ->
+                                  handle_response retry_response on_result)
+                                (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+                            (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+                        (fun err ->
+                          on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
+                (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
             else
               handle_response response on_result)
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
@@ -1268,10 +1294,10 @@ module Make (Config : CONFIG) = struct
              Default: false (for backward compatibility)
       @param on_result Callback receiving the outcome with tweet ID
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(validate_media_before_upload=false) ?reply_settings ?community_id ?(share_with_followers=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(validate_media_before_upload=false) ?reply_settings ?community_id ?(share_with_followers=false) ?(premium=false) on_result =
     (* Validate before making any API calls *)
     let media_count = List.length media_urls in
-    match validate_post ~text ~media_count () with
+    match validate_post ~text ~media_count ~premium () with
     | Error errs ->
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
@@ -1436,9 +1462,9 @@ module Make (Config : CONFIG) = struct
       @param media_ids List of pre-uploaded media IDs
       @param on_result Callback receiving the outcome with tweet ID
   *)
-  let post_single_with_media_ids ~account_id ~text ~media_ids on_result =
+  let post_single_with_media_ids ~account_id ~text ~media_ids ?(premium=false) on_result =
     let media_count = List.length media_ids in
-    match validate_post ~text ~media_count () with
+    match validate_post ~text ~media_count ~premium () with
     | Error errs ->
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
@@ -1499,9 +1525,9 @@ module Make (Config : CONFIG) = struct
       @param media_ids_per_post Media IDs for each post
       @param on_result Callback receiving the outcome with thread_result
   *)
-  let post_thread_with_media_ids ~account_id ~texts ~media_ids_per_post on_result =
+  let post_thread_with_media_ids ~account_id ~texts ~media_ids_per_post ?(premium=false) on_result =
     let media_counts = List.map List.length media_ids_per_post in
-    match validate_thread ~texts ~media_counts () with
+    match validate_thread ~texts ~media_counts ~premium () with
     | Error errs ->
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
@@ -1618,9 +1644,9 @@ module Make (Config : CONFIG) = struct
              download but before upload. Default: false
       @param on_result Callback receiving the outcome with thread_result
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(validate_media_before_upload=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(validate_media_before_upload=false) ?(premium=false) on_result =
     let media_counts = List.map List.length media_urls_per_post in
-    match validate_thread ~texts ~media_counts () with
+    match validate_thread ~texts ~media_counts ~premium () with
     | Error errs ->
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
@@ -3383,8 +3409,9 @@ module Make (Config : CONFIG) = struct
   *)
   let validate_content ~text ?(premium=false) () =
     let max_length = if premium then max_tweet_length_premium else max_tweet_length in
-    if String.length text > max_length then
-      Error (Printf.sprintf "Tweet exceeds %d character limit" max_length)
+    let char_count = Twitter_char_counter.count text in
+    if char_count > max_length then
+      Error (Printf.sprintf "Tweet exceeds %d character limit (counted %d)" max_length char_count)
     else
       Ok ()
   
