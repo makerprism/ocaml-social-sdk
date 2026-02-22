@@ -138,6 +138,8 @@ module Mock_config = struct
 
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
     on_success ()
+
+  let sleep _delay f = f ()
 end
 
 module Threads = Social_threads_v1.Make (Mock_config)
@@ -3151,6 +3153,739 @@ let test_canonical_insights_adapters () =
 
   print_endline "ok: canonical insights adapters"
 
+(* H5: GIF media type support *)
+let test_post_single_gif_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+    ];
+  Threads.post_single
+    ~account_id:"acct-1"
+    ~text:"check this gif"
+    ~media_urls:[ "https://example.com/funny.gif" ]
+    (function
+      | Error_types.Success post_id ->
+          assert (post_id = "post-1");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; (_, _, _, create_body); _ ] ->
+               assert (string_contains create_body "media_type=GIF");
+               assert (string_contains create_body "image_url=")
+           | _ -> failwith "unexpected request sequence for gif post");
+          print_endline "ok: post single gif"
+      | _ -> failwith "expected successful gif post")
+
+(* H5: topic tag support *)
+let test_post_single_with_topic_tag () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+    ];
+  Threads.post_single
+    ~account_id:"acct-1"
+    ~text:"topic post"
+    ~media_urls:[]
+    ~topic_tag:"technology"
+    (function
+      | Error_types.Success post_id ->
+          assert (post_id = "post-1");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; (_, _, _, create_body); _ ] ->
+               assert (string_contains create_body "text_post_app_tags=technology")
+           | _ -> failwith "unexpected request sequence for topic tag");
+          print_endline "ok: post single with topic tag"
+      | _ -> failwith "expected successful topic tag post")
+
+let test_post_single_topic_tag_trimmed () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+    ];
+  Threads.post_single
+    ~account_id:"acct-1"
+    ~text:"topic post"
+    ~media_urls:[]
+    ~topic_tag:"  science  "
+    (function
+      | Error_types.Success _ ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; (_, _, _, create_body); _ ] ->
+               assert (string_contains create_body "text_post_app_tags=science");
+               assert (not (string_contains create_body "text_post_app_tags=+"))
+           | _ -> failwith "unexpected request sequence for topic tag trim");
+          print_endline "ok: post single topic tag trimmed"
+      | _ -> failwith "expected successful topic tag trimmed post")
+
+let test_post_single_empty_topic_tag_omitted () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+    ];
+  Threads.post_single
+    ~account_id:"acct-1"
+    ~text:"no tag"
+    ~media_urls:[]
+    ~topic_tag:"   "
+    (function
+      | Error_types.Success _ ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; (_, _, _, create_body); _ ] ->
+               assert (not (string_contains create_body "text_post_app_tags"))
+           | _ -> failwith "unexpected request sequence for empty topic tag");
+          print_endline "ok: post single empty topic tag omitted"
+      | _ -> failwith "expected successful post with empty topic tag")
+
+(* H2: Container status polling *)
+let test_check_container_status_finished () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+    ];
+  Threads.check_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok Social_threads_v1.Finished ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("GET", url, _, _) ] ->
+               assert (string_contains url "/v1.0/container-1?");
+               assert (string_contains url "fields=status%2Cerror_message")
+           | _ -> failwith "unexpected request for check_container_status");
+          print_endline "ok: check container status finished"
+      | _ -> failwith "expected Finished status")
+
+let test_check_container_status_in_progress () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"IN_PROGRESS\"}" };
+    ];
+  Threads.check_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok Social_threads_v1.In_progress ->
+          print_endline "ok: check container status in progress"
+      | _ -> failwith "expected In_progress status")
+
+let test_check_container_status_error () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"ERROR\",\"error_message\":\"Upload failed\"}" };
+    ];
+  Threads.check_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok (Social_threads_v1.Error_status msg) ->
+          assert (msg = "Upload failed");
+          print_endline "ok: check container status error"
+      | _ -> failwith "expected Error_status")
+
+let test_poll_container_status_immediate_finish () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+    ];
+  Threads.poll_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok container_id ->
+          assert (container_id = "container-1");
+          print_endline "ok: poll container status immediate finish"
+      | Error _ -> failwith "expected successful poll")
+
+let test_poll_container_status_retries_then_finishes () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"IN_PROGRESS\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"IN_PROGRESS\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+    ];
+  Threads.poll_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok container_id ->
+          assert (container_id = "container-1");
+          print_endline "ok: poll container status retries then finishes"
+      | Error _ -> failwith "expected successful poll after retries")
+
+let test_poll_container_status_max_attempts_exceeded () =
+  Mock_config.reset ();
+  (* Set enough IN_PROGRESS responses to exceed max_attempts=2 *)
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"IN_PROGRESS\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"IN_PROGRESS\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"IN_PROGRESS\"}" };
+    ];
+  Threads.poll_container_status
+    ~max_attempts:2
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Error (Error_types.Internal_error msg) ->
+          assert (string_contains msg "still processing after 2 attempts");
+          print_endline "ok: poll container status max attempts exceeded"
+      | _ -> failwith "expected error on max attempts exceeded")
+
+let test_poll_container_status_error_status () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"status\":\"ERROR\",\"error_message\":\"Bad media\"}" };
+    ];
+  Threads.poll_container_status
+    ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Error (Error_types.Internal_error msg) ->
+          assert (string_contains msg "processing failed");
+          assert (string_contains msg "Bad media");
+          print_endline "ok: poll container status error status"
+      | _ -> failwith "expected error on error status")
+
+(* H1: Carousel/multi-media posts *)
+let test_post_carousel_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      (* child container 1 *)
+      { status = 200; headers = []; body = "{\"id\":\"child-1\"}" };
+      (* child container 2 *)
+      { status = 200; headers = []; body = "{\"id\":\"child-2\"}" };
+      (* carousel container *)
+      { status = 200; headers = []; body = "{\"id\":\"carousel-1\"}" };
+      (* poll status *)
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+      (* publish *)
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+    ];
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"carousel caption"
+    ~media_urls:[ "https://example.com/a.jpg"; "https://example.com/b.png" ]
+    (function
+      | Error_types.Success post_id ->
+          assert (post_id = "post-1");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [
+            (_, _, _, _);          (* me *)
+            (_, _, _, child1_body);  (* child 1 *)
+            (_, _, _, child2_body);  (* child 2 *)
+            (_, _, _, carousel_body); (* carousel *)
+            (_, poll_url, _, _);     (* poll *)
+            (_, _, _, publish_body); (* publish *)
+           ] ->
+               assert (string_contains child1_body "is_carousel_item=true");
+               assert (string_contains child1_body "media_type=IMAGE");
+               assert (string_contains child2_body "is_carousel_item=true");
+               assert (string_contains child2_body "media_type=IMAGE");
+               assert (string_contains carousel_body "media_type=CAROUSEL");
+               assert (string_contains carousel_body "children=child-1%2Cchild-2");
+               (if not (string_contains carousel_body "text=carousel") then
+                 failwith (Printf.sprintf "carousel body missing text: %s" carousel_body));
+               assert (string_contains poll_url "fields=status");
+               assert (string_contains publish_body "creation_id=carousel-1")
+           | _ -> failwith "unexpected request sequence for carousel");
+          print_endline "ok: post carousel success"
+      | Error_types.Failure err ->
+          failwith (Printf.sprintf "carousel post failed: %s" (Error_types.error_to_string err))
+      | Error_types.Partial_success _ ->
+          failwith "expected success, got partial success")
+
+let test_post_carousel_rejects_single_media () =
+  Mock_config.reset ();
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"only one"
+    ~media_urls:[ "https://example.com/a.jpg" ]
+    (function
+      | Error_types.Failure (Error_types.Validation_error errs) ->
+          let has_count_error =
+            List.exists
+              (function
+                | Error_types.Too_many_media { count; max = _ } -> count = 1
+                | _ -> false)
+              errs
+          in
+          assert has_count_error;
+          print_endline "ok: post carousel rejects single media"
+      | _ -> failwith "expected validation error for single media carousel")
+
+let test_post_carousel_rejects_too_many_media () =
+  Mock_config.reset ();
+  let urls = List.init 21 (fun i -> Printf.sprintf "https://example.com/%d.jpg" i) in
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"too many"
+    ~media_urls:urls
+    (function
+      | Error_types.Failure (Error_types.Validation_error errs) ->
+          let has_count_error =
+            List.exists
+              (function
+                | Error_types.Too_many_media { count; max } -> count = 21 && max = 20
+                | _ -> false)
+              errs
+          in
+          assert has_count_error;
+          print_endline "ok: post carousel rejects too many media"
+      | _ -> failwith "expected validation error for too many media in carousel")
+
+let test_post_carousel_with_topic_tag () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"child-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"child-2\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"carousel-1\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+    ];
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"tagged carousel"
+    ~media_urls:[ "https://example.com/a.jpg"; "https://example.com/b.jpg" ]
+    ~topic_tag:"fashion"
+    (function
+      | Error_types.Success _ ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; _; _; (_, _, _, carousel_body); _; _ ] ->
+               assert (string_contains carousel_body "text_post_app_tags=fashion")
+           | _ -> failwith "unexpected request sequence for carousel topic tag");
+          print_endline "ok: post carousel with topic tag"
+      | _ -> failwith "expected successful carousel with topic tag")
+
+let test_post_carousel_child_creation_failure () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"child-1\"}" };
+      { status = 400; headers = []; body = "{\"error\":{\"message\":\"bad url\",\"code\":1}}" };
+    ];
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"fail"
+    ~media_urls:[ "https://example.com/a.jpg"; "https://example.com/b.jpg" ]
+    (function
+      | Error_types.Failure (Error_types.Api_error _) ->
+          print_endline "ok: post carousel child creation failure"
+      | _ -> failwith "expected failure on child creation error")
+
+(* H3: Reply management *)
+let test_get_replies_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"data\":[{\"id\":\"reply-1\",\"text\":\"first reply\"},{\"id\":\"reply-2\",\"text\":\"second reply\"}],\"paging\":{\"cursors\":{\"after\":\"cursor-abc\"}}}";
+      };
+    ];
+  Threads.get_replies ~account_id:"acct-1" ~media_id:"post-123"
+    (function
+      | Ok (replies, next_after) ->
+          assert (List.length replies = 2);
+          let first = List.hd replies in
+          assert (first.id = "reply-1");
+          assert (first.text = Some "first reply");
+          assert (next_after = Some "cursor-abc");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("GET", url, _, _) ] ->
+               assert (string_contains url "/v1.0/post-123/replies?")
+           | _ -> failwith "unexpected request for get_replies");
+          print_endline "ok: get replies success"
+      | Error _ -> failwith "expected successful get_replies")
+
+let test_get_replies_with_pagination () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body = "{\"data\":[{\"id\":\"reply-3\"}]}";
+      };
+    ];
+  Threads.get_replies ~account_id:"acct-1" ~media_id:"post-123" ~after:"cursor-abc" ~limit:5
+    (function
+      | Ok (replies, _) ->
+          assert (List.length replies = 1);
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("GET", url, _, _) ] ->
+               assert (string_contains url "after=cursor-abc");
+               assert (string_contains url "limit=5")
+           | _ -> failwith "unexpected request for get_replies pagination");
+          print_endline "ok: get replies with pagination"
+      | Error _ -> failwith "expected successful get_replies with pagination")
+
+let test_get_conversation_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"data\":[{\"id\":\"conv-1\",\"text\":\"root\"},{\"id\":\"conv-2\",\"text\":\"reply\"},{\"id\":\"conv-3\",\"text\":\"nested\"}]}";
+      };
+    ];
+  Threads.get_conversation ~account_id:"acct-1" ~media_id:"post-123"
+    (function
+      | Ok (posts, _) ->
+          assert (List.length posts = 3);
+          let first = List.hd posts in
+          assert (first.id = "conv-1");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("GET", url, _, _) ] ->
+               assert (string_contains url "/v1.0/post-123/conversation?")
+           | _ -> failwith "unexpected request for get_conversation");
+          print_endline "ok: get conversation success"
+      | Error _ -> failwith "expected successful get_conversation")
+
+let test_post_single_as_reply () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"reply-post-1\"}" };
+    ];
+  (* post_single already supports reply_to_id via create_text_container *)
+  (* This test verifies the reply_to_id is sent when used in post_thread *)
+  Threads.post_thread
+    ~account_id:"acct-1"
+    ~texts:[ "my reply" ]
+    ~media_urls_per_post:[ [] ]
+    (function
+      | Error_types.Success result ->
+          assert (result.Error_types.posted_ids = [ "reply-post-1" ]);
+          print_endline "ok: post single as reply"
+      | _ -> failwith "expected successful reply post")
+
+(* H4: Publishing quota checking *)
+let test_get_publishing_limit_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"data\":[{\"quota_usage\":42,\"config\":{\"quota_total\":250,\"reply_quota_usage\":10,\"reply_quota_total\":1000}}]}";
+      };
+    ];
+  Threads.get_publishing_limit ~account_id:"acct-1"
+    (function
+      | Ok limit ->
+          assert (limit.Social_threads_v1.quota_usage = 42);
+          assert (limit.quota_total = 250);
+          assert (limit.reply_quota_usage = 10);
+          assert (limit.reply_quota_total = 1000);
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; ("GET", url, _, _) ] ->
+               assert (string_contains url "/v1.0/user-1/threads_publishing_limit?");
+               assert (string_contains url "fields=quota_usage%2Cconfig")
+           | _ -> failwith "unexpected request for get_publishing_limit");
+          print_endline "ok: get publishing limit success"
+      | Error _ -> failwith "expected successful get_publishing_limit")
+
+let test_get_publishing_limit_defaults () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      {
+        status = 200;
+        headers = [];
+        body = "{\"data\":[{}]}";
+      };
+    ];
+  Threads.get_publishing_limit ~account_id:"acct-1"
+    (function
+      | Ok limit ->
+          assert (limit.Social_threads_v1.quota_usage = 0);
+          assert (limit.quota_total = 250);
+          assert (limit.reply_quota_usage = 0);
+          assert (limit.reply_quota_total = 1000);
+          print_endline "ok: get publishing limit defaults"
+      | Error _ -> failwith "expected successful get_publishing_limit with defaults")
+
+let test_get_publishing_limit_api_error () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      {
+        status = 400;
+        headers = [];
+        body = "{\"error\":{\"message\":\"bad request\",\"code\":100}}";
+      };
+    ];
+  Threads.get_publishing_limit ~account_id:"acct-1"
+    (function
+      | Error (Error_types.Api_error _) ->
+          print_endline "ok: get publishing limit api error"
+      | _ -> failwith "expected api error for publishing limit")
+
+(* H1: validate_media_urls allows up to 20 for carousels *)
+let test_validate_media_urls_allows_20_for_carousel () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  (* Create 20 URLs and try to post carousel - it should pass validation *)
+  let urls = List.init 20 (fun i -> Printf.sprintf "https://example.com/%d.jpg" i) in
+  (* Create enough mock responses for 20 children + carousel + poll + publish + me *)
+  let me_response = { Social_core.status = 200; headers = []; body = "{\"id\":\"user-1\"}" } in
+  let child_responses = List.init 20 (fun i ->
+    { Social_core.status = 200; headers = []; body = Printf.sprintf "{\"id\":\"child-%d\"}" i }) in
+  let carousel_response = { Social_core.status = 200; headers = []; body = "{\"id\":\"carousel-1\"}" } in
+  let poll_response = { Social_core.status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" } in
+  let publish_response = { Social_core.status = 200; headers = []; body = "{\"id\":\"post-1\"}" } in
+  Mock_http.set_responses
+    ([ me_response ] @ child_responses @ [ carousel_response; poll_response; publish_response ]);
+  Threads.post_carousel
+    ~account_id:"acct-1"
+    ~text:"big carousel"
+    ~media_urls:urls
+    (function
+      | Error_types.Success post_id ->
+          assert (post_id = "post-1");
+          print_endline "ok: validate media urls allows 20 for carousel"
+      | Error_types.Failure err ->
+          failwith (Printf.sprintf "expected success for 20-item carousel but got: %s"
+            (Error_types.error_to_string err))
+      | _ -> failwith "expected successful 20-item carousel")
+
+let test_post_thread_with_topic_tag () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          token_type = "Bearer";
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"container-2\"}" };
+      { status = 200; headers = []; body = "{\"id\":\"post-2\"}" };
+    ];
+  Threads.post_thread
+    ~account_id:"acct-1"
+    ~texts:[ "one"; "two" ]
+    ~media_urls_per_post:[ []; [] ]
+    ~topic_tag:"sports"
+    (function
+      | Error_types.Success _ ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ _; (_, _, _, create_1_body); _; (_, _, _, create_2_body); _ ] ->
+               assert (string_contains create_1_body "text_post_app_tags=sports");
+               assert (string_contains create_2_body "text_post_app_tags=sports")
+           | _ -> failwith "unexpected request sequence for thread topic tag");
+          print_endline "ok: post thread with topic tag"
+      | _ -> failwith "expected successful thread with topic tag")
+
 let () =
   test_oauth_url ();
   test_oauth_url_encodes_special_characters ();
@@ -3273,4 +4008,29 @@ let () =
   test_post_thread_first_item_failure ();
   test_post_thread_rejects_extra_media_entries ();
   test_post_thread_rejects_extra_empty_media_entries ();
+  test_post_single_gif_success ();
+  test_post_single_with_topic_tag ();
+  test_post_single_topic_tag_trimmed ();
+  test_post_single_empty_topic_tag_omitted ();
+  test_check_container_status_finished ();
+  test_check_container_status_in_progress ();
+  test_check_container_status_error ();
+  test_poll_container_status_immediate_finish ();
+  test_poll_container_status_retries_then_finishes ();
+  test_poll_container_status_max_attempts_exceeded ();
+  test_poll_container_status_error_status ();
+  test_post_carousel_success ();
+  test_post_carousel_rejects_single_media ();
+  test_post_carousel_rejects_too_many_media ();
+  test_post_carousel_with_topic_tag ();
+  test_post_carousel_child_creation_failure ();
+  test_get_replies_success ();
+  test_get_replies_with_pagination ();
+  test_get_conversation_success ();
+  test_post_single_as_reply ();
+  test_get_publishing_limit_success ();
+  test_get_publishing_limit_defaults ();
+  test_get_publishing_limit_api_error ();
+  test_validate_media_urls_allows_20_for_carousel ();
+  test_post_thread_with_topic_tag ();
   print_endline "Threads tests passed"

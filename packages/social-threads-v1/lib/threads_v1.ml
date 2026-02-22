@@ -467,10 +467,24 @@ let to_canonical_post_insights_series (post_insights : post_insight list) =
 type media_kind =
   | Image
   | Video
+  | GIF
+
+type container_status =
+  | Finished
+  | In_progress
+  | Error_status of string
+
+type publishing_limit = {
+  quota_usage : int;
+  quota_total : int;
+  reply_quota_usage : int;
+  reply_quota_total : int;
+}
 
 module type CONFIG = sig
   include Social_core.CONFIG
   module Http : Social_core.HTTP_CLIENT
+  val sleep : float -> (unit -> 'a) -> 'a
 end
 
 module Make (Config : CONFIG) = struct
@@ -657,7 +671,9 @@ module Make (Config : CONFIG) = struct
       try Uri.path (Uri.of_string lower)
       with _ -> lower
     in
-    if Filename.check_suffix path ".jpg"
+    if Filename.check_suffix path ".gif"
+    then Some GIF
+    else if Filename.check_suffix path ".jpg"
        || Filename.check_suffix path ".jpeg"
        || Filename.check_suffix path ".png"
        || Filename.check_suffix path ".webp"
@@ -684,19 +700,27 @@ module Make (Config : CONFIG) = struct
         let trimmed = String.trim key in
         if trimmed = "" then None else Some trimmed
 
-  let validate_media_urls media_urls =
-    match media_urls with
-    | [] -> None
-    | [ url ] ->
-        let normalized = normalize_media_url url in
-        if not (is_http_url normalized) then
-          Some (Error_types.Invalid_url normalized)
-        else
-          (match media_kind_of_url normalized with
-           | Some _ -> None
-           | None -> Some (Error_types.Media_unsupported_format normalized))
-    | urls ->
-        Some (Error_types.Too_many_media { count = List.length urls; max = 1 })
+  let validate_media_urls ?(max_items = 1) media_urls =
+    let count = List.length media_urls in
+    if count = 0 then None
+    else if count > max_items then
+      Some (Error_types.Too_many_media { count; max = max_items })
+    else
+      let errors =
+        List.filter_map
+          (fun url ->
+            let normalized = normalize_media_url url in
+            if not (is_http_url normalized) then
+              Some (Error_types.Invalid_url normalized)
+            else
+              match media_kind_of_url normalized with
+              | Some _ -> None
+              | None -> Some (Error_types.Media_unsupported_format normalized))
+          media_urls
+      in
+      match errors with
+      | [] -> None
+      | first :: _ -> Some first
 
   let insight_metric_of_string raw_metric =
     match String.lowercase_ascii (String.trim raw_metric) with
@@ -818,6 +842,7 @@ module Make (Config : CONFIG) = struct
       ?reply_to_id
       ?idempotency_key
       ?reply_control
+      ?topic_tag
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -833,6 +858,10 @@ module Make (Config : CONFIG) = struct
          @
          (match reply_control with
           | Some v when String.trim v <> "" -> [ ("reply_control", [String.trim v]) ]
+          | _ -> [])
+         @
+         (match topic_tag with
+          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", [String.trim tag]) ]
           | _ -> [])
          @
          (match normalized_idempotency_key with
@@ -866,9 +895,11 @@ module Make (Config : CONFIG) = struct
       ~text
       ~media_url
       ~kind
+      ?(is_carousel_item = false)
       ?reply_to_id
       ?idempotency_key
       ?reply_control
+      ?topic_tag
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -876,6 +907,7 @@ module Make (Config : CONFIG) = struct
       match kind with
       | Image -> ("image_url", "IMAGE")
       | Video -> ("video_url", "VIDEO")
+      | GIF -> ("image_url", "GIF")
     in
     let body =
       Uri.encoded_of_query
@@ -883,7 +915,9 @@ module Make (Config : CONFIG) = struct
            (media_field, [media_url]);
            ("access_token", [access_token]) ]
          @
-         (if normalized_text = "" then [] else [ ("text", [normalized_text]) ])
+         (if is_carousel_item then [ ("is_carousel_item", ["true"]) ] else [])
+         @
+         (if normalized_text = "" || is_carousel_item then [] else [ ("text", [normalized_text]) ])
          @
          (match reply_to_id with
           | Some id -> [ ("reply_to_id", [id]) ]
@@ -891,6 +925,10 @@ module Make (Config : CONFIG) = struct
          @
          (match reply_control with
           | Some v when String.trim v <> "" -> [ ("reply_control", [String.trim v]) ]
+          | _ -> [])
+         @
+         (match topic_tag with
+          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", [String.trim tag]) ]
           | _ -> [])
          @
          (match normalized_idempotency_key with
@@ -926,6 +964,7 @@ module Make (Config : CONFIG) = struct
       ?reply_to_id
       ?idempotency_key
       ?reply_control
+      ?topic_tag
       on_result =
     match media_urls with
     | [] ->
@@ -936,6 +975,7 @@ module Make (Config : CONFIG) = struct
           ?reply_to_id
           ?idempotency_key
           ?reply_control
+          ?topic_tag
           on_result
     | [ media_url ] ->
         let normalized = normalize_media_url media_url in
@@ -950,6 +990,7 @@ module Make (Config : CONFIG) = struct
                ?reply_to_id
                ?idempotency_key
                ?reply_control
+               ?topic_tag
                on_result
          | None ->
              on_result
@@ -988,6 +1029,424 @@ module Make (Config : CONFIG) = struct
                   ~headers:response.headers
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
+
+  let check_container_status ~access_token ~container_id on_result =
+    let query =
+      Uri.encoded_of_query
+        [ ("fields", ["status,error_message"]);
+          ("access_token", [access_token]) ]
+    in
+    let url = Printf.sprintf "%s/%s?%s" threads_api_base container_id query in
+    http_get_with_retry url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let json = Yojson.Basic.from_string response.body in
+            let open Yojson.Basic.Util in
+            let status =
+              try json |> member "status" |> to_string
+              with _ -> ""
+            in
+            let error_message =
+              try Some (json |> member "error_message" |> to_string)
+              with _ -> None
+            in
+            let container_st =
+              match String.uppercase_ascii status with
+              | "FINISHED" -> Finished
+              | "IN_PROGRESS" -> In_progress
+              | _ ->
+                  let msg =
+                    match error_message with
+                    | Some m when m <> "" -> m
+                    | _ -> status
+                  in
+                  Error_status msg
+            in
+            on_result (Ok container_st)
+          with exn ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse container status response: %s" (Printexc.to_string exn))))
+        else
+          on_result
+            (Error
+               (parse_api_error
+                  ~status_code:response.status
+                  ~headers:response.headers
+                  ~response_body:response.body)))
+      (fun err -> on_result (Error (network_error err)))
+
+  let poll_container_status
+      ?(poll_interval = 2.0)
+      ?(max_attempts = 10)
+      ~access_token
+      ~container_id
+      on_result =
+    let rec loop attempt =
+      if attempt > max_attempts then
+        on_result (Error (Error_types.Internal_error
+          (Printf.sprintf "Container %s still processing after %d attempts" container_id max_attempts)))
+      else
+        let delay = poll_interval *. (float_of_int (min attempt 5)) in
+        Config.sleep delay (fun () ->
+          check_container_status ~access_token ~container_id
+            (function
+              | Ok Finished -> on_result (Ok container_id)
+              | Ok In_progress -> loop (attempt + 1)
+              | Ok (Error_status msg) ->
+                  on_result (Error (Error_types.Internal_error
+                    (Printf.sprintf "Container %s processing failed: %s" container_id msg)))
+              | Error err -> on_result (Error err)))
+    in
+    loop 1
+
+  let create_carousel_item_container
+      ~access_token
+      ~user_id
+      ~media_url
+      ~kind
+      on_result =
+    create_media_container
+      ~access_token
+      ~user_id
+      ~text:""
+      ~media_url
+      ~kind
+      ~is_carousel_item:true
+      on_result
+
+  let rec create_carousel_children
+      ~access_token
+      ~user_id
+      ~media_urls
+      ~acc
+      on_result =
+    match media_urls with
+    | [] -> on_result (Ok (List.rev acc))
+    | url :: rest ->
+        let normalized = normalize_media_url url in
+        (match media_kind_of_url normalized with
+         | Some kind ->
+             create_carousel_item_container
+               ~access_token
+               ~user_id
+               ~media_url:normalized
+               ~kind
+               (function
+                 | Ok child_id ->
+                     create_carousel_children
+                       ~access_token
+                       ~user_id
+                       ~media_urls:rest
+                       ~acc:(child_id :: acc)
+                       on_result
+                 | Error err -> on_result (Error err))
+         | None ->
+             on_result
+               (Error
+                  (Error_types.Validation_error
+                     [ Error_types.Media_unsupported_format normalized ])))
+
+  let create_carousel_container
+      ~access_token
+      ~user_id
+      ~children_ids
+      ~text
+      ?topic_tag
+      ?reply_control
+      on_result =
+    let normalized_text = String.trim text in
+    let body =
+      Uri.encoded_of_query
+        ([ ("media_type", ["CAROUSEL"]);
+           ("children", [String.concat "," children_ids]);
+           ("access_token", [access_token]) ]
+         @
+         (if normalized_text = "" then [] else [ ("text", [normalized_text]) ])
+         @
+         (match reply_control with
+          | Some v when String.trim v <> "" -> [ ("reply_control", [String.trim v]) ]
+          | _ -> [])
+         @
+         (match topic_tag with
+          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", [String.trim tag]) ]
+          | _ -> []))
+    in
+    let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
+    let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+    http_post_no_retry ~headers ~body url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let json = Yojson.Basic.from_string response.body in
+            let open Yojson.Basic.Util in
+            let creation_id = json |> member "id" |> to_string in
+            on_result (Ok creation_id)
+          with exn ->
+            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse carousel container response: %s" (Printexc.to_string exn))))
+        else
+          on_result
+            (Error
+               (parse_api_error
+                  ~status_code:response.status
+                  ~headers:response.headers
+                  ~response_body:response.body)))
+      (fun err -> on_result (Error (network_error err)))
+
+  let post_carousel ~account_id ~text ~media_urls ?topic_tag ?reply_control on_result =
+    let validation_errors =
+      [ validate_media_urls ~max_items:20 media_urls ]
+      |> List.filter_map (fun x -> x)
+    in
+    let count = List.length media_urls in
+    let validation_errors =
+      if count < 2 then
+        (Error_types.Too_many_media { count; max = 20 }) :: validation_errors
+      else
+        validation_errors
+    in
+    if validation_errors <> [] then
+      on_result (Error_types.Failure (Error_types.Validation_error validation_errors))
+    else
+      with_valid_credentials ~account_id
+        (fun creds ->
+          get_user_id ~access_token:creds.access_token
+            (function
+              | Error err -> on_result (Error_types.Failure err)
+              | Ok user_id ->
+                  create_carousel_children
+                    ~access_token:creds.access_token
+                    ~user_id
+                    ~media_urls
+                    ~acc:[]
+                    (function
+                      | Error err -> on_result (Error_types.Failure err)
+                      | Ok children_ids ->
+                          create_carousel_container
+                            ~access_token:creds.access_token
+                            ~user_id
+                            ~children_ids
+                            ~text
+                            ?topic_tag
+                            ?reply_control
+                            (function
+                              | Error err -> on_result (Error_types.Failure err)
+                              | Ok carousel_id ->
+                                  poll_container_status
+                                    ~access_token:creds.access_token
+                                    ~container_id:carousel_id
+                                    (function
+                                      | Error err -> on_result (Error_types.Failure err)
+                                      | Ok _container_id ->
+                                          publish_container
+                                            ~access_token:creds.access_token
+                                            ~user_id
+                                            ~creation_id:carousel_id
+                                            (function
+                                              | Ok post_id -> on_result (Error_types.Success post_id)
+                                              | Error err -> on_result (Error_types.Failure err)))))))
+        (fun err -> on_result (Error_types.Failure err))
+
+  let get_replies ~account_id ~media_id ?after ?(limit = 20) on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
+        let params =
+          let normalized_after = normalize_optional_non_empty after in
+          [ ("fields", ["id,text,timestamp,permalink"]);
+            ("limit", [string_of_int limit]);
+            ("access_token", [creds.access_token]) ]
+          @
+          (match normalized_after with
+           | Some cursor -> [ ("after", [cursor]) ]
+           | None -> [])
+        in
+        let query = Uri.encoded_of_query params in
+        let url = Printf.sprintf "%s/%s/replies?%s" threads_api_base (String.trim media_id) query in
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let posts =
+                  json |> member "data" |> to_list
+                  |> List.map (fun item ->
+                         {
+                           id = item |> member "id" |> to_string;
+                           text =
+                             (try Some (item |> member "text" |> to_string)
+                              with _ -> None);
+                           timestamp =
+                             (try Some (item |> member "timestamp" |> to_string)
+                              with _ -> None);
+                           permalink =
+                             (try Some (item |> member "permalink" |> to_string)
+                              with _ -> None);
+                         })
+                in
+                let next_after =
+                  try
+                    Some
+                      (json
+                       |> member "paging"
+                       |> member "cursors"
+                       |> member "after"
+                       |> to_string)
+                  with _ -> None
+                in
+                on_result (Ok (posts, next_after))
+              with exn ->
+                on_result
+                  (Error
+                     (Error_types.Internal_error
+                        (Printf.sprintf "Failed to parse replies response: %s" (Printexc.to_string exn))))
+            else
+              on_result
+                (Error
+                   (parse_api_error
+                      ~status_code:response.status
+                      ~headers:response.headers
+                      ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err))))
+      (fun err -> on_result (Error err))
+
+  let get_conversation ~account_id ~media_id ?after ?(limit = 20) on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
+        let params =
+          let normalized_after = normalize_optional_non_empty after in
+          [ ("fields", ["id,text,timestamp,permalink"]);
+            ("limit", [string_of_int limit]);
+            ("access_token", [creds.access_token]) ]
+          @
+          (match normalized_after with
+           | Some cursor -> [ ("after", [cursor]) ]
+           | None -> [])
+        in
+        let query = Uri.encoded_of_query params in
+        let url = Printf.sprintf "%s/%s/conversation?%s" threads_api_base (String.trim media_id) query in
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let posts =
+                  json |> member "data" |> to_list
+                  |> List.map (fun item ->
+                         {
+                           id = item |> member "id" |> to_string;
+                           text =
+                             (try Some (item |> member "text" |> to_string)
+                              with _ -> None);
+                           timestamp =
+                             (try Some (item |> member "timestamp" |> to_string)
+                              with _ -> None);
+                           permalink =
+                             (try Some (item |> member "permalink" |> to_string)
+                              with _ -> None);
+                         })
+                in
+                let next_after =
+                  try
+                    Some
+                      (json
+                       |> member "paging"
+                       |> member "cursors"
+                       |> member "after"
+                       |> to_string)
+                  with _ -> None
+                in
+                on_result (Ok (posts, next_after))
+              with exn ->
+                on_result
+                  (Error
+                     (Error_types.Internal_error
+                        (Printf.sprintf "Failed to parse conversation response: %s" (Printexc.to_string exn))))
+            else
+              on_result
+                (Error
+                   (parse_api_error
+                      ~status_code:response.status
+                      ~headers:response.headers
+                      ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err))))
+      (fun err -> on_result (Error err))
+
+  let get_publishing_limit ~account_id on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        get_user_id ~access_token:creds.access_token
+          (function
+            | Error err -> on_result (Error err)
+            | Ok user_id ->
+                let query =
+                  Uri.encoded_of_query
+                    [ ("fields", ["quota_usage,config"]);
+                      ("access_token", [creds.access_token]) ]
+                in
+                let url =
+                  Printf.sprintf "%s/%s/threads_publishing_limit?%s" threads_api_base user_id query
+                in
+                http_get_with_retry url
+                  (fun response ->
+                    if response.status >= 200 && response.status < 300 then
+                      try
+                        let json = Yojson.Basic.from_string response.body in
+                        let open Yojson.Basic.Util in
+                        let data = json |> member "data" |> to_list in
+                        let item =
+                          match data with
+                          | first :: _ -> first
+                          | [] -> json
+                        in
+                        let quota_usage =
+                          try item |> member "quota_usage" |> to_int
+                          with _ -> 0
+                        in
+                        let config_obj =
+                          try item |> member "config"
+                          with _ -> `Null
+                        in
+                        let quota_total =
+                          try config_obj |> member "quota_total" |> to_int
+                          with _ -> 250
+                        in
+                        let reply_quota_usage =
+                          try config_obj |> member "reply_quota_usage" |> to_int
+                          with _ ->
+                            (try item |> member "reply_quota_usage" |> to_int
+                             with _ -> 0)
+                        in
+                        let reply_quota_total =
+                          try config_obj |> member "reply_quota_total" |> to_int
+                          with _ -> 1000
+                        in
+                        on_result
+                          (Ok
+                             {
+                               quota_usage;
+                               quota_total;
+                               reply_quota_usage;
+                               reply_quota_total;
+                             })
+                      with exn ->
+                        on_result
+                          (Error
+                             (Error_types.Internal_error
+                                (Printf.sprintf
+                                   "Failed to parse publishing limit response: %s"
+                                   (Printexc.to_string exn))))
+                    else
+                      on_result
+                        (Error
+                           (parse_api_error
+                              ~status_code:response.status
+                              ~headers:response.headers
+                              ~response_body:response.body)))
+                  (fun err -> on_result (Error (network_error err)))))
+      (fun err -> on_result (Error err))
 
   let get_oauth_url ~redirect_uri ~state on_success on_error =
     let raw_client_id = Config.get_env "THREADS_CLIENT_ID" |> Option.value ~default:"" in
@@ -1303,7 +1762,7 @@ module Make (Config : CONFIG) = struct
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
 
-  let post_single ~account_id ~text ~media_urls ?idempotency_key ?reply_control on_result =
+  let post_single ~account_id ~text ~media_urls ?idempotency_key ?reply_control ?topic_tag on_result =
     let validation_errors =
       [ validate_post_content ~text ~media_urls; validate_media_urls media_urls ]
       |> List.filter_map (fun x -> x)
@@ -1331,12 +1790,13 @@ module Make (Config : CONFIG) = struct
                     ~media_urls
                     ?idempotency_key
                     ?reply_control
+                    ?topic_tag
                     on_container
             in
             get_user_id ~access_token:creds.access_token on_user_id)
           (fun err -> on_result (Error_types.Failure err))
 
-  let post_thread ~account_id ~texts ~media_urls_per_post ?idempotency_key ?reply_control on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?idempotency_key ?reply_control ?topic_tag on_result =
     if texts = [] then
       on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
     else
@@ -1432,6 +1892,7 @@ module Make (Config : CONFIG) = struct
                             | Some base -> Some (base ^ "-" ^ string_of_int index)
                             | _ -> None)
                           ?reply_control
+                          ?topic_tag
                           (function
                             | Error err ->
                                 on_result
