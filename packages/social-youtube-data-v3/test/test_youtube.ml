@@ -1019,6 +1019,7 @@ let test_update_video () =
     ~title:"New Title"
     ~description:"New Description"
     ~tags:["tag1"; "tag2"]
+    ~category_id:"24"
     ~privacy_status:"unlisted"
     (function
       | Ok () ->
@@ -1026,15 +1027,16 @@ let test_update_video () =
           (match requests with
            | [("PUT", url, headers, body)] ->
                assert (string_contains url "/youtube/v3/videos?");
-               assert (string_contains url "part=");
+               assert (query_param url "part" = Some "snippet,status");
                assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
                assert (List.assoc_opt "Content-Type" headers = Some "application/json");
                assert (string_contains body "\"id\":\"vid_1\"");
                assert (string_contains body "\"title\":\"New Title\"");
+               assert (string_contains body "\"categoryId\":\"24\"");
                assert (string_contains body "\"description\":\"New Description\"");
                assert (string_contains body "\"privacyStatus\":\"unlisted\"");
                assert (string_contains body "tag1");
-               print_endline "PASS update_video sends correct PUT request"
+               print_endline "PASS update_video sends correct PUT request with categoryId"
            | _ -> failwith "Expected exactly one PUT request for update_video")
       | Error err ->
           failwith ("update_video failed: " ^ Error_types.error_to_string err))
@@ -1053,6 +1055,49 @@ let test_update_video_no_fields () =
           print_endline "PASS update_video with no fields returns error"
       | Ok () -> failwith "update_video with no fields should fail"
       | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: update_video snippet without title returns error (YouTube API requires title+categoryId for snippet) *)
+let test_update_video_snippet_requires_title () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  YouTube.update_video
+    ~account_id:"test_account"
+    ~video_id:"vid_1"
+    ~description:"Just updating description"
+    (function
+      | Error (Error_types.Internal_error msg) ->
+          assert (string_contains msg "title is required");
+          print_endline "PASS update_video snippet without title returns error"
+      | Ok () -> failwith "update_video without title should fail when snippet fields present"
+      | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: update_video with only privacy_status (no snippet) succeeds without title *)
+let test_update_video_status_only () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id":"vid_1"}|}; headers = [] };
+  ];
+
+  YouTube.update_video
+    ~account_id:"test_account"
+    ~video_id:"vid_1"
+    ~privacy_status:"private"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [("PUT", url, _headers, body)] ->
+               assert (query_param url "part" = Some "status");
+               assert (string_contains body "\"privacyStatus\":\"private\"");
+               (* snippet should not be present when only updating status *)
+               assert (not (string_contains body "\"snippet\""));
+               print_endline "PASS update_video status-only update works without title"
+           | _ -> failwith "Expected one PUT request for status-only update")
+      | Error err ->
+          failwith ("update_video status-only failed: " ^ Error_types.error_to_string err))
 
 (** Test: list_playlists sends correct GET request *)
 let test_list_playlists () =
@@ -1109,7 +1154,7 @@ let test_create_playlist () =
           (match requests with
            | [("POST", url, headers, body)] ->
                assert (string_contains url "/youtube/v3/playlists?");
-               assert (string_contains url "part=snippet");
+               assert (string_contains url "part=snippet,status");
                assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token");
                assert (List.assoc_opt "Content-Type" headers = Some "application/json");
                assert (string_contains body "\"title\":\"Test Playlist\"");
@@ -1307,6 +1352,8 @@ let () =
   print_endline "--- Video Update Tests ---";
   test_update_video ();
   test_update_video_no_fields ();
+  test_update_video_snippet_requires_title ();
+  test_update_video_status_only ();
 
   print_endline "";
   print_endline "--- Playlist Management Tests ---";
@@ -1331,8 +1378,8 @@ let () =
   print_endline "  - Scopes (1 test)";
   print_endline "  - Scheduled publishing (1 test)";
   print_endline "  - Notify subscribers (2 tests)";
-  print_endline "  - Video update (2 tests)";
+  print_endline "  - Video update (4 tests)";
   print_endline "  - Playlist management (4 tests)";
   print_endline "  - Upload recovery (2 tests)";
   print_endline "";
-  print_endline "Total: 34 test functions"
+  print_endline "Total: 36 test functions"

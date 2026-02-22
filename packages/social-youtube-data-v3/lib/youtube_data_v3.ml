@@ -1597,25 +1597,39 @@ module Make (Config : CONFIG) = struct
   
   (** Update video metadata via PUT /youtube/v3/videos
 
+      YouTube API requirement: when updating snippet fields, both
+      [snippet.title] and [snippet.categoryId] are mandatory. Omitting
+      them causes the API to return a 400 error. Therefore [~title] and
+      [~category_id] are required whenever any snippet field (title,
+      description, tags) is provided.
+
       @param account_id Account to authenticate as
       @param video_id ID of the video to update
-      @param title Optional new title
+      @param title New title (required when updating any snippet field)
       @param description Optional new description
       @param tags Optional new tags list
+      @param category_id Category ID (required when updating any snippet field, default "22")
       @param privacy_status Optional new privacy status
       @param on_result Continuation receiving api_result
   *)
-  let update_video ~account_id ~video_id ?title ?description ?tags ?privacy_status on_result =
+  let update_video ~account_id ~video_id ?title ?description ?tags ?(category_id="22") ?privacy_status on_result =
     let normalized_video_id = String.trim video_id in
     if normalized_video_id = "" then
       on_result (Error (Error_types.Internal_error "video_id is required"))
     else
       ensure_valid_token ~account_id
         (fun access_token ->
+          let has_snippet_fields = title <> None || description <> None || tags <> None in
+          if has_snippet_fields && title = None then
+            on_result (Error (Error_types.Internal_error "title is required when updating snippet fields (YouTube API requirement)"))
+          else
           let snippet_fields =
-            (match title with Some t -> [("title", `String t)] | None -> []) @
-            (match description with Some d -> [("description", `String d)] | None -> []) @
-            (match tags with Some ts -> [("tags", `List (List.map (fun t -> `String t) ts))] | None -> [])
+            if not has_snippet_fields then []
+            else
+              [("title", `String (match title with Some t -> t | None -> ""))]
+              @ [("categoryId", `String category_id)]
+              @ (match description with Some d -> [("description", `String d)] | None -> [])
+              @ (match tags with Some ts -> [("tags", `List (List.map (fun t -> `String t) ts))] | None -> [])
           in
           let status_fields =
             match privacy_status with Some ps -> [("privacyStatus", `String ps)] | None -> []
@@ -1634,7 +1648,8 @@ module Make (Config : CONFIG) = struct
           if part_str = "" then
             on_result (Error (Error_types.Internal_error "No fields to update"))
           else
-            let url = Printf.sprintf "%s/videos?part=%s" youtube_api_base part_str in
+            let query = Uri.encoded_of_query [("part", [part_str])] in
+            let url = Printf.sprintf "%s/videos?%s" youtube_api_base query in
             let body = Yojson.Basic.to_string (`Assoc (List.rev !body_fields)) in
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
