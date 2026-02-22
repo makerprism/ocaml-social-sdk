@@ -474,23 +474,34 @@ module Make (Config : CONFIG) = struct
 
   (** Get a service auth token for video upload
 
-      Calls com.atproto.server.getServiceAuth with the video service DID
-      and the uploadBlob lexicon method.
+      Calls com.atproto.server.getServiceAuth with the user's PDS DID
+      as the audience and the uploadBlob lexicon method.
+
+      Per the AT Protocol spec, the aud parameter should be the DID of the
+      user's PDS (e.g. did:web:bsky.social), NOT the video service DID.
+      The video service uses the resulting token to upload the processed
+      blob to the user's PDS on their behalf.
 
       @param access_jwt Current session JWT for authenticating the request
-      @param did The user's DID
+      @param did The user's DID (unused; the PDS DID is derived from pds_url)
       @param on_success Receives the service auth token
       @param on_error Receives error message
   *)
-  let get_service_auth ~access_jwt ~did on_success on_error =
-    let aud = "did:web:video.bsky.app" in
+  let get_service_auth ~access_jwt ~did:_ on_success on_error =
+    (* aud = PDS DID derived from the configured PDS URL host *)
+    let pds_host =
+      match Uri.host (Uri.of_string pds_url) with
+      | Some h -> h
+      | None -> "bsky.social"
+    in
+    let aud = "did:web:" ^ pds_host in
     let lxm = "com.atproto.repo.uploadBlob" in
-    let url = Printf.sprintf "%s/xrpc/com.atproto.server.getServiceAuth?aud=%s&lxm=%s"
-      pds_url (Uri.pct_encode aud) (Uri.pct_encode lxm) in
+    let exp_seconds = int_of_float (Unix.gettimeofday () +. 1800.0) in (* 30 minutes *)
+    let url = Printf.sprintf "%s/xrpc/com.atproto.server.getServiceAuth?aud=%s&lxm=%s&exp=%d"
+      pds_url (Uri.pct_encode aud) (Uri.pct_encode lxm) exp_seconds in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
     ] in
-    let _ = did in
     Config.Http.get ~headers url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
@@ -576,8 +587,10 @@ module Make (Config : CONFIG) = struct
       if attempts_left <= 0 then
         on_error (Printf.sprintf "Video processing timeout waiting for job %s" job_id)
       else
+        (* Poll the video service directly for job status, matching the host
+           used for uploadVideo. The PDS can proxy this but direct is preferred. *)
         let status_url = Printf.sprintf "%s/xrpc/app.bsky.video.getJobStatus?jobId=%s"
-          pds_url (Uri.pct_encode job_id) in
+          video_upload_host (Uri.pct_encode job_id) in
         let should_retry_status status_code =
           status_code = 429 || status_code >= 500
         in
@@ -882,8 +895,9 @@ module Make (Config : CONFIG) = struct
         match Hashtbl.find_opt session_cache account_id with
         | Some (did, _, _) -> on_success (did, access_jwt)
         | None ->
-            (* Session was cached with a DID, this shouldn't happen *)
-            on_error (Error_types.Internal_error "Session cache missing DID"))
+            (* ensure_valid_token succeeded but the cache entry is missing;
+               this indicates an internal inconsistency *)
+            on_error (Error_types.Internal_error "Session cache missing DID after successful token retrieval"))
       on_error
 
   (** {1 Public API - Posting} *)

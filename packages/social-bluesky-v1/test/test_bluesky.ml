@@ -4191,8 +4191,12 @@ let test_get_service_auth () =
   (match !last_get_url with
    | Some url ->
        assert (string_contains_substr url "getServiceAuth");
-       assert (string_contains_substr url "aud=");
+       (* aud should be the PDS host DID, not the video service DID *)
+       assert (string_contains_substr url "aud=did%3Aweb%3Absky.social"
+               || string_contains_substr url "aud=did:web:bsky.social");
        assert (string_contains_substr url "lxm=");
+       (* exp parameter should be present for longer token lifetime *)
+       assert (string_contains_substr url "exp=");
    | None -> failwith "No GET request recorded for getServiceAuth");
 
   print_endline "    ✓ get_service_auth test passed"
