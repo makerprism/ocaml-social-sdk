@@ -16,7 +16,9 @@ module Mock_http = struct
   }
 
   type put_call = {
+    url : string;
     headers : (string * string) list;
+    body : string option;
   }
 
   let get_calls : get_call list ref = ref []
@@ -101,7 +103,7 @@ module Mock_http = struct
     }
   
   let put ?(headers=[]) ?body url on_success _on_error =
-    put_calls := { headers } :: !put_calls;
+    put_calls := { url; headers; body } :: !put_calls;
     match !custom_put_handler with
     | Some f -> on_success (f url headers body)
     | None ->
@@ -2496,6 +2498,174 @@ let test_init_photo_post_request_contract () =
       (fun err -> failwith ("Unexpected error: " ^ err)));
   assert !success_called
 
+let test_init_photo_post_auth_header () =
+  print_string "Test: init_photo_post includes auth header... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url headers _body ->
+    if String.ends_with ~suffix:"content/init/" url then (
+      let auth_present =
+        List.exists (fun (k, v) -> k = "Authorization" && v = "Bearer test_access_token") headers
+      in
+      assert auth_present;
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"photo_auth_ok"}}|};
+      }
+    ) else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Auth check"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    () in
+  let success_called = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (handle_api_result
+      (fun publish_id ->
+        assert (publish_id = "photo_auth_ok");
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+let test_init_photo_post_media_upload_mode () =
+  print_string "Test: init_photo_post media_upload mode... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"content/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      assert ((json |> member "post_mode" |> to_string) = "MEDIA_UPLOAD");
+      assert ((json |> member "media_type" |> to_string) = "PHOTO");
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"photo_draft_123"}}|};
+      }
+    ) else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Draft photo"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    ~post_mode:Social_tiktok_v1.Media_upload
+    () in
+  let success_called = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (handle_api_result
+      (fun publish_id ->
+        assert (publish_id = "photo_draft_123");
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+let test_init_photo_post_empty_images_rejected () =
+  print_string "Test: init_photo_post empty images rejected... ";
+  reset_mock_state ();
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"No images"
+    ~photo_images:[]
+    () in
+  let done_ = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (function
+      | Error (Error_types.Validation_error [Error_types.Media_required]) ->
+          done_ := true;
+          print_endline "PASSED"
+      | Error err -> failwith ("Expected Media_required, got: " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "Expected validation error");
+  assert !done_
+
+let test_init_photo_post_cover_index_out_of_bounds () =
+  print_string "Test: init_photo_post cover index out of bounds... ";
+  reset_mock_state ();
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Bad index"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    ~photo_cover_index:5
+    () in
+  let done_ = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (function
+      | Error (Error_types.Internal_error msg) ->
+          assert (String.length msg > 0);
+          done_ := true;
+          print_endline "PASSED"
+      | Error err -> failwith ("Expected Internal_error, got: " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "Expected validation error");
+  assert !done_
+
+let test_init_photo_post_403_scope_mapping () =
+  print_string "Test: init_photo_post 403 scope mapping... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"content/init/" url then
+      {
+        Social_core.status = 403;
+        headers = [];
+        body = {|{"error":{"code":"forbidden","message":"Missing publish scope"}}|};
+      }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Scope test"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    () in
+  let done_ = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (function
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+          assert (scopes = ["video.publish"]);
+          done_ := true;
+          print_endline "PASSED"
+      | Error err -> failwith ("Expected Insufficient_permissions, got: " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "Expected permission error");
+  assert !done_
+
+let test_upload_video_chunk_tracks_upload_url () =
+  print_string "Test: upload_video_chunk tracks upload URL... ";
+  reset_mock_state ();
+  let success_called = ref false in
+  let content = "video-bytes" in
+  TikTok.upload_video_chunk
+    ~upload_url:"https://upload.tiktok.com/video?upload_id=123"
+    ~video_content:content
+    (handle_api_result
+      (fun () -> success_called := true)
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called;
+  let call =
+    match !(Mock_http.put_calls) with
+    | c :: _ -> c
+    | [] -> failwith "Expected PUT upload call"
+  in
+  assert (call.url = "https://upload.tiktok.com/video?upload_id=123");
+  assert (call.body = Some content);
+  print_endline "PASSED"
+
 (** {1 PULL_FROM_URL Tests} *)
 
 let test_init_video_pull_from_url_request_contract () =
@@ -2716,6 +2886,14 @@ let () =
   test_make_photo_post_info_all_options ();
   test_photo_post_info_to_json ();
   test_init_photo_post_request_contract ();
+  test_init_photo_post_auth_header ();
+  test_init_photo_post_media_upload_mode ();
+  test_init_photo_post_empty_images_rejected ();
+  test_init_photo_post_cover_index_out_of_bounds ();
+  test_init_photo_post_403_scope_mapping ();
+
+  print_endline "\n--- Upload URL Tracking ---";
+  test_upload_video_chunk_tracks_upload_url ();
 
   print_endline "\n--- PULL_FROM_URL Support ---";
   test_init_video_pull_from_url_request_contract ();

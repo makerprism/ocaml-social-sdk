@@ -1167,6 +1167,14 @@ module Make (Config : CONFIG) = struct
 
   (** Initialize a photo post via content/init endpoint *)
   let init_photo_post ~account_id ~photo_post_info on_result =
+    let image_count = List.length photo_post_info.photo_images in
+    if image_count = 0 then
+      on_result (Error (Error_types.Validation_error [Error_types.Media_required]))
+    else if photo_post_info.photo_cover_index < 0 || photo_post_info.photo_cover_index >= image_count then
+      on_result (Error (Error_types.Internal_error
+        (Printf.sprintf "photo_cover_index %d out of range for %d images"
+          photo_post_info.photo_cover_index image_count)))
+    else
     ensure_valid_token ~account_id
       (fun access_token ->
         let headers = [
