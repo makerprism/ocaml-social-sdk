@@ -2391,8 +2391,8 @@ let test_post_comment () =
     ~access_token:"test_token"
     ~message:"Great post!"
     (function
-      | Ok response ->
-          assert (string_contains response.body "12345_67890");
+      | Ok comment_id ->
+          assert (comment_id = "12345_67890");
           (* Verify the request went to the right endpoint *)
           let requests = !Mock_http.requests in
           (match requests with
@@ -2453,6 +2453,104 @@ let test_get_comments () =
               print_endline "✓ Get comments"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Get comments failed: " ^ Error_types.error_to_string e))
+
+(** Test: Get comments on a post with no comments *)
+let test_get_comments_empty () =
+  Mock_config.reset ();
+
+  let response_body = {|{"data": []}|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.get_comments
+    ~post_id:"12345"
+    ~access_token:"test_token"
+    (function
+      | Ok comments ->
+          assert (List.length comments = 0);
+          print_endline "✓ Get comments (empty)"
+      | Error e -> failwith ("Get comments empty failed: " ^ Error_types.error_to_string e))
+
+(** Test: Post comment returns API error on failure *)
+let test_post_comment_error () =
+  Mock_config.reset ();
+
+  let error_response = {|{
+    "error": {
+      "message": "Invalid post ID",
+      "type": "OAuthException",
+      "code": 100,
+      "fbtrace_id": "ERR123"
+    }
+  }|} in
+
+  Mock_http.set_response { status = 400; body = error_response; headers = [] };
+
+  Facebook.post_comment
+    ~post_id:"invalid_post"
+    ~access_token:"test_token"
+    ~message:"Test"
+    (function
+      | Ok _ -> failwith "Should have failed with error"
+      | Error (Error_types.Api_error err) ->
+          assert (err.status_code = 400);
+          assert (string_contains err.message "Invalid post ID");
+          print_endline "✓ Post comment error handling"
+      | Error e -> failwith ("Expected Api_error, got: " ^ Error_types.error_to_string e))
+
+(** Test: Get page info returns API error on failure *)
+let test_get_page_info_error () =
+  Mock_config.reset ();
+
+  let error_response = {|{
+    "error": {
+      "message": "Unsupported get request",
+      "type": "GraphMethodException",
+      "code": 100,
+      "fbtrace_id": "PAGE_ERR"
+    }
+  }|} in
+
+  Mock_http.set_response { status = 400; body = error_response; headers = [] };
+
+  Facebook.get_page_info
+    ~page_id:"nonexistent_page"
+    ~access_token:"test_token"
+    (function
+      | Ok _ -> failwith "Should have failed with error"
+      | Error (Error_types.Api_error err) ->
+          assert (err.status_code = 400);
+          assert (string_contains err.message "Unsupported get request");
+          print_endline "✓ Get page info error handling"
+      | Error e -> failwith ("Expected Api_error, got: " ^ Error_types.error_to_string e))
+
+(** Test: Get comments handles missing from field gracefully *)
+let test_get_comments_missing_from () =
+  Mock_config.reset ();
+
+  let response_body = {|{
+    "data": [
+      {
+        "id": "comment_no_from",
+        "message": "Anonymous comment",
+        "created_time": "2024-01-15T10:00:00+0000"
+      }
+    ]
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.get_comments
+    ~post_id:"12345"
+    ~access_token:"test_token"
+    (function
+      | Ok comments ->
+          assert (List.length comments = 1);
+          let c = List.hd comments in
+          assert (c.comment_id = "comment_no_from");
+          assert (c.comment_message = "Anonymous comment");
+          assert (c.comment_from = None);
+          print_endline "✓ Get comments (missing from field)"
+      | Error e -> failwith ("Get comments missing from failed: " ^ Error_types.error_to_string e))
 
 (** Test: Post with link *)
 let test_post_with_link () =
@@ -2689,7 +2787,10 @@ let () =
 
   print_endline "\n--- Comment Management Tests ---";
   test_post_comment ();
+  test_post_comment_error ();
   test_get_comments ();
+  test_get_comments_empty ();
+  test_get_comments_missing_from ();
 
   print_endline "\n--- Link Posts and Scheduling Tests ---";
   test_post_with_link ();
@@ -2698,5 +2799,6 @@ let () =
   print_endline "\n--- Page Info Tests ---";
   test_get_page_info ();
   test_get_page_info_partial ();
+  test_get_page_info_error ();
 
-  print_endline "\n=== All 75 tests passed! ===\n"
+  print_endline "\n=== All 79 tests passed! ===\n"

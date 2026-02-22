@@ -2251,12 +2251,22 @@ module Make (Config : CONFIG) = struct
       @param post_id The ID of the post to comment on
       @param access_token Page access token
       @param message The comment text
-      @param on_result Continuation receiving Ok response or Error
+      @param on_result Continuation receiving Ok with new comment ID or Error
   *)
   let post_comment ~post_id ~access_token ~message on_result =
     let path = Printf.sprintf "%s/comments" post_id in
     let params = [("message", [message])] in
-    post ~path ~access_token ~params on_result
+    post ~path ~access_token ~params
+      (function
+        | Ok response ->
+            (try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let comment_id = json |> member "id" |> to_string in
+              on_result (Ok comment_id)
+            with e ->
+              on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse comment response: %s" (Printexc.to_string e)))))
+        | Error e -> on_result (Error e))
 
   (** Get comments on a post
 
