@@ -40,10 +40,11 @@ module OAuth = struct
       "pins:read";
     ]
     
-    (** Scopes required for creating pins *)
+    (** Scopes required for creating pins and managing boards *)
     let write = [
       "user_accounts:read";
       "boards:read";
+      "boards:write";
       "pins:read";
       "pins:write";
     ]
@@ -478,6 +479,7 @@ module Make (Config : CONFIG) = struct
       @param on_result Final continuation receiving the outcome
   *)
   let with_retry ?(max_retries=3) ?(initial_delay_seconds=1.0) ~make_request on_result =
+    let max_delay = 60.0 in
     let rec loop attempt delay =
       make_request (fun response ->
         if response.status = 429 || response.status >= 500 then begin
@@ -486,13 +488,13 @@ module Make (Config : CONFIG) = struct
               if response.status = 429 then
                 let rl = parse_rate_limit_headers response.headers in
                 match rl.reset with
-                | Some secs when secs > 0 -> float_of_int secs
+                | Some secs when secs > 0 -> min (float_of_int secs) max_delay
                 | _ -> delay
               else
                 delay
             in
             let _ = Unix.select [] [] [] actual_delay in
-            loop (attempt + 1) (delay *. 2.0)
+            loop (attempt + 1) (min (delay *. 2.0) max_delay)
           end else
             on_result response
         end else
@@ -1345,7 +1347,7 @@ module Make (Config : CONFIG) = struct
     if client_id = "" then
       on_error "Pinterest client ID not configured"
     else (
-      let scopes = "boards:read,pins:read,pins:write,user_accounts:read" in
+      let scopes = "boards:read,boards:write,pins:read,pins:write,user_accounts:read" in
       let params = [
         ("client_id", client_id);
         ("redirect_uri", redirect_uri);

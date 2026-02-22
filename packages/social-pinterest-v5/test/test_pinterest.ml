@@ -169,6 +169,7 @@ let test_oauth_url () =
       assert (string_contains url "client_id=test_client_id");
       assert (string_contains url "state=test_state_123");
       assert (string_contains url "pins:write");
+      assert (string_contains url "boards:write");
       print_endline "✓ OAuth URL generation")
     (fun err -> failwith ("OAuth URL failed: " ^ err))
 
@@ -1245,6 +1246,85 @@ let test_with_retry_no_retry_on_4xx () =
     assert (!call_count = 1);
     print_endline "✓ with_retry does not retry on 400")
 
+let test_with_retry_uses_rate_limit_reset_header () =
+  Mock_config.reset ();
+
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    if !call_count = 1 then
+      on_result { status = 429; body = "rate limited"; headers = [("X-RateLimit-Reset", "1")] }
+    else
+      on_result { status = 200; body = {|{"ok":true}|}; headers = [] }
+  in
+  (* Use a large initial_delay so we can confirm the rate limit header overrides it *)
+  Pinterest.with_retry ~max_retries:3 ~initial_delay_seconds:0.001 ~make_request (fun response ->
+    assert (response.status = 200);
+    assert (!call_count = 2);
+    print_endline "✓ with_retry uses rate limit reset header value on 429")
+
+let test_create_board_api_error () =
+  Mock_config.reset ();
+
+  let error_response =
+    { status = 400; body = {|{"message":"Invalid board name"}|}; headers = [] }
+  in
+  Mock_http.set_responses [ error_response ];
+
+  Pinterest.create_board
+    ~access_token:"test_token"
+    ~name:""
+    (function
+      | Error (Error_types.Api_error { status_code; message; _ }) ->
+          assert (status_code = 400);
+          assert (message = "Invalid board name");
+          print_endline "✓ create_board returns structured error on API failure"
+      | Error err ->
+          failwith ("Expected Api_error: " ^ Error_types.error_to_string err)
+      | Ok _ ->
+          failwith "Expected error for invalid board creation")
+
+let test_get_board_sections_api_error () =
+  Mock_config.reset ();
+
+  let error_response =
+    { status = 404; body = {|{"message":"Board not found"}|}; headers = [] }
+  in
+  Mock_http.set_responses [ error_response ];
+
+  Pinterest.get_board_sections
+    ~access_token:"test_token"
+    ~board_id:"nonexistent_board"
+    (function
+      | Error (Error_types.Api_error { status_code; message; _ }) ->
+          assert (status_code = 404);
+          assert (message = "Board not found");
+          print_endline "✓ get_board_sections returns structured error on API failure"
+      | Error err ->
+          failwith ("Expected Api_error: " ^ Error_types.error_to_string err)
+      | Ok _ ->
+          failwith "Expected error for nonexistent board sections")
+
+let test_create_board_section_api_error () =
+  Mock_config.reset ();
+
+  let error_response =
+    { status = 403; body = {|{"message":"Insufficient permissions"}|}; headers = [] }
+  in
+  Mock_http.set_responses [ error_response ];
+
+  Pinterest.create_board_section
+    ~access_token:"test_token"
+    ~board_id:"board_123"
+    ~name:"New Section"
+    (function
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions _)) ->
+          print_endline "✓ create_board_section returns auth error on 403"
+      | Error err ->
+          failwith ("Expected Auth_error for 403: " ^ Error_types.error_to_string err)
+      | Ok _ ->
+          failwith "Expected error for forbidden board section creation")
+
 (** Test: create_board *)
 let test_create_board () =
   Mock_config.reset ();
@@ -1472,10 +1552,14 @@ let () =
   test_with_retry_retries_on_500 ();
   test_with_retry_gives_up_after_max_retries ();
   test_with_retry_no_retry_on_4xx ();
+  test_with_retry_uses_rate_limit_reset_header ();
   test_create_board ();
   test_create_board_with_description_and_secret ();
+  test_create_board_api_error ();
   test_get_board_sections ();
+  test_get_board_sections_api_error ();
   test_create_board_section ();
+  test_create_board_section_api_error ();
   test_post_single_with_section_id ();
   test_post_single_omits_section_id_when_empty ();
   print_endline "\n=== All tests passed! ===\n"
