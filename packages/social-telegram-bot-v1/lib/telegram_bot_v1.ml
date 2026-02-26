@@ -37,9 +37,6 @@ module Make (Config : CONFIG) = struct
   let build_api_url ~token ~method_name =
     Printf.sprintf "%s/bot%s/%s" api_base token method_name
 
-  let redact_api_url ~token:_ ~method_name =
-    Printf.sprintf "%s/bot%s/%s" api_base "[REDACTED]" method_name
-
   let is_http_url url =
     try
       let uri = Uri.of_string url in
@@ -80,11 +77,8 @@ module Make (Config : CONFIG) = struct
     else
       match int_of_string_opt trimmed with
       | Some n when n < 0 -> Ok trimmed
-      | Some _ ->
-          Error (Error_types.Internal_error "Broadcast posting only supports channel/group chat ids")
-      | None ->
-          if String.starts_with ~prefix:"@" trimmed then Ok trimmed
-          else Error (Error_types.Internal_error "Unsupported Telegram chat id format")
+      | Some _ | None ->
+          Error (Error_types.Internal_error "Broadcast posting only supports negative channel/group chat ids in v1")
 
   let validate_post ~text ~media_count =
     let errors = ref [] in
@@ -201,7 +195,7 @@ module Make (Config : CONFIG) = struct
           (fun () -> ()) (fun _ -> ())
     | _ -> ()
 
-  let perform_form_post ~token ~method_name ~params on_result =
+  let perform_form_post_json ~token ~method_name ~params on_ok on_result =
     let url = build_api_url ~token ~method_name in
     let body =
       Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params)
@@ -224,17 +218,7 @@ module Make (Config : CONFIG) = struct
                 ~response_body:response.body
                 ~token))
             else
-              let result = json |> member "result" in
-              let message_id =
-                try string_of_int (result |> member "message_id" |> to_int)
-                with _ ->
-                  try result |> member "message_id" |> to_string
-                  with _ -> ""
-              in
-              if message_id = "" then
-                on_result (Error (Error_types.Internal_error "Telegram response missing message_id"))
-              else
-                on_result (Ok message_id)
+              on_ok json
           with _ ->
             on_result (Error (Error_types.Internal_error "Failed to parse Telegram response payload"))
         else
@@ -247,40 +231,26 @@ module Make (Config : CONFIG) = struct
         on_result (Error (Error_types.Network_error
           (Error_types.Connection_failed (redact_token token err)))))
 
-  let perform_form_post_expect_ok ~token ~method_name ~params on_result =
-    let url = build_api_url ~token ~method_name in
-    let body =
-      Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params)
+  let perform_form_post ~token ~method_name ~params on_result =
+    let on_ok json =
+      let open Yojson.Basic.Util in
+      let result = json |> member "result" in
+      let message_id =
+        try string_of_int (result |> member "message_id" |> to_int)
+        with _ ->
+          try result |> member "message_id" |> to_string
+          with _ -> ""
+      in
+      if message_id = "" then
+        on_result (Error (Error_types.Internal_error "Telegram response missing message_id"))
+      else
+        on_result (Ok message_id)
     in
-    let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
-    Config.Http.post ~headers ~body url
-      (fun response ->
-        if response.status >= 200 && response.status < 300 then
-          try
-            let open Yojson.Basic.Util in
-            let json = Yojson.Basic.from_string response.body in
-            let ok =
-              try json |> member "ok" |> to_bool
-              with _ -> false
-            in
-            if ok then on_result (Ok ())
-            else
-              on_result (Error (api_error_from_telegram
-                ~status_code:response.status
-                ~response_headers:response.headers
-                ~response_body:response.body
-                ~token))
-          with _ ->
-            on_result (Error (Error_types.Internal_error "Failed to parse Telegram response payload"))
-        else
-          on_result (Error (api_error_from_telegram
-            ~status_code:response.status
-            ~response_headers:response.headers
-            ~response_body:response.body
-            ~token)))
-      (fun err ->
-        on_result (Error (Error_types.Network_error
-          (Error_types.Connection_failed (redact_token token err)))))
+    perform_form_post_json ~token ~method_name ~params on_ok on_result
+
+  let perform_form_post_expect_ok ~token ~method_name ~params on_result =
+    let on_ok _json = on_result (Ok ()) in
+    perform_form_post_json ~token ~method_name ~params on_ok on_result
 
   let resolve_target ~account_id on_result =
     Config.get_credentials ~account_id
@@ -368,8 +338,7 @@ module Make (Config : CONFIG) = struct
                            ~method_name
                            ~params:[("chat_id", chat_id); (media_field, media_url); ("caption", text)]
                            on_post_result
-                      | _ ->
-                          let _ = redact_api_url ~token ~method_name:"sendMessage" in
+                     | _ ->
                           perform_form_post
                             ~token
                             ~method_name:"sendMessage"

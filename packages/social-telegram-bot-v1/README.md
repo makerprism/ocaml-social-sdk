@@ -36,7 +36,7 @@ let () =
       | Error_types.Partial_success _ -> ())
 ```
 
-Your config module must resolve account targets via `get_chat_id` and return a channel/group chat id.
+Your config module must resolve account targets via `get_chat_id` and return a negative channel/group chat id (for example `-1001234567890`).
 
 ## Notes
 

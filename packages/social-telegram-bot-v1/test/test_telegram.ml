@@ -169,6 +169,19 @@ let test_target_resolution_rejects_likely_dm () =
           assert (string_contains msg "Broadcast posting")
       | _ -> failwith "Expected DM-target rejection")
 
+let test_target_resolution_rejects_username_target () =
+  Mock_config.reset ();
+  Mock_config.chat_id := "@channel_or_user";
+  Telegram.post_single
+    ~account_id:"acc"
+    ~text:"hi"
+    ~media_urls:[]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Failure (Error_types.Internal_error msg) ->
+          assert (string_contains msg "negative channel/group chat ids")
+      | _ -> failwith "Expected username-target rejection")
+
 let test_validation_too_many_media () =
   Mock_config.reset ();
   Telegram.post_single
@@ -351,6 +364,7 @@ let () =
   run "sendPhoto request contract" test_send_photo_contract;
   run "sendVideo request contract" test_send_video_contract;
   run "target resolution rejects likely DM" test_target_resolution_rejects_likely_dm;
+  run "target resolution rejects username" test_target_resolution_rejects_username_target;
   run "validation too many media" test_validation_too_many_media;
   run "validation caption length" test_validation_caption_too_long_for_media;
   run "error mapping 401" test_error_mapping_401;

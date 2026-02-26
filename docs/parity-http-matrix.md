@@ -112,7 +112,7 @@ Known subtle bug traps:
 Known subtle bug traps:
 - Telegram may return HTTP 200 with `{"ok":false,...}`; body-level success must be checked.
 - Bot token is embedded in endpoint paths; error surfaces must redact token values.
-- Broadcast-only scope must reject likely direct-message targets and allow channel/group targets.
+- Broadcast-only scope accepts only negative channel/group chat ids in v1; username targets are rejected to avoid DM ambiguity.
 
 ## X
 
