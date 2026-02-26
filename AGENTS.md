@@ -15,13 +15,15 @@ dune pkg lock
 dune build
 ```
 
+`dune pkg lock` is local workflow support only in this repository. Do not commit lockfiles.
+
 ## Dune Lockfile Workflow
 
-- If dependencies may have changed, the lockfile may be stale, or before running broader Dune operations after dependency-related edits, run:
-  - `dune pkg lock`
-- Treat `dune pkg lock` as the first recovery/sync step in that situation.
-- Do not manually edit or manipulate files under `dune.lock/`.
-- The only supported way to update `dune.lock/` is to regenerate it via `dune pkg lock`.
+- This repository is a library workspace: `dune.lock/` must not be tracked in git.
+- Treat `dune pkg lock` outputs as ephemeral local artifacts.
+- If dependencies may have changed, the lockfile may be stale, or before running broader Dune operations after dependency-related edits, run `dune pkg lock` locally.
+- Do not manually edit or manipulate files under any `dune.lock/` directory.
+- Never stage or commit `dune.lock/` changes (root, packages, examples, or any nested workspace).
 
 ## Dependency Policy
 
