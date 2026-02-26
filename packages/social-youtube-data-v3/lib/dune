@@ -4,6 +4,7 @@
  (modules social_youtube_data_v3 youtube_data_v3)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   ptime

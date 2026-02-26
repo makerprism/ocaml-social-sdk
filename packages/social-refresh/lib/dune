@@ -1,0 +1,8 @@
+(library
+ (name social_refresh)
+ (public_name social-refresh)
+ (modules social_refresh refresh_types refresh_time refresh_decision refresh_orchestrator)
+ (libraries
+  social-core
+  ptime
+  ptime.clock.os))

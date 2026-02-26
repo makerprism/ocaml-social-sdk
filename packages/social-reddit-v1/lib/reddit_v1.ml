@@ -661,39 +661,69 @@ module Make (Config : CONFIG) = struct
   
   (** Ensure we have a valid access token, refreshing if necessary *)
   let ensure_valid_token ~account_id on_success on_error =
-    Config.get_credentials ~account_id
-      (fun creds ->
-        if token_needs_refresh creds then
-          match creds.refresh_token with
-          | Some refresh_tok ->
-              let client_id = Config.get_env "REDDIT_CLIENT_ID" |> Option.value ~default:"" in
-              let client_secret = Config.get_env "REDDIT_CLIENT_SECRET" |> Option.value ~default:"" in
-              if client_id = "" || client_secret = "" then
-                on_error (Error_types.Auth_error Error_types.Missing_credentials)
+    let callbacks : Social_refresh.Orchestrator.callbacks = {
+      load_credentials = (fun ~account_id on_ok on_err ->
+        Config.get_credentials ~account_id
+          (fun creds ->
+            (* Preserve previous Reddit behavior: malformed expiry does not
+               force a refresh. We normalize to [None] in that case so the
+               shared decision engine skips refresh. *)
+            let normalized_creds =
+              if token_needs_refresh creds then
+                creds
               else
-                let module OAuthHttp = OAuth.Make(Config.Http) in
-                OAuthHttp.refresh_token ~client_id ~client_secret ~refresh_token:refresh_tok
-                  (fun new_creds ->
-                    Config.update_credentials ~account_id ~credentials:new_creds
-                      (fun () ->
-                        Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                          (fun () -> on_success new_creds.access_token)
-                          (fun _ -> on_success new_creds.access_token))
-                      (fun err ->
-                        Config.update_health_status ~account_id ~status:"refresh_failed" ~error_message:(Some err)
-                          (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
-                          (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
-                  (fun err ->
-                    Config.update_health_status ~account_id ~status:"refresh_failed" ~error_message:(Some err)
-                      (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
-                      (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err))))
-          | None ->
-              on_error (Error_types.Auth_error Error_types.Token_expired)
+                { creds with expires_at = None }
+            in
+            on_ok normalized_creds)
+          on_err);
+      perform_refresh = (fun ~credentials:_ ~refresh_token on_refreshed on_refresh_error ->
+        let client_id = Config.get_env "REDDIT_CLIENT_ID" |> Option.value ~default:"" in
+        let client_secret = Config.get_env "REDDIT_CLIENT_SECRET" |> Option.value ~default:"" in
+        if client_id = "" || client_secret = "" then
+          on_refresh_error "REDDIT_CLIENT_ID or REDDIT_CLIENT_SECRET is missing"
         else
-          Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-            (fun () -> on_success creds.access_token)
-            (fun _ -> on_success creds.access_token))
-      (fun err -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
+          let module OAuthHttp = OAuth.Make(Config.Http) in
+          OAuthHttp.refresh_token ~client_id ~client_secret ~refresh_token
+            (fun new_creds ->
+              on_refreshed {
+                Social_refresh.Types.access_token = new_creds.access_token;
+                refresh_token = new_creds.refresh_token;
+                expires_at = new_creds.expires_at;
+                token_type = Some new_creds.token_type;
+              })
+            on_refresh_error);
+      persist_credentials = Config.update_credentials;
+      update_health = (fun ~account_id ~status ~error_message on_ok on_err ->
+        if status = "token_expired" then
+          on_ok ()
+        else
+          Config.update_health_status ~account_id ~status ~error_message
+            on_ok
+            (fun err ->
+              if status = "healthy" || status = "refresh_failed" then on_ok ()
+              else on_err err));
+    } in
+    Social_refresh.ensure_valid_token
+      ~policy:{ Social_refresh.default_policy with refresh_buffer_seconds = OAuth.Metadata.refresh_buffer_seconds }
+      ~account_id
+      ~callbacks
+      (function
+        | Social_refresh.Token_reused token -> on_success token
+        | Social_refresh.Token_refreshed { access_token; _ } -> on_success access_token)
+      (fun refresh_error ->
+        match refresh_error with
+        | Social_refresh.Missing_refresh_token ->
+            on_error (Error_types.Auth_error Error_types.Token_expired)
+        | Social_refresh.Credential_load_failed err ->
+            on_error (Error_types.Auth_error (Error_types.Refresh_failed err))
+        | Social_refresh.Refresh_failed err
+          when err = "REDDIT_CLIENT_ID or REDDIT_CLIENT_SECRET is missing" ->
+            on_error (Error_types.Auth_error Error_types.Missing_credentials)
+        | Social_refresh.Refresh_failed err
+        | Social_refresh.Credential_persist_failed err
+        | Social_refresh.Health_update_failed err
+        | Social_refresh.Missing_configuration err ->
+            on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
   
   (** {1 API Functions} *)
   

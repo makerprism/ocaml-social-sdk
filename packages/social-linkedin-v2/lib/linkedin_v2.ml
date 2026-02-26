@@ -436,19 +436,7 @@ module Make (Config : CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    match expires_at_opt with
-    | None -> false
-    | Some expires_at_str ->
-        try
-          match Ptime.of_rfc3339 expires_at_str with
-          | Ok (expires_at, _, _) ->
-              let now = Ptime_clock.now () in
-              let buffer = Ptime.Span.of_int_s buffer_seconds in
-              (match Ptime.add_span now buffer with
-               | Some future -> not (Ptime.is_later expires_at ~than:future)
-               | None -> false)
-          | Error _ -> true
-        with _ -> true
+    Social_refresh.Time.is_expired_with_buffer ~buffer_seconds expires_at_opt
   
   (** {1 Platform Constants} *)
   
@@ -939,56 +927,53 @@ module Make (Config : CONFIG) = struct
   
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
-    Config.get_credentials ~account_id
-      (fun creds ->
-        (* Check if token needs refresh (7 days buffer) *)
-        if is_token_expired_buffer ~buffer_seconds:604800 creds.expires_at then (
-          (* Token expiring soon, refresh it *)
-          match creds.refresh_token with
-          | None ->
-              Config.update_health_status ~account_id ~status:"token_expired" 
-                ~error_message:(Some "Token expired - please reconnect (LinkedIn tokens last 60 days)")
-                (fun () -> on_error (Error_types.Auth_error Error_types.Token_expired))
-                (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
-          | Some refresh_token ->
-              let client_id = Config.get_env "LINKEDIN_CLIENT_ID" |> Option.value ~default:"" in
-              let client_secret = Config.get_env "LINKEDIN_CLIENT_SECRET" |> Option.value ~default:"" in
-              
-              refresh_access_token ~client_id ~client_secret ~refresh_token
-                (fun (new_access, new_refresh, expires_at) ->
-                  (* Update stored credentials *)
-                  let updated_creds = {
-                    access_token = new_access;
-                    refresh_token = Some new_refresh;
-                    expires_at = Some expires_at;
-                    token_type = "Bearer";
-                  } in
-                  Config.update_credentials ~account_id ~credentials:updated_creds
-                    (fun () ->
-                      Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                        (fun () -> on_success new_access)
-                        (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-                    (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-                (fun err ->
-                  let user_friendly_error = 
-                    if String.length err > 100 && 
-                       (Str.string_match (Str.regexp ".*[Pp]rogrammatic.*") err 0 ||
-                        Str.string_match (Str.regexp ".*[Pp]artner.*") err 0) then
-                      "LinkedIn token refresh failed - please reconnect your account"
-                    else
-                      Printf.sprintf "LinkedIn token refresh failed: %s - please reconnect your account" err
-                  in
-                  Config.update_health_status ~account_id ~status:"refresh_failed" 
-                    ~error_message:(Some user_friendly_error)
-                    (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed user_friendly_error)))
-                    (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-        ) else (
-          (* Token still valid *)
-          Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-            (fun () -> on_success creds.access_token)
-            (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
-        ))
-      (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
+    let callbacks : Social_refresh.Orchestrator.callbacks = {
+      load_credentials = Config.get_credentials;
+      perform_refresh = (fun ~credentials:_ ~refresh_token on_refreshed on_refresh_error ->
+        let client_id = Config.get_env "LINKEDIN_CLIENT_ID" |> Option.value ~default:"" in
+        let client_secret = Config.get_env "LINKEDIN_CLIENT_SECRET" |> Option.value ~default:"" in
+        refresh_access_token ~client_id ~client_secret ~refresh_token
+          (fun (new_access, new_refresh, expires_at) ->
+            on_refreshed {
+              Social_refresh.Types.access_token = new_access;
+              refresh_token = Some new_refresh;
+              expires_at = Some expires_at;
+              token_type = Some "Bearer";
+            })
+          (fun err ->
+            let user_friendly_error =
+              if String.length err > 100
+                 && (Str.string_match (Str.regexp ".*[Pp]rogrammatic.*") err 0
+                     || Str.string_match (Str.regexp ".*[Pp]artner.*") err 0)
+              then
+                "LinkedIn token refresh failed - please reconnect your account"
+              else
+                Printf.sprintf "LinkedIn token refresh failed: %s - please reconnect your account" err
+            in
+            on_refresh_error user_friendly_error));
+      persist_credentials = Config.update_credentials;
+      update_health = (fun ~account_id ~status ~error_message on_ok on_err ->
+        let error_message =
+          if status = "token_expired" then
+            Some "Token expired - please reconnect (LinkedIn tokens last 60 days)"
+          else
+            error_message
+        in
+        Config.update_health_status ~account_id ~status ~error_message on_ok on_err);
+    } in
+    Social_refresh.ensure_valid_token
+      ~policy:{ Social_refresh.default_policy with refresh_buffer_seconds = 604800 }
+      ~account_id
+      ~callbacks
+      (function
+        | Social_refresh.Token_reused token -> on_success token
+        | Social_refresh.Token_refreshed { access_token; _ } -> on_success access_token)
+      (fun refresh_error ->
+        match refresh_error with
+        | Social_refresh.Missing_refresh_token ->
+            on_error (Error_types.Auth_error Error_types.Token_expired)
+        | _ ->
+            on_error (Social_refresh.to_social_error refresh_error))
   
   (** Get person URN for posting *)
   let get_person_urn ~access_token on_success on_error =

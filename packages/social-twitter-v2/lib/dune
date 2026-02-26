@@ -4,6 +4,7 @@
  (modules social_twitter_v2 twitter_v2 twitter_char_counter)
  (libraries
   social-core
+  social-refresh
   yojson
   base64
   digestif

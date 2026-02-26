@@ -4,6 +4,7 @@
  (modules social_threads_v1 threads_v1)
  (libraries
  social-core
+ social-refresh
  yojson
  uri
   ptime

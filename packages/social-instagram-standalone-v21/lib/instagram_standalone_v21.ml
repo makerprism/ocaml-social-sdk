@@ -622,19 +622,7 @@ module Make (Config : CONFIG) = struct
 
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    match expires_at_opt with
-    | None -> false
-    | Some expires_at_str ->
-        try
-          match Ptime.of_rfc3339 expires_at_str with
-          | Ok (expires_at, _, _) ->
-              let now = Ptime_clock.now () in
-              let buffer = Ptime.Span.of_int_s buffer_seconds in
-              (match Ptime.add_span now buffer with
-               | Some future -> not (Ptime.is_later expires_at ~than:future)
-               | None -> false)
-          | Error _ -> true
-        with _ -> true
+    Social_refresh.Time.is_expired_with_buffer ~buffer_seconds expires_at_opt
 
   (** Refresh long-lived token (extends validity by 60 days) *)
   let refresh_token ~access_token on_success on_error =
@@ -668,34 +656,46 @@ module Make (Config : CONFIG) = struct
 
   (** Ensure valid access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
-    Config.get_credentials ~account_id
-      (fun creds ->
-        (* Check if token needs refresh (7 day buffer before expiry) *)
-        if is_token_expired_buffer ~buffer_seconds:(7 * 86400) creds.expires_at then
-          (* Token is expired or expiring soon - try to refresh it *)
-          refresh_token ~access_token:creds.access_token
-            (fun refreshed_creds ->
-              (* Update stored credentials with refreshed token *)
-              Config.update_credentials ~account_id ~credentials:refreshed_creds
-                (fun () ->
-                  Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                    (fun () -> on_success refreshed_creds.access_token)
-                    (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-                (fun err ->
-                  (* Failed to update credentials in DB *)
-                  on_error (Error_types.Network_error (Error_types.Connection_failed (Printf.sprintf "Failed to save refreshed token: %s" err)))))
-            (fun refresh_err ->
-              (* Token refresh failed - mark as expired and ask user to reconnect *)
-              Config.update_health_status ~account_id ~status:"token_expired"
-                ~error_message:(Some "Access token expired - please reconnect")
-                (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed refresh_err)))
-                (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed refresh_err))))
-        else
-          (* Token is still valid *)
-          Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-            (fun () -> on_success creds.access_token)
-            (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-      (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
+    let callbacks : Social_refresh.Orchestrator.callbacks = {
+      load_credentials = (fun ~account_id on_ok on_err ->
+        Config.get_credentials ~account_id
+          (fun creds -> on_ok { creds with refresh_token = Some creds.access_token })
+          on_err);
+      perform_refresh = (fun ~credentials:_ ~refresh_token:refresh_tok on_refreshed on_refresh_error ->
+        refresh_token ~access_token:refresh_tok
+          (fun refreshed_creds ->
+            on_refreshed {
+              Social_refresh.Types.access_token = refreshed_creds.access_token;
+              refresh_token = refreshed_creds.refresh_token;
+              expires_at = refreshed_creds.expires_at;
+              token_type = Some refreshed_creds.token_type;
+            })
+          on_refresh_error);
+      persist_credentials = (fun ~account_id ~credentials on_ok on_err ->
+        Config.update_credentials ~account_id ~credentials
+          on_ok
+          (fun err -> on_err (Printf.sprintf "Failed to save refreshed token: %s" err)));
+      update_health = (fun ~account_id ~status ~error_message on_ok on_err ->
+        let status, error_message =
+          if status = "refresh_failed" then
+            ("token_expired", Some "Access token expired - please reconnect")
+          else
+            (status, error_message)
+        in
+        Config.update_health_status ~account_id ~status ~error_message
+          on_ok
+          (fun err ->
+            if status = "token_expired" then on_ok ()
+            else on_err err));
+    } in
+    Social_refresh.ensure_valid_token
+      ~policy:{ Social_refresh.default_policy with refresh_buffer_seconds = (7 * 86400) }
+      ~account_id
+      ~callbacks
+      (function
+        | Social_refresh.Token_reused token -> on_success token
+        | Social_refresh.Token_refreshed { access_token; _ } -> on_success access_token)
+      (fun refresh_error -> on_error (Social_refresh.to_social_error refresh_error))
 
   (** {1 Insights (P0 Analytics)} *)
 

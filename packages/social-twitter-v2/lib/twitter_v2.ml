@@ -801,19 +801,7 @@ module Make (Config : CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    match expires_at_opt with
-    | None -> false
-    | Some expires_at_str ->
-        try
-          match Ptime.of_rfc3339 expires_at_str with
-          | Ok (expires_at, _, _) ->
-              let now = Ptime_clock.now () in
-              let buffer = Ptime.Span.of_int_s buffer_seconds in
-              (match Ptime.add_span now buffer with
-               | Some future -> not (Ptime.is_later expires_at ~than:future)
-               | None -> false)
-          | Error _ -> true
-        with _ -> true
+    Social_refresh.Time.is_expired_with_buffer ~buffer_seconds expires_at_opt
   
   (** Refresh OAuth 2.0 access token *)
   let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
@@ -856,53 +844,34 @@ module Make (Config : CONFIG) = struct
   
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
-    Config.get_credentials ~account_id
-      (fun creds ->
-        (* Check if token needs refresh (30 min buffer) *)
-        if is_token_expired_buffer ~buffer_seconds:1800 creds.expires_at then
-          (* Token expiring soon, refresh it *)
-          match creds.refresh_token with
-          | None ->
-              Config.update_health_status ~account_id ~status:"token_expired" 
-                ~error_message:(Some "No refresh token available")
-                (fun () -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
-                (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
-          | Some refresh_token ->
-               let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
-               let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
-               if client_id = "" || client_secret = "" then
-                 let err = "TWITTER_CLIENT_ID or TWITTER_CLIENT_SECRET is missing" in
-                 Config.update_health_status ~account_id ~status:"refresh_failed"
-                   ~error_message:(Some err)
-                   (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
-                   (fun err2 -> on_error (Error_types.Network_error (Error_types.Connection_failed err2)))
-               else
-                 refresh_access_token ~client_id ~client_secret ~refresh_token
-                   (fun (new_access, new_refresh, expires_at) ->
-                     (* Update stored credentials *)
-                     let updated_creds = {
-                       access_token = new_access;
-                       refresh_token = Some new_refresh;
-                       expires_at = Some expires_at;
-                       token_type = "Bearer";
-                     } in
-                     Config.update_credentials ~account_id ~credentials:updated_creds
-                       (fun () ->
-                         Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                           (fun () -> on_success new_access)
-                           (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-                       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-                   (fun err ->
-                     Config.update_health_status ~account_id ~status:"refresh_failed" 
-                       ~error_message:(Some err)
-                       (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
-                       (fun err2 -> on_error (Error_types.Network_error (Error_types.Connection_failed err2))))
+    let callbacks : Social_refresh.Orchestrator.callbacks = {
+      load_credentials = Config.get_credentials;
+      perform_refresh = (fun ~credentials:_ ~refresh_token on_refreshed on_refresh_error ->
+        let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
+        let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
+        if client_id = "" || client_secret = "" then
+          on_refresh_error "TWITTER_CLIENT_ID or TWITTER_CLIENT_SECRET is missing"
         else
-          (* Token still valid *)
-          Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-            (fun () -> on_success creds.access_token)
-            (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-      (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
+          refresh_access_token ~client_id ~client_secret ~refresh_token
+            (fun (new_access, new_refresh, expires_at) ->
+              on_refreshed {
+                Social_refresh.Types.access_token = new_access;
+                refresh_token = Some new_refresh;
+                expires_at = Some expires_at;
+                token_type = Some "Bearer";
+              })
+            on_refresh_error);
+      persist_credentials = Config.update_credentials;
+      update_health = Config.update_health_status;
+    } in
+    Social_refresh.ensure_valid_token
+      ~policy:{ Social_refresh.default_policy with refresh_buffer_seconds = 1800 }
+      ~account_id
+      ~callbacks
+      (function
+        | Social_refresh.Token_reused token -> on_success token
+        | Social_refresh.Token_refreshed { access_token; _ } -> on_success access_token)
+      (fun refresh_error -> on_error (Social_refresh.to_social_error refresh_error))
   
   (** Retry-on-401 wrapper.
 

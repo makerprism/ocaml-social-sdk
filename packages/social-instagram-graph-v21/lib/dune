@@ -4,6 +4,7 @@
  (modules social_instagram_graph_v21 instagram_graph_v21)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   ptime

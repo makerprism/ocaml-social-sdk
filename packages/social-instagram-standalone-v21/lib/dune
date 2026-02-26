@@ -4,6 +4,7 @@
  (modules social_instagram_standalone_v21 instagram_standalone_v21)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   ptime

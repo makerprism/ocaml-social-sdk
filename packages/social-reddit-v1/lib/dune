@@ -4,6 +4,7 @@
  (modules social_reddit_v1 reddit_v1)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   base64

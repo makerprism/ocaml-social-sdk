@@ -37,6 +37,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   base64
   digestif
@@ -63,6 +64,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   ptime
@@ -100,6 +102,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   ptime
@@ -112,6 +115,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   ptime
@@ -124,6 +128,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   ptime
@@ -137,6 +142,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   base64
@@ -149,6 +155,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   ptime))
@@ -160,6 +167,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   base64
@@ -172,7 +180,17 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-refresh (= :version))
   yojson
   uri
   ptime
   digestif))
+
+(package
+ (name social-refresh)
+ (synopsis "Shared token refresh orchestration for social providers")
+ (description "Optional shared refresh package for provider-agnostic token expiry checks, refresh orchestration, and health-state transitions.")
+ (depends
+  (ocaml (>= 4.14))
+  (social-core (= :version))
+  ptime))

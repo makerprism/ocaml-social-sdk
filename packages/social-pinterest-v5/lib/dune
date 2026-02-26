@@ -4,6 +4,7 @@
  (modules social_pinterest_v5 pinterest_v5)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   base64

@@ -619,31 +619,81 @@ module Make (Config : CONFIG) = struct
       else
         Error_types.Internal_error ("Failed to load credentials: " ^ err)
     in
-    Config.get_credentials ~account_id
-      (fun creds ->
-        let token = String.trim creds.access_token in
-        if token = "" then
-          on_error (Error_types.Auth_error Error_types.Missing_credentials)
-        else if is_token_expired creds.expires_at then
-          if auto_refresh_token_enabled () then
-            OAuth_http.refresh_token ~long_lived_token:token
-              (fun refreshed_creds ->
-                let refreshed_token = String.trim refreshed_creds.access_token in
-                if refreshed_token = "" then
-                  on_error (Error_types.Auth_error Error_types.Token_expired)
+    let loaded_creds = ref None in
+    let callbacks : Social_refresh.Orchestrator.callbacks = {
+      load_credentials = (fun ~account_id on_ok on_err ->
+        Config.get_credentials ~account_id
+          (fun creds ->
+            let token = String.trim creds.access_token in
+            if token = "" then
+              on_err "missing credentials: access token"
+            else
+              let with_trimmed_token = { creds with access_token = token } in
+              let normalized_creds =
+                if is_token_expired creds.expires_at && auto_refresh_token_enabled () then
+                  { with_trimmed_token with refresh_token = Some token }
                 else
-                  let normalized_refreshed =
-                    { refreshed_creds with access_token = refreshed_token }
-                  in
-                  Config.update_credentials ~account_id ~credentials:normalized_refreshed
-                    (fun () -> on_success normalized_refreshed)
-                    (fun _ -> on_success normalized_refreshed))
-              (fun _ -> on_error (Error_types.Auth_error Error_types.Token_expired))
-          else
-            on_error (Error_types.Auth_error Error_types.Token_expired)
-        else
-          on_success { creds with access_token = token })
-      (fun err -> on_error (map_credentials_error err))
+                  { with_trimmed_token with refresh_token = None }
+              in
+              loaded_creds := Some normalized_creds;
+              on_ok normalized_creds)
+          on_err);
+      perform_refresh = (fun ~credentials:_ ~refresh_token:long_lived_token on_refreshed on_refresh_error ->
+        OAuth_http.refresh_token ~long_lived_token
+          (fun refreshed_creds ->
+            let refreshed_token = String.trim refreshed_creds.access_token in
+            if refreshed_token = "" then
+              on_refresh_error "token expired"
+            else
+              let normalized_refreshed =
+                { refreshed_creds with access_token = refreshed_token }
+              in
+              on_refreshed {
+                Social_refresh.Types.access_token = normalized_refreshed.access_token;
+                refresh_token = normalized_refreshed.refresh_token;
+                expires_at = normalized_refreshed.expires_at;
+                token_type = Some normalized_refreshed.token_type;
+              })
+          (fun _ -> on_refresh_error "token expired"));
+      persist_credentials = (fun ~account_id ~credentials on_ok _on_err ->
+        Config.update_credentials ~account_id ~credentials
+          (fun () -> on_ok ())
+          (fun _ -> on_ok ()));
+      update_health = (fun ~account_id:_ ~status:_ ~error_message:_ on_ok _on_err -> on_ok ());
+    } in
+    Social_refresh.ensure_valid_token
+      ~policy:{ Social_refresh.default_policy with refresh_buffer_seconds = token_expiry_skew_seconds () }
+      ~account_id
+      ~callbacks
+      (function
+        | Social_refresh.Token_reused token ->
+            let creds =
+              match !loaded_creds with
+              | Some creds -> { creds with access_token = token }
+              | None -> {
+                  access_token = token;
+                  refresh_token = None;
+                  expires_at = None;
+                  token_type = "Bearer";
+                }
+            in
+            on_success creds
+        | Social_refresh.Token_refreshed { access_token; refresh_token; expires_at; token_type } ->
+            on_success {
+              access_token;
+              refresh_token;
+              expires_at;
+              token_type;
+            })
+      (fun refresh_error ->
+        match refresh_error with
+        | Social_refresh.Credential_load_failed err -> on_error (map_credentials_error err)
+        | Social_refresh.Missing_refresh_token
+        | Social_refresh.Refresh_failed _ -> on_error (Error_types.Auth_error Error_types.Token_expired)
+        | Social_refresh.Credential_persist_failed err
+        | Social_refresh.Health_update_failed err
+        | Social_refresh.Missing_configuration err ->
+            on_error (Error_types.Internal_error ("Failed to load credentials: " ^ err)))
 
   let validate_text_length text =
     let length = String.length (String.trim text) in

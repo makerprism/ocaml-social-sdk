@@ -29,6 +29,7 @@ OCaml SDK for social media APIs. Post content, manage media, handle threads acro
 | `social-facebook-graph-v21` | Facebook Graph API v21 |
 | `social-instagram-graph-v21` | Instagram Graph API v21 |
 | `social-youtube-data-v3` | YouTube Data API v3 |
+| `social-refresh` | Shared token refresh orchestration |
 | `social-pinterest-v5` | Pinterest API v5 |
 | `social-reddit-v1` | Reddit API v1 |
 | `social-tiktok-v1` | TikTok Content Posting API |
@@ -143,7 +144,8 @@ The SDK follows a runtime-agnostic design:
 
 1. **Core** (`social-core`): Pure OCaml types, interfaces, and utilities
 2. **Runtime Adapters** (`social-lwt`): HTTP client implementations
-3. **Platform SDKs** (`social-*`): Platform-specific API implementations
+3. **Shared Utilities** (`social-refresh`): Optional provider-neutral refresh orchestration
+4. **Platform SDKs** (`social-*`): Platform-specific API implementations
 
 ### Features
 

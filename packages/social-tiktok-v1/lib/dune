@@ -4,6 +4,7 @@
  (modules social_tiktok_v1 tiktok_v1)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   ptime

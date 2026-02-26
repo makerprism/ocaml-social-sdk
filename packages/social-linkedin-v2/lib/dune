@@ -4,6 +4,7 @@
  (modules social_linkedin_v2 linkedin_v2)
  (libraries
   social-core
+  social-refresh
   yojson
   uri
   ptime
