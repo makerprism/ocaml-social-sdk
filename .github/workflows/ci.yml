@@ -67,8 +67,10 @@ jobs:
             echo "Checking $pkg"
             if [ "$pkg" = "social-core" ]; then
               only_packages="$pkg"
-            else
+            elif [ "$pkg" = "social-refresh" ]; then
               only_packages="social-core,$pkg"
+            else
+              only_packages="social-core,social-refresh,$pkg"
             fi
             dune pkg lock --only-packages="$only_packages"
             dune build --only-packages="$only_packages" @pkg-install
