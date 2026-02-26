@@ -1,4 +1,4 @@
-(version 6.1.0)
+(version 6.1.1)
 
 (build
  (all_platforms
@@ -23,5 +23,5 @@
 
 (source
  (fetch
-  (url https://github.com/ocsigen/lwt/archive/refs/tags/6.1.0.tar.gz)
-  (checksum md5=16d58c8295b5273e58779db0ad1f967a)))
+  (url https://github.com/ocsigen/lwt/archive/refs/tags/6.1.1.tar.gz)
+  (checksum md5=9bccdb35c84cb8097233b3a875f08826)))

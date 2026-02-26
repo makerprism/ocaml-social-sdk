@@ -13,6 +13,7 @@ type platform =
   | Threads
   | TikTok
   | Reddit
+  | Telegram
 
 (** Convert platform to string *)
 let platform_to_string = function
@@ -27,6 +28,7 @@ let platform_to_string = function
   | Threads -> "threads"
   | TikTok -> "tiktok"
   | Reddit -> "reddit"
+  | Telegram -> "telegram"
 
 (** Parse platform from string *)
 let platform_of_string = function
@@ -41,6 +43,7 @@ let platform_of_string = function
   | "threads" -> Some Threads
   | "tiktok" -> Some TikTok
   | "reddit" -> Some Reddit
+  | "telegram" -> Some Telegram
   | _ -> None
 
 (** Media type *)

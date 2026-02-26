@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OCaml](https://img.shields.io/badge/OCaml-%3E%3D4.14-orange)](https://ocaml.org/)
 
-OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
+OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, TikTok, Telegram. Runtime-agnostic design works with Lwt, Eio, or sync code.
 
 > **Warning: Experimental Software**
 >
@@ -32,6 +32,7 @@ OCaml SDK for social media APIs. Post content, manage media, handle threads acro
 | `social-pinterest-v5` | Pinterest API v5 |
 | `social-reddit-v1` | Reddit API v1 |
 | `social-tiktok-v1` | TikTok Content Posting API |
+| `social-telegram-bot-v1` | Telegram Bot API (channel/group broadcast posting) |
 
 ## Installation
 
@@ -167,6 +168,7 @@ The SDK follows a runtime-agnostic design:
 | Pinterest | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | ⚠️ |
 | Reddit | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | - |
 | TikTok | ⚠️ | - | - | - | - | ⚠️ | ⚠️ | ⚠️ |
+| Telegram Bot | - | ⚠️ | ⚠️ | ⚠️ | - | - | - | - |
 
 ✅ = Used successfully, ⚠️ = Implemented but untested, ❌ = Not implemented (API available), - = Not applicable
 

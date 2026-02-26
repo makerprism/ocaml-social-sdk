@@ -176,3 +176,13 @@
   uri
   ptime
   digestif))
+
+(package
+ (name social-telegram-bot-v1)
+ (synopsis "Telegram Bot API connector for broadcast posting")
+ (description "Telegram Bot API connector focused on channel/group broadcast posting with text, photo, and video support.")
+ (depends
+  (ocaml (>= 4.14))
+  (social-core (= :version))
+  yojson
+  uri))

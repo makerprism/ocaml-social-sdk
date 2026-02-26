@@ -99,6 +99,21 @@ Known subtle bug traps:
 - Publish flow is async: init/upload success still requires explicit status polling.
 - Account analytics is a stitched 3-call flow; partial implementation of only one call yields misleading totals.
 
+## Telegram Bot
+
+| Capability | Method | Path/query contract | Required headers | Payload shape | SDK function(s) | Contract test name(s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Access preflight | POST | `https://api.telegram.org/bot<TOKEN>/getMe` | `Content-Type: application/x-www-form-urlencoded` | empty form body | `Telegram.validate_access` | `test_validate_access_preflight` |
+| Publish text | POST | `https://api.telegram.org/bot<TOKEN>/sendMessage` | `Content-Type: application/x-www-form-urlencoded` | form body: `chat_id`, `text` | `Telegram.post_single` | `test_send_message_contract` |
+| Publish photo | POST | `https://api.telegram.org/bot<TOKEN>/sendPhoto` | `Content-Type: application/x-www-form-urlencoded` | form body: `chat_id`, `photo`, `caption` | `Telegram.post_single` | `test_send_photo_contract` |
+| Publish video | POST | `https://api.telegram.org/bot<TOKEN>/sendVideo` | `Content-Type: application/x-www-form-urlencoded` | form body: `chat_id`, `video`, `caption` | `Telegram.post_single` | `test_send_video_contract` |
+| Thread posting (sequential) | POST x N | sequential calls to `sendMessage`/`sendPhoto`/`sendVideo`; stop on first failure | `Content-Type: application/x-www-form-urlencoded` | one form payload per thread item | `Telegram.post_thread` | `test_post_thread_success`, `test_post_thread_partial_success`, `test_post_thread_first_failure` |
+
+Known subtle bug traps:
+- Telegram may return HTTP 200 with `{"ok":false,...}`; body-level success must be checked.
+- Bot token is embedded in endpoint paths; error surfaces must redact token values.
+- Broadcast-only scope must reject likely direct-message targets and allow channel/group targets.
+
 ## X
 
 | Capability | Method | Path/query contract | Required headers | Payload shape | SDK function(s) | Contract test name(s) |

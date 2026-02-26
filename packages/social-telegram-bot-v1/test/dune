@@ -1,0 +1,6 @@
+(test
+ (name test_telegram)
+ (libraries
+  social-telegram-bot-v1
+  social-core
+  str))

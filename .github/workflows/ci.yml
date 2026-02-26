@@ -60,7 +60,8 @@ jobs:
             social-pinterest-v5 \
             social-tiktok-v1 \
             social-reddit-v1 \
-            social-threads-v1
+            social-threads-v1 \
+            social-telegram-bot-v1
           do
             echo "Checking $pkg"
             if [ "$pkg" = "social-core" ]; then

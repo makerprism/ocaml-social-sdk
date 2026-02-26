@@ -1,0 +1,9 @@
+(library
+ (name social_telegram_bot_v1)
+ (public_name social-telegram-bot-v1)
+ (modules social_telegram_bot_v1 telegram_bot_v1)
+ (libraries
+  social-core
+  yojson
+  uri
+  str))
