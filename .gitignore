@@ -4,3 +4,5 @@ _build/
 *.opam
 !*.opam.template
 dev-tools.locks/
+dune.lock/
+**/dune.lock/
