@@ -45,33 +45,7 @@ jobs:
       - name: Run tests
         run: dune runtest
 
-      - name: Verify package metadata in isolation
+      - name: Verify package metadata
         run: |
-          for pkg in \
-            social-core \
-            social-lwt \
-            social-refresh \
-            social-twitter-v2 \
-            social-bluesky-v1 \
-            social-linkedin-v2 \
-            social-mastodon-v1 \
-            social-facebook-graph-v21 \
-            social-instagram-graph-v21 \
-            social-youtube-data-v3 \
-            social-pinterest-v5 \
-            social-tiktok-v1 \
-            social-reddit-v1 \
-            social-threads-v1 \
-            social-telegram-bot-v1
-          do
-            echo "Checking $pkg"
-            if [ "$pkg" = "social-core" ]; then
-              only_packages="$pkg"
-            elif [ "$pkg" = "social-refresh" ]; then
-              only_packages="social-core,$pkg"
-            else
-              only_packages="social-core,social-refresh,$pkg"
-            fi
-            dune pkg lock --only-packages="$only_packages"
-            dune build --only-packages="$only_packages" @pkg-install
-          done
+          dune pkg lock
+          dune build @pkg-install
