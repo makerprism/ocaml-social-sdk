@@ -2,6 +2,12 @@
 
 These rules apply to all coding agents working in this repository.
 
+## Purpose
+
+This is an OCaml SDK for social media platform APIs (Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, TikTok, Telegram). Runtime-agnostic design works with Lwt, Eio, or sync code.
+
+**Scope:** Write-side (posting), OAuth flows, and limited read/analytics. See `README.md` for platform feature matrix.
+
 ## Building
 
 ```bash
@@ -31,4 +37,38 @@ dune build
 
 - Never run `dune clean`.
 - Never delete or modify `_build/` manually (including `rm -rf _build`, partial deletes, or scripted cleanup).
-- If build artifacts seem inconsistent, do not clean `_build/`; use non-destructive steps instead (for example, re-run targeted commands and report issues).
+
+## Security and Sensitive Data
+
+- Never print or commit real OAuth tokens, API keys, app secrets, or user credentials.
+- Redact token-like strings in logs and errors.
+- Treat user content as sensitive; prefer minimal structured logs.
+
+## Upstream PR Workflow
+
+- Canonical upstream is `makerprism/ocaml-social-sdk`.
+- Before opening/updating a PR to `upstream/main`, rebase your branch onto `upstream/main`.
+- If already pushed, update with `git push --force-with-lease`.
+
+## Documentation Maintenance
+
+Docs that don't evolve with code become lies. Stale docs are bugs.
+
+**After completing significant work:**
+
+1. If you added a new platform package, update `README.md` packages table and feature matrix
+2. If you changed API signatures, update usage examples in README
+3. If you fixed a bug that was documented as a limitation, update the status indicator (⚠️ → ✅)
+4. If you added/changed HTTP contracts, update `docs/parity-http-matrix.md`
+
+**Rules:**
+- Update docs in the same PR as code changes — never as a separate task
+- README.md is the primary doc; keep it accurate
+- The feature matrix in README.md is the source of truth for platform capabilities
+
+## Definition of Done
+
+- [ ] `dune build` passes
+- [ ] Affected README sections updated (including feature matrix if applicable)
+- [ ] `docs/parity-http-matrix.md` updated if HTTP contracts changed
+- [ ] You can explain the change in one sentence
