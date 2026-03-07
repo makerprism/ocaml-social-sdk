@@ -1318,20 +1318,32 @@ module Make (Config : CONFIG) = struct
                                 ("id", `String media.asset_urn);
                               ] @ title_field));
                             ])]
-                          else
-                            (* Images - use multiImage content *)
-                            let images_json = `List (List.map (fun media ->
-                              let alt_field = match media.alt_text with
+                          else match uploaded_media with
+                            | [single_image] ->
+                              (* Single image - use media content type (multiImage requires 2-20) *)
+                              let title_field = match single_image.alt_text with
                                 | Some alt when String.length alt > 0 -> [("altText", `String alt)]
                                 | _ -> []
                               in
-                              `Assoc ([("id", `String media.asset_urn)] @ alt_field)
-                            ) uploaded_media) in
-                            [("content", `Assoc [
-                              ("multiImage", `Assoc [
-                                ("images", images_json);
-                              ]);
-                            ])]
+                              [("content", `Assoc [
+                                ("media", `Assoc ([
+                                  ("id", `String single_image.asset_urn);
+                                ] @ title_field));
+                              ])]
+                            | _ ->
+                              (* Multiple images - use multiImage content *)
+                              let images_json = `List (List.map (fun media ->
+                                let alt_field = match media.alt_text with
+                                  | Some alt when String.length alt > 0 -> [("altText", `String alt)]
+                                  | _ -> []
+                                in
+                                `Assoc ([("id", `String media.asset_urn)] @ alt_field)
+                              ) uploaded_media) in
+                              [("content", `Assoc [
+                                ("multiImage", `Assoc [
+                                  ("images", images_json);
+                                ]);
+                              ])]
                     in
 
                     let post_body = `Assoc (base_fields @ content_fields) in
