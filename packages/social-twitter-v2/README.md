@@ -457,7 +457,7 @@ Twitter.exchange_code
 | PKCE | Required (S256 method) |
 | Token lifetime | 2 hours |
 | Refresh tokens | Yes (requires `offline.access` scope) |
-| Authorization endpoint | `https://twitter.com/i/oauth2/authorize` |
+| Authorization endpoint | `https://x.com/i/oauth2/authorize` |
 | Token endpoint | `https://api.twitter.com/2/oauth2/token` |
 
 ### Required Scopes by Operation

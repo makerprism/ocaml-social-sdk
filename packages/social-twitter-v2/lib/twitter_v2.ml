@@ -93,7 +93,7 @@ module OAuth = struct
     let max_refresh_attempts = 10
     
     (** Authorization endpoint *)
-    let authorization_endpoint = "https://twitter.com/i/oauth2/authorize"
+    let authorization_endpoint = "https://x.com/i/oauth2/authorize"
     
     (** Token endpoint *)
     let token_endpoint = "https://api.twitter.com/2/oauth2/token"
