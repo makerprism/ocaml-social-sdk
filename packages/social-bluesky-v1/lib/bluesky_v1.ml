@@ -564,7 +564,32 @@ module Make (Config : CONFIG) = struct
       @param on_success Receives (blob_json, alt_text)
       @param on_error Receives error message
   *)
+  (** Check if blob data looks like text/XML/HTML rather than binary media.
+      Bluesky sniffs content and rejects non-media regardless of Content-Type header. *)
+  let blob_looks_like_text blob_data =
+    let trimmed =
+      let len = String.length blob_data in
+      let i = ref 0 in
+      while !i < len && (blob_data.[!i] = ' ' || blob_data.[!i] = '\t'
+                         || blob_data.[!i] = '\n' || blob_data.[!i] = '\r') do
+        incr i
+      done;
+      if !i < len then String.sub blob_data !i (min 10 (len - !i)) else ""
+    in
+    String.length trimmed > 0
+    && (trimmed.[0] = '<'
+        || String.starts_with ~prefix:"{" trimmed
+        || String.starts_with ~prefix:"[" trimmed)
+
   let upload_blob ~access_jwt ?did ~blob_data ~mime_type ~alt_text on_success on_error =
+    (* Guard: reject content that is clearly text/XML/HTML/JSON, not binary media.
+       CDN error pages and expired-URL responses often return XML/HTML with an
+       image/* Content-Type header; Bluesky will sniff the content and reject it. *)
+    if blob_looks_like_text blob_data then
+      on_error (Printf.sprintf
+        "Blob content appears to be text/markup, not binary media (declared MIME: %s). \
+         The media URL likely returned an error page instead of an image." mime_type)
+    else
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
       ("Content-Type", mime_type);
