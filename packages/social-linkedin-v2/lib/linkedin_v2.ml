@@ -1448,13 +1448,18 @@ module Make (Config : CONFIG) = struct
             | Error_types.Failure err ->
                 on_result (Error_types.Failure err))
   
-  (** OAuth authorization URL *)
-  let get_oauth_url ?(include_organization_scopes=false) ~redirect_uri ~state on_success on_error =
+  (** OAuth authorization URL.
+
+      @param scopes Override the default OAuth scopes. When provided, this list
+        is used as-is and [include_organization_scopes] is ignored.
+      @param include_organization_scopes When [scopes] is not provided, add
+        organization management scopes to the defaults. Default: false. *)
+  let get_oauth_url ?scopes ?(include_organization_scopes=false) ~redirect_uri ~state on_success on_error =
     let raw_client_id = Config.get_env "LINKEDIN_CLIENT_ID" |> Option.value ~default:"" in
     let raw_configured_redirect_uri = Config.get_env "LINKEDIN_REDIRECT_URI" |> Option.value ~default:"" in
     let client_id = String.trim raw_client_id in
     let configured_redirect_uri = String.trim raw_configured_redirect_uri in
-    
+
     if raw_client_id = "" then
       on_error "LinkedIn client ID not configured"
     else if has_surrounding_whitespace raw_client_id then
@@ -1472,28 +1477,25 @@ module Make (Config : CONFIG) = struct
     else if configured_redirect_uri <> "" && redirect_uri <> configured_redirect_uri then
       on_error "LinkedIn redirect URI does not match configured LINKEDIN_REDIRECT_URI"
     else (
-      (* LinkedIn OAuth 2.0 scopes for personal posting
-         
-         Required products in LinkedIn Developer Portal:
-         - "Sign In with LinkedIn using OpenID Connect" → openid, profile, email
-         - "Share on LinkedIn" → w_member_social (post as person)
-         
-         Note: For organization/company page posting, use a separate implementation
-         which requires the Community Management API product. *)
-      let scopes =
-        if include_organization_scopes then
-          [
-            "openid";
-            "profile";
-            "email";
-            "w_member_social";
-            "r_member_social";
-            "r_organization_admin";
-            "w_organization_social";
-          ]
-        else ["openid"; "profile"; "email"; "w_member_social"; "r_member_social"]
+      let resolved_scopes =
+        match scopes with
+        | Some s -> s
+        | None ->
+            (* Default LinkedIn OAuth 2.0 scopes for personal posting.
+
+               Required products in LinkedIn Developer Portal:
+               - "Sign In with LinkedIn using OpenID Connect" -> openid, profile, email
+               - "Share on LinkedIn" -> w_member_social (post as person)
+
+               Note: For organization/company page posting, use a separate implementation
+               which requires the Community Management API product. *)
+            if include_organization_scopes then
+              ["openid"; "profile"; "email"; "w_member_social";
+               "r_organization_admin"; "w_organization_social"]
+            else
+              ["openid"; "profile"; "email"; "w_member_social"]
       in
-      let scope_str = String.concat " " scopes in
+      let scope_str = String.concat " " resolved_scopes in
       
       let params = [
         ("response_type", "code");
