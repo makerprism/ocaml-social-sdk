@@ -119,10 +119,14 @@ type access_token_result = {
 let parse_form_encoded body =
   String.split_on_char '&' body
   |> List.filter_map (fun pair ->
-    match String.split_on_char '=' pair with
-    | [k; v] -> Some (Uri.pct_decode k, Uri.pct_decode v)
-    | [k] -> Some (Uri.pct_decode k, "")
-    | _ -> None)
+    match String.index_opt pair '=' with
+    | Some i ->
+        let k = String.sub pair 0 i in
+        let v = String.sub pair (i + 1) (String.length pair - i - 1) in
+        Some (Uri.pct_decode k, Uri.pct_decode v)
+    | None ->
+        if pair = "" then None
+        else Some (Uri.pct_decode pair, ""))
 
 let find_field fields key =
   match List.assoc_opt key fields with
