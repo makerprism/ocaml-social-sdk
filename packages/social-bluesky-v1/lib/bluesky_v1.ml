@@ -987,10 +987,27 @@ module Make (Config : CONFIG) = struct
                         Config.Http.get url
                         (fun media_resp ->
                           if media_resp.status >= 200 && media_resp.status < 300 then
-                            let mime_type =
+                            let raw_mime_type =
                               List.assoc_opt "content-type" media_resp.headers
                               |> Option.value ~default:"application/octet-stream"
                             in
+                            (* Strip MIME parameters (e.g. charset) *)
+                            let mime_type =
+                              match String.split_on_char ';' raw_mime_type with
+                              | base :: _ -> String.trim base
+                              | [] -> raw_mime_type
+                            in
+                            (* Reject non-media MIME types (e.g. XML error pages from CDNs) *)
+                            let is_media_mime =
+                              String.starts_with ~prefix:"image/" mime_type
+                              || String.starts_with ~prefix:"video/" mime_type
+                            in
+                            if not is_media_mime then
+                              on_err (Error_types.make_api_error
+                                ~platform:Platform_types.Bluesky
+                                ~status_code:415
+                                ~message:(Printf.sprintf "Media URL returned unsupported content type '%s' instead of image/* or video/*: %s" mime_type url) ())
+                            else
                             let file_size = String.length media_resp.body in
 
                             (* Validate media if requested *)
@@ -1759,10 +1776,27 @@ module Make (Config : CONFIG) = struct
                         Config.Http.get url
                         (fun media_resp ->
                           if media_resp.status >= 200 && media_resp.status < 300 then
-                            let mime_type =
+                            let raw_mime_type =
                               List.assoc_opt "content-type" media_resp.headers
                               |> Option.value ~default:"application/octet-stream"
                             in
+                            (* Strip MIME parameters (e.g. charset) *)
+                            let mime_type =
+                              match String.split_on_char ';' raw_mime_type with
+                              | base :: _ -> String.trim base
+                              | [] -> raw_mime_type
+                            in
+                            (* Reject non-media MIME types (e.g. XML error pages from CDNs) *)
+                            let is_media_mime =
+                              String.starts_with ~prefix:"image/" mime_type
+                              || String.starts_with ~prefix:"video/" mime_type
+                            in
+                            if not is_media_mime then
+                              on_err (Error_types.make_api_error
+                                ~platform:Platform_types.Bluesky
+                                ~status_code:415
+                                ~message:(Printf.sprintf "Media URL returned unsupported content type '%s' instead of image/* or video/*: %s" mime_type url) ())
+                            else
                             (* Upload with alt text, passing DID for video service auth *)
                             upload_blob ~access_jwt ~did ~blob_data:media_resp.body ~mime_type ~alt_text
                               (fun (blob, alt) ->
