@@ -1685,16 +1685,57 @@ module Make (Config : CONFIG) = struct
             on_result (Error (Error_types.Network_error (Error_types.Connection_failed (Printf.sprintf "Failed to download video (%d)" response.status)))))
       (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
   
+  (** Post a video via PULL_FROM_URL (TikTok fetches from URL directly)
+
+      This skips downloading the video into the backend entirely:
+      1. Validates caption length and URL
+      2. Queries creator info for privacy validation
+      3. Calls init_video_pull_from_url so TikTok pulls the video
+      4. Returns publish_id for status tracking
+  *)
+  let post_video_via_pull ~account_id ~caption ~video_url
+      ?(privacy_level=SelfOnly)
+      ?(disable_duet=false)
+      ?(disable_comment=false)
+      ?(disable_stitch=false)
+      ?video_cover_timestamp_ms
+      ?(is_aigc=false)
+      on_result =
+    let caption_len = String.length caption in
+    if caption_len > max_caption_length then
+      on_result (Error (Error_types.Validation_error [Error_types.Text_too_long { length = caption_len; max = max_caption_length }]))
+    else if not (is_valid_http_url video_url) then
+      on_result (Error (Error_types.Validation_error [Error_types.Invalid_url video_url]))
+    else
+      let post_info = make_post_info
+        ~title:caption
+        ~privacy_level
+        ~disable_duet
+        ~disable_comment
+        ~disable_stitch
+        ?video_cover_timestamp_ms
+        ~is_aigc
+        ()
+      in
+      get_creator_info ~account_id
+        (function
+          | Error e -> on_result (Error e)
+          | Ok creator_info ->
+              (match validate_post_info_against_creator ~post_info ~creator_info with
+               | Error e -> on_result (Error e)
+               | Ok () ->
+                   init_video_pull_from_url ~account_id ~post_info ~video_url on_result))
+
   (** Post single video (matches other provider signatures)
-      
-      @param validate_media_before_upload When true, validates video size after download.
-             Default: false
+
+      @param validate_media_before_upload Ignored (kept for API compatibility).
   *)
   let post_single ~account_id ~text ~media_urls ?(alt_texts=[])
       ?(privacy_level=SelfOnly) ?(disable_duet=false) ?(disable_comment=false)
       ?(disable_stitch=false) ?video_cover_timestamp_ms ?(is_aigc=false)
       ?(validate_media_before_upload=false) on_result =
     let _ = alt_texts in (* TikTok doesn't support alt text *)
+    let _ = validate_media_before_upload in (* Not needed for PULL_FROM_URL *)
     let media_count = List.length media_urls in
     match validate_post ~text ~media_count () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1704,10 +1745,9 @@ module Make (Config : CONFIG) = struct
         if not (is_valid_http_url video_url) then
           on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Invalid_url video_url]))
         else
-          post_video_from_url ~account_id ~caption:text ~video_url
+          post_video_via_pull ~account_id ~caption:text ~video_url
             ~privacy_level ~disable_duet ~disable_comment ~disable_stitch
             ?video_cover_timestamp_ms ~is_aigc
-            ~validate_before_upload:validate_media_before_upload
             (function
               | Ok publish_id -> on_result (Error_types.Success publish_id)
               | Error err -> on_result (Error_types.Failure err))
@@ -1746,7 +1786,7 @@ module Make (Config : CONFIG) = struct
           | text :: rest_texts, urls :: rest_media ->
               (* Validation ensures urls is non-empty *)
               let video_url = List.hd urls in
-              post_video_from_url ~account_id ~caption:text ~video_url ~is_aigc
+              post_video_via_pull ~account_id ~caption:text ~video_url ~is_aigc
                 (function
                   | Ok post_id -> post_all (post_id :: acc) (post_index + 1) rest_texts rest_media
                   | Error err ->

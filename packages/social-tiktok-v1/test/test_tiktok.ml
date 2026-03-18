@@ -2704,6 +2704,188 @@ let test_init_video_pull_from_url_request_contract () =
       (fun err -> failwith ("Unexpected error: " ^ err)));
   assert !success_called
 
+let test_post_video_via_pull_success () =
+  print_string "Test: post_video_via_pull success... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"video/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      let source_json = json |> member "source_info" in
+      assert ((source_json |> member "source" |> to_string) = "PULL_FROM_URL");
+      assert ((source_json |> member "video_url" |> to_string) = "https://storage.example.com/video.mp4");
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"pull_123"}}|};
+      }
+    ) else if String.ends_with ~suffix:"creator_info/query/" url then
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"creator_avatar_url":"","creator_username":"u","creator_nickname":"U","privacy_level_options":["SELF_ONLY"],"comment_disabled":false,"duet_disabled":false,"stitch_disabled":false,"max_video_post_duration_sec":600}}|};
+      }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"t","refresh_token":"r","expires_in":86400}|};
+      });
+  let success_called = ref false in
+  TikTok.post_video_via_pull
+    ~account_id:"test_account"
+    ~caption:"Via pull"
+    ~video_url:"https://storage.example.com/video.mp4"
+    (handle_api_result
+      (fun publish_id ->
+        assert (publish_id = "pull_123");
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+let test_post_video_via_pull_caption_too_long () =
+  print_string "Test: post_video_via_pull rejects long caption... ";
+  reset_mock_state ();
+  let long_caption = String.make 2201 'x' in
+  let error_received = ref false in
+  TikTok.post_video_via_pull
+    ~account_id:"test_account"
+    ~caption:long_caption
+    ~video_url:"https://example.com/video.mp4"
+    (fun result ->
+      match result with
+      | Error (Error_types.Validation_error _) ->
+          error_received := true;
+          print_endline "PASSED"
+      | _ -> failwith "Expected validation error");
+  assert !error_received
+
+let test_post_video_via_pull_invalid_url () =
+  print_string "Test: post_video_via_pull rejects invalid URL... ";
+  reset_mock_state ();
+  let error_received = ref false in
+  TikTok.post_video_via_pull
+    ~account_id:"test_account"
+    ~caption:"Test"
+    ~video_url:"not-a-url"
+    (fun result ->
+      match result with
+      | Error (Error_types.Validation_error _) ->
+          error_received := true;
+          print_endline "PASSED"
+      | _ -> failwith "Expected validation error");
+  assert !error_received
+
+let test_post_video_via_pull_no_download () =
+  print_string "Test: post_video_via_pull does not download the video... ";
+  reset_mock_state ();
+  let success_called = ref false in
+  TikTok.post_video_via_pull
+    ~account_id:"test_account"
+    ~caption:"No download"
+    ~video_url:"https://storage.example.com/video.mp4"
+    (handle_api_result
+      (fun _publish_id ->
+        (* Verify no GET calls were made (no video download) *)
+        let get_calls = !Mock_http.get_calls in
+        assert (List.length get_calls = 0);
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+let test_post_single_uses_pull_from_url () =
+  print_string "Test: post_single uses PULL_FROM_URL (no download)... ";
+  reset_mock_state ();
+  let pull_url_seen = ref false in
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"video/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      let source_json = json |> member "source_info" in
+      assert ((source_json |> member "source" |> to_string) = "PULL_FROM_URL");
+      pull_url_seen := true;
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"publish_id":"single_pull_1"}}|};
+      }
+    ) else if String.ends_with ~suffix:"creator_info/query/" url then
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"creator_avatar_url":"","creator_username":"u","creator_nickname":"U","privacy_level_options":["SELF_ONLY"],"comment_disabled":false,"duet_disabled":false,"stitch_disabled":false,"max_video_post_duration_sec":600}}|};
+      }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"t","refresh_token":"r","expires_in":86400}|};
+      });
+  let success_called = ref false in
+  TikTok.post_single
+    ~account_id:"test_account"
+    ~text:"Single post"
+    ~media_urls:["https://storage.example.com/video.mp4"]
+    (handle_outcome
+      (fun _publish_id ->
+        assert !pull_url_seen;
+        assert (List.length !Mock_http.get_calls = 0);
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
+let test_post_thread_uses_pull_from_url () =
+  print_string "Test: post_thread uses PULL_FROM_URL (no download)... ";
+  reset_mock_state ();
+  let pull_url_count = ref 0 in
+  Mock_http.set_custom_post_handler (fun url _headers body ->
+    if String.ends_with ~suffix:"video/init/" url then (
+      let body_text = Option.value ~default:"" body in
+      let json = Yojson.Basic.from_string body_text in
+      let open Yojson.Basic.Util in
+      let source_json = json |> member "source_info" in
+      assert ((source_json |> member "source" |> to_string) = "PULL_FROM_URL");
+      pull_url_count := !pull_url_count + 1;
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = Printf.sprintf {|{"data":{"publish_id":"thread_pull_%d"}}|} !pull_url_count;
+      }
+    ) else if String.ends_with ~suffix:"creator_info/query/" url then
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"data":{"creator_avatar_url":"","creator_username":"u","creator_nickname":"U","privacy_level_options":["SELF_ONLY"],"comment_disabled":false,"duet_disabled":false,"stitch_disabled":false,"max_video_post_duration_sec":600}}|};
+      }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"t","refresh_token":"r","expires_in":86400}|};
+      });
+  let success_called = ref false in
+  TikTok.post_thread
+    ~account_id:"test_account"
+    ~texts:["First"; "Second"]
+    ~media_urls_per_post:[
+      ["https://storage.example.com/v1.mp4"];
+      ["https://storage.example.com/v2.mp4"]
+    ]
+    (handle_thread_outcome
+      (fun post_ids ->
+        assert (List.length post_ids = 2);
+        assert (!pull_url_count = 2);
+        assert (List.length !Mock_http.get_calls = 0);
+        success_called := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called
+
 (** {1 Inbox/Draft Upload Tests} *)
 
 let test_init_inbox_video_upload_request_contract () =
@@ -2897,6 +3079,12 @@ let () =
 
   print_endline "\n--- PULL_FROM_URL Support ---";
   test_init_video_pull_from_url_request_contract ();
+  test_post_video_via_pull_success ();
+  test_post_video_via_pull_caption_too_long ();
+  test_post_video_via_pull_invalid_url ();
+  test_post_video_via_pull_no_download ();
+  test_post_single_uses_pull_from_url ();
+  test_post_thread_uses_pull_from_url ();
 
   print_endline "\n--- Inbox/Draft Upload ---";
   test_init_inbox_video_upload_request_contract ();
