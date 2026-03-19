@@ -946,6 +946,7 @@ module Make (Config : CONFIG) = struct
       ~media_url
       ~kind
       ?(is_carousel_item = false)
+      ?alt_text
       ?reply_to_id
       ?idempotency_key
       ?reply_control
@@ -966,6 +967,10 @@ module Make (Config : CONFIG) = struct
            ("access_token", [access_token]) ]
          @
          (if is_carousel_item then [ ("is_carousel_item", ["true"]) ] else [])
+         @
+         (match alt_text with
+          | Some txt when String.trim txt <> "" -> [("alt_text", [String.trim txt])]
+          | _ -> [])
          @
          (if normalized_text = "" || is_carousel_item then [] else [ ("text", [normalized_text]) ])
          @
@@ -1011,6 +1016,7 @@ module Make (Config : CONFIG) = struct
       ~user_id
       ~text
       ~media_urls
+      ?alt_text
       ?reply_to_id
       ?idempotency_key
       ?reply_control
@@ -1037,6 +1043,7 @@ module Make (Config : CONFIG) = struct
                ~text
                ~media_url:normalized
                ~kind
+               ?alt_text
                ?reply_to_id
                ?idempotency_key
                ?reply_control
@@ -1816,7 +1823,7 @@ module Make (Config : CONFIG) = struct
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
 
-  let post_single ~account_id ~text ~media_urls ?idempotency_key ?reply_control ?topic_tag on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?idempotency_key ?reply_control ?topic_tag on_result =
     let validation_errors =
       [ validate_post_content ~text ~media_urls; validate_media_urls media_urls ]
       |> List.filter_map (fun x -> x)
@@ -1837,11 +1844,13 @@ module Make (Config : CONFIG) = struct
                             | Ok post_id -> on_result (Error_types.Success post_id)
                             | Error err -> on_result (Error_types.Failure err))
                   in
+                  let alt_text = match alt_texts with x :: _ -> x | [] -> None in
                   create_container_for_post
                     ~access_token:creds.access_token
                     ~user_id
                     ~text
                     ~media_urls
+                    ?alt_text
                     ?idempotency_key
                     ?reply_control
                     ?topic_tag
@@ -1850,7 +1859,7 @@ module Make (Config : CONFIG) = struct
             get_user_id ~access_token:creds.access_token on_user_id)
           (fun err -> on_result (Error_types.Failure err))
 
-  let post_thread ~account_id ~texts ~media_urls_per_post ?idempotency_key ?reply_control ?topic_tag on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag on_result =
     if texts = [] then
       on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
     else
@@ -1880,6 +1889,13 @@ module Make (Config : CONFIG) = struct
       let media_urls_for_index i =
         try List.nth media_urls_per_post i
         with _ -> []
+      in
+      let alt_text_for_index i =
+        try
+          match List.nth alt_texts_per_post i with
+          | x :: _ -> x
+          | [] -> None
+        with _ -> None
       in
       let thread_validation_errors =
         texts
@@ -1936,11 +1952,13 @@ module Make (Config : CONFIG) = struct
                                total_requested;
                              })
                     | text :: rest ->
+                        let alt_text = alt_text_for_index index in
                         create_container_for_post
                           ~access_token:creds.access_token
                           ~user_id
                           ~text
                           ~media_urls:(media_urls_for_index index)
+                          ?alt_text
                           ?reply_to_id:previous_post_id
                           ?idempotency_key:(match normalized_thread_idempotency with
                             | Some base -> Some (base ^ "-" ^ string_of_int index)
