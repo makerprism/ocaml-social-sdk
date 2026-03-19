@@ -30,8 +30,15 @@ hooks to make delegation safer in production environments:
 
 ## Current integrations
 
-- `social-twitter-v2`
-- `social-threads-v1`
+- `social-twitter-v2` (2h access token, 30min refresh window)
+- `social-youtube-data-v3` (1h access token, 10min refresh window)
+- `social-tiktok-v1` (24h access token, 1h refresh window)
+- `social-reddit-v1` (1h access token, 5min refresh window)
+- `social-pinterest-v5` (30d access token, 7d refresh window)
+- `social-linkedin-v2` (60d access token, 7d refresh window; Partner Program only)
+- `social-instagram-graph-v21` (60d access token, 7d refresh window)
+- `social-instagram-standalone-v21` (60d access token, 7d refresh window)
+- `social-threads-v1` (60d access token, configurable refresh window)
 
 ## License
 

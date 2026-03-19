@@ -20,4 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package unit tests for malformed timestamps, boundary windows, refresh failure mapping,
   missing refresh token handling, refresh token preservation, and health transitions
 - Additional unit tests for retry behavior, reload-before-refresh, and lock hook execution
-- Pilot provider integrations in `social-twitter-v2` and `social-threads-v1`
+- Provider integrations in `social-twitter-v2`, `social-youtube-data-v3`,
+  `social-tiktok-v1`, `social-reddit-v1`, `social-pinterest-v5`,
+  `social-linkedin-v2`, `social-instagram-graph-v21`,
+  `social-instagram-standalone-v21`, and `social-threads-v1`
