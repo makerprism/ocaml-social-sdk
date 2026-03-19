@@ -554,16 +554,6 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Service auth request failed (%d): %s" response.status response.body))
       on_error
 
-  (** Upload blob to Bluesky with optional alt text
-
-      @param access_jwt Session JWT for authentication
-      @param did Optional DID for video uploads (used to get service auth token)
-      @param blob_data Raw binary data
-      @param mime_type MIME type of the data
-      @param alt_text Optional alt text for accessibility
-      @param on_success Receives (blob_json, alt_text)
-      @param on_error Receives error message
-  *)
   (** Check if blob data looks like text/XML/HTML rather than binary media.
       Bluesky sniffs content and rejects non-media regardless of Content-Type header. *)
   let blob_looks_like_text blob_data =
@@ -581,6 +571,7 @@ module Make (Config : CONFIG) = struct
         || String.starts_with ~prefix:"{" trimmed
         || String.starts_with ~prefix:"[" trimmed)
 
+  (** Upload blob to Bluesky with optional alt text. *)
   let upload_blob ~access_jwt ?did ~blob_data ~mime_type ~alt_text on_success on_error =
     (* Guard: reject content that is clearly text/XML/HTML/JSON, not binary media.
        CDN error pages and expired-URL responses often return XML/HTML with an
