@@ -781,6 +781,15 @@ module Make (Config : CONFIG) = struct
     in
     try_patterns patterns
 
+  (** Extract HTML <title> tag content as fallback when og:title is missing *)
+  let extract_html_title html =
+    try
+      let regex = Re.Pcre.regexp ~flags:[`CASELESS] "<title[^>]*>([^<]+)</title>" in
+      let group = Re.exec regex html in
+      let title = String.trim (Re.Group.get group 1) in
+      if title = "" then None else Some title
+    with Not_found -> None
+
   (** Fetch link card metadata by scraping OpenGraph tags.
       Returns (card option, warnings list) *)
   let fetch_link_card ~access_jwt ~url on_success =
@@ -798,11 +807,15 @@ module Make (Config : CONFIG) = struct
             let description = extract_og_tag html "description" in
             let image_url = extract_og_tag html "image" in
             
-            (* Only create card if we have at least a title *)
-            match title with
-            | None -> 
-                warnings := Error_types.Link_card_failed 
-                  (Printf.sprintf "No og:title found for %s" url) :: !warnings;
+            (* Use og:title, falling back to <title> tag *)
+            let effective_title = match title with
+              | Some _ -> title
+              | None -> extract_html_title html
+            in
+            match effective_title with
+            | None ->
+                warnings := Error_types.Link_card_failed
+                  (Printf.sprintf "No og:title or <title> found for %s" url) :: !warnings;
                 on_success (None, !warnings)
             | Some title_str ->
                 let description_str = match description with
