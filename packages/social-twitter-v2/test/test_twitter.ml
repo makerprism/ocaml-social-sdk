@@ -4789,7 +4789,7 @@ module Mock_config_video_fail = struct
     | "TWITTER_LINK_REDIRECT_URI" -> Some "http://localhost/callback"
     | _ -> None
   let get_credentials ~account_id:_ on_success _on_error =
-    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; token_type = "Bearer" }
+    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
@@ -4865,7 +4865,7 @@ module Mock_config_video_timeout = struct
     | "TWITTER_LINK_REDIRECT_URI" -> Some "http://localhost/callback"
     | _ -> None
   let get_credentials ~account_id:_ on_success _on_error =
-    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; token_type = "Bearer" }
+    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
@@ -5769,9 +5769,9 @@ let test_retry_on_401 () =
   let result = ref None in
   Twitter_retry_401.with_retry_on_401
     ~account_id:"test_account"
-    ~action:(fun access_token on_done on_err ->
-      let url = Printf.sprintf "https://api.twitter.com/2/tweets/123" in
-      let headers = [("Authorization", Printf.sprintf "Bearer %s" access_token)] in
+    ~action:(fun (auth_ctx : Twitter_retry_401.auth_context) on_done on_err ->
+      let url = "https://api.twitter.com/2/tweets/123" in
+      let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url in
       Mock_http_retry_401.get ~headers url on_done on_err)
     ~handle_response:(fun response on_result ->
       if response.Social_core.status >= 200 && response.Social_core.status < 300 then

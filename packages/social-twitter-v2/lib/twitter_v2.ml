@@ -886,6 +886,34 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status (OAuth.redact_sensitive_text response.body)))
       on_error
   
+  (** Auth context provides auth headers appropriate for the account's auth type.
+      For Bearer tokens, returns a static Authorization header.
+      For OAuth 1.0a, captures signing credentials in a closure that signs each
+      request with the appropriate consumer and token secrets. *)
+  type auth_context = {
+    access_token: string;
+    make_auth_headers: http_method:string -> url:string -> (string * string) list;
+  }
+
+  let make_auth_context (credentials : Social_core.credentials) =
+    match credentials.auth_type with
+    | Social_core.OAuth1a ->
+        let consumer_key = Config.get_env "TWITTER_OAUTH1_CONSUMER_KEY" |> Option.value ~default:"" in
+        let consumer_secret = Config.get_env "TWITTER_OAUTH1_CONSUMER_SECRET" |> Option.value ~default:"" in
+        let token = credentials.access_token in
+        let token_secret = Option.value ~default:"" credentials.refresh_token in
+        { access_token = credentials.access_token;
+          make_auth_headers = fun ~http_method ~url ->
+            let auth = Twitter_oauth1a.authorization_header
+              ~consumer_key ~consumer_secret
+              ~token ~token_secret
+              ~http_method ~url () in
+            [("Authorization", auth)] }
+    | _ ->
+        { access_token = credentials.access_token;
+          make_auth_headers = fun ~http_method:_ ~url:_ ->
+            [("Authorization", Printf.sprintf "Bearer %s" credentials.access_token)] }
+
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
     let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
@@ -915,7 +943,7 @@ module Make (Config : CONFIG) = struct
       ~perform_refresh
       ~persist_credentials:Config.update_credentials
       ~update_health:Config.update_health_status
-      (fun credentials -> on_success credentials.Social_core.access_token)
+      (fun credentials -> on_success (make_auth_context credentials))
       on_error
   
   (** Retry-on-401 wrapper.
@@ -928,15 +956,15 @@ module Make (Config : CONFIG) = struct
       retries.
 
       @param account_id   Account whose credentials should be refreshed
-      @param action        [fun access_token on_done -> ...] where [on_done]
+      @param action        [fun auth_ctx on_done -> ...] where [on_done]
                            receives the HTTP response
       @param handle_response  Processes the HTTP response into the final result
       @param on_result     Final callback with the result
   *)
   let with_retry_on_401 ~account_id ~action ~handle_response on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
-        action access_token
+      (fun auth_ctx ->
+        action auth_ctx
           (fun response ->
             if response.Social_core.status = 401 then
               (* Force a token refresh: the server rejected the token even if
@@ -964,7 +992,8 @@ module Make (Config : CONFIG) = struct
                           } in
                           Config.update_credentials ~account_id ~credentials:updated_creds
                             (fun () ->
-                              action new_access
+                              let new_auth_ctx = make_auth_context updated_creds in
+                              action new_auth_ctx
                                 (fun retry_response ->
                                   handle_response retry_response on_result)
                                 (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
@@ -981,7 +1010,7 @@ module Make (Config : CONFIG) = struct
       
       @param on_success Called with `true` if alt-text was set, `false` if it failed
   *)
-  let update_media_metadata ~access_token ~media_id ~alt_text on_success =
+  let update_media_metadata ~auth_ctx ~media_id ~alt_text on_success =
     let url = Printf.sprintf "%s/media/metadata" twitter_upload_base in
     
     (* v2 format: id and metadata object *)
@@ -995,10 +1024,10 @@ module Make (Config : CONFIG) = struct
     ] in
     let body = Yojson.Basic.to_string body_json in
     
-    let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_token);
-      ("Content-Type", "application/json");
-    ] in
+    let headers =
+      ("Content-Type", "application/json")
+      :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+    in
     
     Config.Http.post ~headers ~body url
       (fun response ->
@@ -1053,15 +1082,13 @@ module Make (Config : CONFIG) = struct
           Media_processing_pending check_after_secs
       | _ -> Media_processing_succeeded
 
-  let get_media_processing_status ~access_token ~media_id on_success on_error =
+  let get_media_processing_status ~auth_ctx ~media_id on_success on_error =
     let query = Uri.encoded_of_query [
       ("command", ["STATUS"]);
       ("media_id", [media_id]);
     ] in
     let url = Printf.sprintf "%s/media/upload?%s" twitter_upload_base query in
-    let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_token);
-    ] in
+    let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url in
     Config.Http.get ~headers url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
@@ -1074,7 +1101,7 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Media STATUS check failed (%d): %s" response.status response.body))
       on_error
 
-  let wait_for_media_processing ~access_token ~media_id ?(max_attempts=20) on_success on_error =
+  let wait_for_media_processing ~auth_ctx ~media_id ?(max_attempts=20) on_success on_error =
     let sleep_for_poll_delay seconds =
       if seconds > 0 then
         try
@@ -1092,7 +1119,7 @@ module Make (Config : CONFIG) = struct
           "Media processing timeout for media_id=%s after %d STATUS attempts.%s"
           media_id max_attempts hint)
       else
-        get_media_processing_status ~access_token ~media_id
+        get_media_processing_status ~auth_ctx ~media_id
           (function
             | Media_processing_succeeded -> on_success ()
             | Media_processing_failed msg ->
@@ -1104,22 +1131,22 @@ module Make (Config : CONFIG) = struct
     in
     poll 0 None
 
-  let finalize_media_upload_result ~access_token ~media_id ~alt_text on_success =
+  let finalize_media_upload_result ~auth_ctx ~media_id ~alt_text on_success =
     match alt_text with
     | Some alt when String.length alt > 0 ->
-        update_media_metadata ~access_token ~media_id ~alt_text:alt
+        update_media_metadata ~auth_ctx ~media_id ~alt_text:alt
           (fun alt_text_succeeded -> on_success (media_id, not alt_text_succeeded))
     | _ -> on_success (media_id, false)
 
-  let ensure_media_processing_ready ~access_token ~media_id ~initial_status ~alt_text on_success on_error =
+  let ensure_media_processing_ready ~auth_ctx ~media_id ~initial_status ~alt_text on_success on_error =
     match initial_status with
     | Media_processing_succeeded ->
-        finalize_media_upload_result ~access_token ~media_id ~alt_text on_success
+        finalize_media_upload_result ~auth_ctx ~media_id ~alt_text on_success
     | Media_processing_failed msg ->
         on_error (Printf.sprintf "Media processing failed for media_id=%s: %s" media_id msg)
     | Media_processing_pending _ ->
-        wait_for_media_processing ~access_token ~media_id
-          (fun () -> finalize_media_upload_result ~access_token ~media_id ~alt_text on_success)
+        wait_for_media_processing ~auth_ctx ~media_id
+          (fun () -> finalize_media_upload_result ~auth_ctx ~media_id ~alt_text on_success)
           on_error
   
   (** Upload media to X API v2 (requires S256 PKCE tokens)
@@ -1135,7 +1162,7 @@ module Make (Config : CONFIG) = struct
       - App permissions not set to "Read and Write" in Developer Portal
       - Quota exhaustion on Free tier
   *)
-  let upload_media ~access_token ~media_data ~mime_type ?(alt_text=None) on_success on_error =
+  let upload_media ~auth_ctx ~media_data ~mime_type ?(alt_text=None) on_success on_error =
     let url = Printf.sprintf "%s/media/upload" twitter_upload_base in
     
     (* Determine media category based on MIME type *)
@@ -1161,10 +1188,10 @@ module Make (Config : CONFIG) = struct
     ] in
     let body = Yojson.Basic.to_string body_json in
     
-    let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_token);
-      ("Content-Type", "application/json");
-    ] in
+    let headers =
+      ("Content-Type", "application/json")
+      :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+    in
     
     Config.Http.post ~headers ~body url
       (fun response ->
@@ -1181,7 +1208,7 @@ module Make (Config : CONFIG) = struct
                 with _ -> json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
             in
             let processing_status = parse_media_processing_status json in
-            ensure_media_processing_ready ~access_token ~media_id ~initial_status:processing_status ~alt_text
+            ensure_media_processing_ready ~auth_ctx ~media_id ~initial_status:processing_status ~alt_text
               on_success on_error
           with e ->
             on_error (Printf.sprintf "Failed to parse media response: %s\nBody: %s" (Printexc.to_string e) response.body)
@@ -1201,16 +1228,12 @@ module Make (Config : CONFIG) = struct
 
       Reference: https://docs.x.com/x-api/media/quickstart/media-upload-chunked
   *)
-  let upload_media_chunked ~access_token ~media_data ~mime_type ?(alt_text=None) () on_success on_error =
+  let upload_media_chunked ~auth_ctx ~media_data ~mime_type ?(alt_text=None) () on_success on_error =
     let media_category =
       if String.starts_with ~prefix:"video/" mime_type then "tweet_video"
       else if mime_type = "image/gif" then "tweet_gif"
       else "tweet_image" in
     let total_bytes = String.length media_data in
-    let auth_headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_token);
-    ] in
-
     (* Phase 1: INIT - POST /2/media/upload/initialize with JSON body *)
     let init_url = Printf.sprintf "%s/media/upload/initialize" twitter_upload_base in
     let init_body = Yojson.Basic.to_string (`Assoc [
@@ -1218,7 +1241,10 @@ module Make (Config : CONFIG) = struct
       ("media_type", `String mime_type);
       ("media_category", `String media_category);
     ]) in
-    let init_headers = ("Content-Type", "application/json") :: auth_headers in
+    let init_headers =
+      ("Content-Type", "application/json")
+      :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:init_url
+    in
 
     Config.Http.post ~headers:init_headers ~body:init_body init_url
       (fun init_response ->
@@ -1238,7 +1264,8 @@ module Make (Config : CONFIG) = struct
                 (* Phase 3: FINALIZE - POST /2/media/upload/{id}/finalize *)
                 let finalize_url = Printf.sprintf "%s/media/upload/%s/finalize" twitter_upload_base media_id_string in
 
-                Config.Http.post ~headers:auth_headers finalize_url
+                let finalize_headers = auth_ctx.make_auth_headers ~http_method:"POST" ~url:finalize_url in
+                Config.Http.post ~headers:finalize_headers finalize_url
                   (fun finalize_response ->
                     if finalize_response.status >= 200 && finalize_response.status < 300 then
                       let initial_status =
@@ -1248,7 +1275,7 @@ module Make (Config : CONFIG) = struct
                         with _ -> Media_processing_succeeded
                       in
                       ensure_media_processing_ready
-                        ~access_token
+                        ~auth_ctx
                         ~media_id:media_id_string
                         ~initial_status
                         ~alt_text
@@ -1270,7 +1297,8 @@ module Make (Config : CONFIG) = struct
                   { name = "media"; content = chunk; filename = Some "chunk"; content_type = Some "application/octet-stream" };
                 ] in
 
-                Config.Http.post_multipart ~headers:auth_headers ~parts:append_parts append_url
+                let append_headers = auth_ctx.make_auth_headers ~http_method:"POST" ~url:append_url in
+                Config.Http.post_multipart ~headers:append_headers ~parts:append_parts append_url
                   (fun append_response ->
                     if append_response.status >= 200 && append_response.status < 300 then
                       upload_chunks (offset + current_chunk_size) (segment_index + 1)
@@ -1290,11 +1318,11 @@ module Make (Config : CONFIG) = struct
             init_response.status init_response.body))
       on_error
 
-  let upload_media_with_mode ~access_token ~media_data ~mime_type ~alt_text on_success on_error =
+  let upload_media_with_mode ~auth_ctx ~media_data ~mime_type ~alt_text on_success on_error =
     if String.starts_with ~prefix:"video/" mime_type then
-      upload_media_chunked ~access_token ~media_data ~mime_type ~alt_text () on_success on_error
+      upload_media_chunked ~auth_ctx ~media_data ~mime_type ~alt_text () on_success on_error
     else
-      upload_media ~access_token ~media_data ~mime_type ~alt_text on_success on_error
+      upload_media ~auth_ctx ~media_data ~mime_type ~alt_text on_success on_error
   
   (** Post a single tweet with optional media
       
@@ -1321,7 +1349,7 @@ module Make (Config : CONFIG) = struct
               ~retry_after_seconds:3600 ()))  (* Suggest retry after 1 hour *)
         | Ok () ->
             ensure_valid_token ~account_id
-              (fun access_token ->
+              (fun auth_ctx ->
                 let accumulated_warnings = ref [] in
                 
                 (* Helper to fetch media with retry logic *)
@@ -1397,7 +1425,7 @@ module Make (Config : CONFIG) = struct
                               on_result (Error_types.Failure (Error_types.Validation_error errs))
                           | Ok () ->
                               (* Upload to Twitter - alt text failures become warnings, not errors *)
-                              upload_media_with_mode ~access_token ~media_data:media_resp.body ~mime_type ~alt_text
+                              upload_media_with_mode ~auth_ctx ~media_data:media_resp.body ~mime_type ~alt_text
                                 (fun (media_id, alt_text_failed) -> 
                                   if alt_text_failed then
                                     accumulated_warnings := Error_types.Alt_text_failed media_id :: !accumulated_warnings;
@@ -1434,10 +1462,10 @@ module Make (Config : CONFIG) = struct
                     in
                     let body = Yojson.Basic.to_string body_json in
 
-                    let headers = [
-                      ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                      ("Content-Type", "application/json");
-                    ] in
+                    let headers =
+                      ("Content-Type", "application/json")
+                      :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                    in
                     
                     Config.Http.post ~headers ~body url
                       (fun response ->
@@ -1491,7 +1519,7 @@ module Make (Config : CONFIG) = struct
               ~retry_after_seconds:3600 ()))
         | Ok () ->
             ensure_valid_token ~account_id
-              (fun access_token ->
+              (fun auth_ctx ->
                 let url = Printf.sprintf "%s/tweets" twitter_api_base in
                 
                 let base_fields = [("text", `String text)] in
@@ -1505,10 +1533,10 @@ module Make (Config : CONFIG) = struct
                 in
                 let body = Yojson.Basic.to_string body_json in
                 
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -1549,7 +1577,7 @@ module Make (Config : CONFIG) = struct
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
         ensure_valid_token ~account_id
-          (fun access_token ->
+          (fun auth_ctx ->
             let total_requested = List.length texts in
             
             (* Helper to post tweets in sequence with reply references *)
@@ -1587,10 +1615,10 @@ module Make (Config : CONFIG) = struct
                   in
                   let body = Yojson.Basic.to_string body_json in
                   
-                  let headers = [
-                    ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                    ("Content-Type", "application/json");
-                  ] in
+                  let headers =
+                    ("Content-Type", "application/json")
+                    :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                  in
                   
                   Config.Http.post ~headers ~body url
                     (fun response ->
@@ -1668,7 +1696,7 @@ module Make (Config : CONFIG) = struct
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
         ensure_valid_token ~account_id
-          (fun access_token ->
+          (fun auth_ctx ->
             let total_requested = List.length texts in
             let accumulated_warnings = ref [] in
             
@@ -1734,7 +1762,7 @@ module Make (Config : CONFIG) = struct
                           on_result (Error_types.Failure (Error_types.Validation_error errs))
                       | Ok () ->
                           (* Upload with alt text - failures become warnings *)
-                          upload_media_with_mode ~access_token ~media_data:media_resp.body ~mime_type ~alt_text
+                          upload_media_with_mode ~auth_ctx ~media_data:media_resp.body ~mime_type ~alt_text
                             (fun (media_id, alt_text_failed) -> 
                               if alt_text_failed then
                                 accumulated_warnings := Error_types.Alt_text_failed media_id :: !accumulated_warnings;
@@ -1794,10 +1822,10 @@ module Make (Config : CONFIG) = struct
                       in
                       let body = Yojson.Basic.to_string body_json in
                       
-                      let headers = [
-                        ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                        ("Content-Type", "application/json");
-                      ] in
+                      let headers =
+                        ("Content-Type", "application/json")
+                        :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                      in
                       
                       Config.Http.post ~headers ~body url
                         (fun response ->
@@ -1881,11 +1909,9 @@ module Make (Config : CONFIG) = struct
   *)
   let delete_tweet ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let url = Printf.sprintf "%s/tweets/%s" twitter_api_base tweet_id in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
         
         Config.Http.delete ~headers url
           (fun response ->
@@ -1915,7 +1941,7 @@ module Make (Config : CONFIG) = struct
   (** Get a tweet by ID with optional expansions and fields *)
   let get_tweet ~account_id ~tweet_id ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [] in
         let params = if List.length expansions > 0 then
           ("expansions", String.concat "," expansions) :: params
@@ -1929,9 +1955,7 @@ module Make (Config : CONFIG) = struct
         else "" in
         
         let url = Printf.sprintf "%s/tweets/%s%s" twitter_api_base tweet_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -1963,7 +1987,7 @@ module Make (Config : CONFIG) = struct
       on_result (Error (Error_types.Internal_error "ids list must not be empty"))
     else
       ensure_valid_token ~account_id
-        (fun access_token ->
+        (fun auth_ctx ->
           let params = [
             ("ids", String.concat "," ids);
           ] in
@@ -1976,9 +2000,7 @@ module Make (Config : CONFIG) = struct
 
           let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
           let url = Printf.sprintf "%s/tweets?%s" twitter_api_base query in
-          let headers = [
-            ("Authorization", Printf.sprintf "Bearer %s" access_token);
-          ] in
+          let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
 
           Config.Http.get ~headers url
             (fun response ->
@@ -1996,7 +2018,7 @@ module Make (Config : CONFIG) = struct
   (** Search recent tweets *)
   let search_tweets ~account_id ~query ?(max_results=10) ?(next_token=None) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("query", query);
           ("max_results", string_of_int max_results);
@@ -2013,9 +2035,7 @@ module Make (Config : CONFIG) = struct
         
         let query_str = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/tweets/search/recent?%s" twitter_api_base query_str in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2038,7 +2058,7 @@ module Make (Config : CONFIG) = struct
   *)
   let get_user_timeline ~account_id ~user_id ?(max_results=10) ?(pagination_token=None) ?(start_time=None) ?(end_time=None) ?(exclude=[]) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("max_results", string_of_int max_results);
         ] in
@@ -2063,9 +2083,7 @@ module Make (Config : CONFIG) = struct
 
         let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/users/%s/tweets?%s" twitter_api_base user_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
 
         Config.Http.get ~headers url
           (fun response ->
@@ -2083,7 +2101,7 @@ module Make (Config : CONFIG) = struct
   (** Get authenticated user's info *)
   let get_me ~account_id ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = if List.length user_fields > 0 then
           [("user.fields", String.concat "," user_fields)]
         else [] in
@@ -2093,9 +2111,7 @@ module Make (Config : CONFIG) = struct
         else "" in
         
         let url = Printf.sprintf "%s/users/me%s" twitter_api_base query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2113,15 +2129,13 @@ module Make (Config : CONFIG) = struct
   (** Get account analytics from authenticated user public metrics. *)
   let get_account_analytics ~account_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let query =
           Uri.encoded_of_query
             [ ("user.fields", [ "id,username,name,public_metrics" ]) ]
         in
         let url = Printf.sprintf "%s/users/me?%s" twitter_api_base query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
 
         Config.Http.get ~headers url
           (fun response ->
@@ -2181,10 +2195,7 @@ module Make (Config : CONFIG) = struct
       on_result (Error (Error_types.Internal_error "tweet_id is required"))
     else
       ensure_valid_token ~account_id
-        (fun access_token ->
-          let headers = [
-            ("Authorization", Printf.sprintf "Bearer %s" access_token);
-          ] in
+        (fun auth_ctx ->
           let rec fetch requested_metric_set ~already_fallback_attempted =
             let query =
               Uri.encoded_of_query
@@ -2197,6 +2208,7 @@ module Make (Config : CONFIG) = struct
                 normalized_tweet_id
                 query
             in
+            let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url in
             Config.Http.get ~headers url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
@@ -2245,7 +2257,7 @@ module Make (Config : CONFIG) = struct
   (** Get mentions timeline for authenticated user *)
   let get_mentions_timeline ~account_id ?(max_results=10) ?(pagination_token=None) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2269,9 +2281,7 @@ module Make (Config : CONFIG) = struct
                 
                 let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
                 let url = Printf.sprintf "%s/users/%s/mentions?%s" twitter_api_base user_id query in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
                 
                 Config.Http.get ~headers url
                   (fun response ->
@@ -2292,7 +2302,7 @@ module Make (Config : CONFIG) = struct
       Note: This endpoint requires OAuth 2.0 with user context *)
   let get_home_timeline ~account_id ?(max_results=10) ?(pagination_token=None) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2316,9 +2326,7 @@ module Make (Config : CONFIG) = struct
                 
                 let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
                 let url = Printf.sprintf "%s/users/%s/timelines/reverse_chronological?%s" twitter_api_base user_id query in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
                 
                 Config.Http.get ~headers url
                   (fun response ->
@@ -2338,7 +2346,7 @@ module Make (Config : CONFIG) = struct
   (** Get user by ID *)
   let get_user_by_id ~account_id ~user_id ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = if List.length user_fields > 0 then
           [("user.fields", String.concat "," user_fields)]
         else [] in
@@ -2348,9 +2356,7 @@ module Make (Config : CONFIG) = struct
         else "" in
         
         let url = Printf.sprintf "%s/users/%s%s" twitter_api_base user_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2368,7 +2374,7 @@ module Make (Config : CONFIG) = struct
   (** Get user by username *)
   let get_user_by_username ~account_id ~username ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = if List.length user_fields > 0 then
           [("user.fields", String.concat "," user_fields)]
         else [] in
@@ -2378,9 +2384,7 @@ module Make (Config : CONFIG) = struct
         else "" in
         
         let url = Printf.sprintf "%s/users/by/username/%s%s" twitter_api_base username query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2398,7 +2402,7 @@ module Make (Config : CONFIG) = struct
   (** Follow a user *)
   let follow_user ~account_id ~target_user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         (* First get authenticated user's ID *)
         get_me ~account_id ()
           (function
@@ -2413,10 +2417,10 @@ module Make (Config : CONFIG) = struct
                 let url = Printf.sprintf "%s/users/%s/following" twitter_api_base source_user_id in
                 let body_json = `Assoc [("target_user_id", `String target_user_id)] in
                 let body = Yojson.Basic.to_string body_json in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2432,7 +2436,7 @@ module Make (Config : CONFIG) = struct
   (** Unfollow a user *)
   let unfollow_user ~account_id ~target_user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2444,9 +2448,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/following/%s" twitter_api_base source_user_id target_user_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -2462,7 +2464,7 @@ module Make (Config : CONFIG) = struct
   (** Block a user *)
   let block_user ~account_id ~target_user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2476,10 +2478,10 @@ module Make (Config : CONFIG) = struct
                 let url = Printf.sprintf "%s/users/%s/blocking" twitter_api_base source_user_id in
                 let body_json = `Assoc [("target_user_id", `String target_user_id)] in
                 let body = Yojson.Basic.to_string body_json in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2495,7 +2497,7 @@ module Make (Config : CONFIG) = struct
   (** Unblock a user *)
   let unblock_user ~account_id ~target_user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2507,9 +2509,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/blocking/%s" twitter_api_base source_user_id target_user_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -2525,7 +2525,7 @@ module Make (Config : CONFIG) = struct
   (** Mute a user *)
   let mute_user ~account_id ~target_user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2539,10 +2539,10 @@ module Make (Config : CONFIG) = struct
                 let url = Printf.sprintf "%s/users/%s/muting" twitter_api_base source_user_id in
                 let body_json = `Assoc [("target_user_id", `String target_user_id)] in
                 let body = Yojson.Basic.to_string body_json in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2558,7 +2558,7 @@ module Make (Config : CONFIG) = struct
   (** Unmute a user *)
   let unmute_user ~account_id ~target_user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2570,9 +2570,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/muting/%s" twitter_api_base source_user_id target_user_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -2588,7 +2586,7 @@ module Make (Config : CONFIG) = struct
   (** Get followers of a user *)
   let get_followers ~account_id ~user_id ?(max_results=100) ?(pagination_token=None) ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("max_results", string_of_int (min max_results 1000));
         ] in
@@ -2601,9 +2599,7 @@ module Make (Config : CONFIG) = struct
         
         let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/users/%s/followers?%s" twitter_api_base user_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2621,7 +2617,7 @@ module Make (Config : CONFIG) = struct
   (** Get users that a user is following *)
   let get_following ~account_id ~user_id ?(max_results=100) ?(pagination_token=None) ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("max_results", string_of_int (min max_results 1000));
         ] in
@@ -2634,9 +2630,7 @@ module Make (Config : CONFIG) = struct
         
         let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/users/%s/following?%s" twitter_api_base user_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2654,7 +2648,7 @@ module Make (Config : CONFIG) = struct
   (** Search for users by keyword *)
   let search_users ~account_id ~query ?(max_results=100) ?(pagination_token=None) ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("query", query);
           ("max_results", string_of_int (min max_results 100));
@@ -2668,9 +2662,7 @@ module Make (Config : CONFIG) = struct
         
         let query_str = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/users/search?%s" twitter_api_base query_str in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -2688,7 +2680,7 @@ module Make (Config : CONFIG) = struct
   (** Like a tweet *)
   let like_tweet ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2702,10 +2694,10 @@ module Make (Config : CONFIG) = struct
                 let url = Printf.sprintf "%s/users/%s/likes" twitter_api_base user_id in
                 let body_json = `Assoc [("tweet_id", `String tweet_id)] in
                 let body = Yojson.Basic.to_string body_json in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2721,7 +2713,7 @@ module Make (Config : CONFIG) = struct
   (** Unlike a tweet *)
   let unlike_tweet ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2733,9 +2725,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/likes/%s" twitter_api_base user_id tweet_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -2751,7 +2741,7 @@ module Make (Config : CONFIG) = struct
   (** Retweet a tweet *)
   let retweet ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2765,10 +2755,10 @@ module Make (Config : CONFIG) = struct
                 let url = Printf.sprintf "%s/users/%s/retweets" twitter_api_base user_id in
                 let body_json = `Assoc [("tweet_id", `String tweet_id)] in
                 let body = Yojson.Basic.to_string body_json in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2784,7 +2774,7 @@ module Make (Config : CONFIG) = struct
   (** Unretweet (delete retweet) *)
   let unretweet ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -2796,9 +2786,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/retweets/%s" twitter_api_base user_id tweet_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -2817,7 +2805,7 @@ module Make (Config : CONFIG) = struct
     | Error msg -> on_error msg
     | Ok () ->
         ensure_valid_token ~account_id
-          (fun access_token ->
+          (fun auth_ctx ->
             (* Helper to fetch and upload media *)
             let fetch_media_with_retry url max_retries on_success on_err =
               if not (is_safe_remote_media_url url) then
@@ -2847,7 +2835,7 @@ module Make (Config : CONFIG) = struct
                         List.assoc_opt "content-type" media_resp.headers 
                         |> Option.value ~default:"image/jpeg"
                       in
-                      upload_media_with_mode ~access_token ~media_data:media_resp.body ~mime_type ~alt_text:None
+                      upload_media_with_mode ~auth_ctx ~media_data:media_resp.body ~mime_type ~alt_text:None
                         (fun (media_id, _alt_text_failed) -> 
                           upload_media_seq rest (media_id :: acc) on_complete on_err)
                         on_err)
@@ -2877,10 +2865,10 @@ module Make (Config : CONFIG) = struct
                 in
                 let body = Yojson.Basic.to_string body_json in
                 
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2907,7 +2895,7 @@ module Make (Config : CONFIG) = struct
     | Error msg -> on_error msg
     | Ok () ->
         ensure_valid_token ~account_id
-          (fun access_token ->
+          (fun auth_ctx ->
             let fetch_media_with_retry url max_retries on_success on_err =
               if not (is_safe_remote_media_url url) then
                 on_err "Unsafe media URL; only public http(s) URLs are allowed"
@@ -2936,7 +2924,7 @@ module Make (Config : CONFIG) = struct
                         List.assoc_opt "content-type" media_resp.headers 
                         |> Option.value ~default:"image/jpeg"
                       in
-                      upload_media_with_mode ~access_token ~media_data:media_resp.body ~mime_type ~alt_text:None
+                      upload_media_with_mode ~auth_ctx ~media_data:media_resp.body ~mime_type ~alt_text:None
                         (fun (media_id, _alt_text_failed) -> 
                           upload_media_seq rest (media_id :: acc) on_complete on_err)
                         on_err)
@@ -2966,10 +2954,10 @@ module Make (Config : CONFIG) = struct
                 in
                 let body = Yojson.Basic.to_string body_json in
                 
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -2993,7 +2981,7 @@ module Make (Config : CONFIG) = struct
   (** Bookmark a tweet *)
   let bookmark_tweet ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -3007,10 +2995,10 @@ module Make (Config : CONFIG) = struct
                 let url = Printf.sprintf "%s/users/%s/bookmarks" twitter_api_base user_id in
                 let body_json = `Assoc [("tweet_id", `String tweet_id)] in
                 let body = Yojson.Basic.to_string body_json in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -3026,7 +3014,7 @@ module Make (Config : CONFIG) = struct
   (** Remove bookmark from a tweet *)
   let remove_bookmark ~account_id ~tweet_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error e -> on_result (Error e)
@@ -3038,9 +3026,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/bookmarks/%s" twitter_api_base user_id tweet_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -3056,7 +3042,7 @@ module Make (Config : CONFIG) = struct
   (** Create a list *)
   let create_list ~account_id ~name ?(description=None) ?(private_list=false) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let url = Printf.sprintf "%s/lists" twitter_api_base in
         
         let base_fields = [
@@ -3070,10 +3056,10 @@ module Make (Config : CONFIG) = struct
         let body_json = `Assoc fields_with_desc in
         let body = Yojson.Basic.to_string body_json in
         
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-          ("Content-Type", "application/json");
-        ] in
+        let headers =
+          ("Content-Type", "application/json")
+          :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+        in
         
         Config.Http.post ~headers ~body url
           (fun response ->
@@ -3091,7 +3077,7 @@ module Make (Config : CONFIG) = struct
   (** Update a list *)
   let update_list ~account_id ~list_id ?(name=None) ?(description=None) ?(private_list=None) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let url = Printf.sprintf "%s/lists/%s" twitter_api_base list_id in
         
         let fields = [] in
@@ -3114,10 +3100,10 @@ module Make (Config : CONFIG) = struct
           let body_json = `Assoc fields in
           let body = Yojson.Basic.to_string body_json in
           
-          let headers = [
-            ("Authorization", Printf.sprintf "Bearer %s" access_token);
-            ("Content-Type", "application/json");
-          ] in
+          let headers =
+            ("Content-Type", "application/json")
+            :: auth_ctx.make_auth_headers ~http_method:"PUT" ~url:url
+          in
           
           Config.Http.put ~headers ~body url
             (fun response ->
@@ -3135,11 +3121,9 @@ module Make (Config : CONFIG) = struct
   (** Delete a list *)
   let delete_list ~account_id ~list_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let url = Printf.sprintf "%s/lists/%s" twitter_api_base list_id in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
         
         Config.Http.delete ~headers url
           (fun response ->
@@ -3164,7 +3148,7 @@ module Make (Config : CONFIG) = struct
   (** Get a list by ID *)
   let get_list ~account_id ~list_id ?(list_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = if List.length list_fields > 0 then
           [("list.fields", String.concat "," list_fields)]
         else [] in
@@ -3174,9 +3158,7 @@ module Make (Config : CONFIG) = struct
         else "" in
         
         let url = Printf.sprintf "%s/lists/%s%s" twitter_api_base list_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -3194,15 +3176,15 @@ module Make (Config : CONFIG) = struct
   (** Add a member to a list *)
   let add_list_member ~account_id ~list_id ~user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let url = Printf.sprintf "%s/lists/%s/members" twitter_api_base list_id in
         let body_json = `Assoc [("user_id", `String user_id)] in
         let body = Yojson.Basic.to_string body_json in
         
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-          ("Content-Type", "application/json");
-        ] in
+        let headers =
+          ("Content-Type", "application/json")
+          :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+        in
         
         Config.Http.post ~headers ~body url
           (fun response ->
@@ -3216,11 +3198,9 @@ module Make (Config : CONFIG) = struct
   (** Remove a member from a list *)
   let remove_list_member ~account_id ~list_id ~user_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let url = Printf.sprintf "%s/lists/%s/members/%s" twitter_api_base list_id user_id in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
         
         Config.Http.delete ~headers url
           (fun response ->
@@ -3234,7 +3214,7 @@ module Make (Config : CONFIG) = struct
   (** Get list members *)
   let get_list_members ~account_id ~list_id ?(max_results=100) ?(pagination_token=None) ?(user_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("max_results", string_of_int (min max_results 100));
         ] in
@@ -3247,9 +3227,7 @@ module Make (Config : CONFIG) = struct
         
         let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/lists/%s/members?%s" twitter_api_base list_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -3267,7 +3245,7 @@ module Make (Config : CONFIG) = struct
   (** Follow a list *)
   let follow_list ~account_id ~list_id on_success on_error =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error _ -> on_error "Failed to get authenticated user"
@@ -3282,10 +3260,10 @@ module Make (Config : CONFIG) = struct
                 let body_json = `Assoc [("list_id", `String list_id)] in
                 let body = Yojson.Basic.to_string body_json in
                 
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -3301,7 +3279,7 @@ module Make (Config : CONFIG) = struct
   (** Unfollow a list *)
   let unfollow_list ~account_id ~list_id on_success on_error =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error _ -> on_error "Failed to get authenticated user"
@@ -3313,9 +3291,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/followed_lists/%s" twitter_api_base user_id list_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
@@ -3331,7 +3307,7 @@ module Make (Config : CONFIG) = struct
   (** Get tweets from a list *)
   let get_list_tweets ~account_id ~list_id ?(max_results=100) ?(pagination_token=None) ?(expansions=[]) ?(tweet_fields=[]) () on_result =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         let params = [
           ("max_results", string_of_int (min max_results 100));
         ] in
@@ -3347,9 +3323,7 @@ module Make (Config : CONFIG) = struct
         
         let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
         let url = Printf.sprintf "%s/lists/%s/tweets?%s" twitter_api_base list_id query in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_token);
-        ] in
+        let headers = auth_ctx.make_auth_headers ~http_method:"GET" ~url:url in
         
         Config.Http.get ~headers url
           (fun response ->
@@ -3367,7 +3341,7 @@ module Make (Config : CONFIG) = struct
   (** Pin a list for authenticated user *)
   let pin_list ~account_id ~list_id on_success on_error =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error _ -> on_error "Failed to get authenticated user"
@@ -3382,10 +3356,10 @@ module Make (Config : CONFIG) = struct
                 let body_json = `Assoc [("list_id", `String list_id)] in
                 let body = Yojson.Basic.to_string body_json in
                 
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                  ("Content-Type", "application/json");
-                ] in
+                let headers =
+                  ("Content-Type", "application/json")
+                  :: auth_ctx.make_auth_headers ~http_method:"POST" ~url:url
+                in
                 
                 Config.Http.post ~headers ~body url
                   (fun response ->
@@ -3401,7 +3375,7 @@ module Make (Config : CONFIG) = struct
   (** Unpin a list for authenticated user *)
   let unpin_list ~account_id ~list_id on_success on_error =
     ensure_valid_token ~account_id
-      (fun access_token ->
+      (fun auth_ctx ->
         get_me ~account_id ()
           (function
             | Error _ -> on_error "Failed to get authenticated user"
@@ -3413,9 +3387,7 @@ module Make (Config : CONFIG) = struct
                   |> Yojson.Basic.Util.to_string in
                 
                 let url = Printf.sprintf "%s/users/%s/pinned_lists/%s" twitter_api_base user_id list_id in
-                let headers = [
-                  ("Authorization", Printf.sprintf "Bearer %s" access_token);
-                ] in
+                let headers = auth_ctx.make_auth_headers ~http_method:"DELETE" ~url:url in
                 
                 Config.Http.delete ~headers url
                   (fun response ->
