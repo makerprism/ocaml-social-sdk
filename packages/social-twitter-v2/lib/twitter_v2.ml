@@ -898,21 +898,26 @@ module Make (Config : CONFIG) = struct
   let make_auth_context (credentials : Social_core.credentials) =
     match credentials.auth_type with
     | Social_core.OAuth1a ->
-        let consumer_key = Config.get_env "TWITTER_OAUTH1_CONSUMER_KEY" |> Option.value ~default:"" in
-        let consumer_secret = Config.get_env "TWITTER_OAUTH1_CONSUMER_SECRET" |> Option.value ~default:"" in
-        let token = credentials.access_token in
-        let token_secret = Option.value ~default:"" credentials.refresh_token in
-        { access_token = credentials.access_token;
-          make_auth_headers = fun ~http_method ~url ->
-            let auth = Twitter_oauth1a.authorization_header
-              ~consumer_key ~consumer_secret
-              ~token ~token_secret
-              ~http_method ~url () in
-            [("Authorization", auth)] }
+        let consumer_key = Config.get_env "TWITTER_OAUTH1_CONSUMER_KEY" in
+        let consumer_secret = Config.get_env "TWITTER_OAUTH1_CONSUMER_SECRET" in
+        (match consumer_key, consumer_secret, credentials.refresh_token with
+         | None, _, _ | _, None, _ ->
+             Error "TWITTER_OAUTH1_CONSUMER_KEY or TWITTER_OAUTH1_CONSUMER_SECRET is missing"
+         | _, _, None ->
+             Error "OAuth 1.0a account is missing token secret (stored in refresh_token)"
+         | Some ck, Some cs, Some token_secret ->
+             let token = credentials.access_token in
+             Ok { access_token = credentials.access_token;
+                  make_auth_headers = fun ~http_method ~url ->
+                    let auth = Twitter_oauth1a.authorization_header
+                      ~consumer_key:ck ~consumer_secret:cs
+                      ~token ~token_secret
+                      ~http_method ~url () in
+                    [("Authorization", auth)] })
     | _ ->
-        { access_token = credentials.access_token;
-          make_auth_headers = fun ~http_method:_ ~url:_ ->
-            [("Authorization", Printf.sprintf "Bearer %s" credentials.access_token)] }
+        Ok { access_token = credentials.access_token;
+             make_auth_headers = fun ~http_method:_ ~url:_ ->
+               [("Authorization", Printf.sprintf "Bearer %s" credentials.access_token)] }
 
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
@@ -932,7 +937,7 @@ module Make (Config : CONFIG) = struct
                    Social_core.access_token = new_access;
                    refresh_token = Some new_refresh;
                    expires_at = Some expires_at;
-                   auth_type = Bearer;
+                   auth_type = credentials.auth_type;
                  })
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
@@ -943,7 +948,10 @@ module Make (Config : CONFIG) = struct
       ~perform_refresh
       ~persist_credentials:Config.update_credentials
       ~update_health:Config.update_health_status
-      (fun credentials -> on_success (make_auth_context credentials))
+      (fun credentials ->
+        match make_auth_context credentials with
+        | Ok auth_ctx -> on_success auth_ctx
+        | Error msg -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
       on_error
   
   (** Retry-on-401 wrapper.
@@ -988,15 +996,18 @@ module Make (Config : CONFIG) = struct
                             access_token = new_access;
                             refresh_token = Some new_refresh;
                             expires_at = Some expires_at;
-                            auth_type = Bearer;
+                            auth_type = creds.auth_type;
                           } in
                           Config.update_credentials ~account_id ~credentials:updated_creds
                             (fun () ->
-                              let new_auth_ctx = make_auth_context updated_creds in
-                              action new_auth_ctx
-                                (fun retry_response ->
-                                  handle_response retry_response on_result)
-                                (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+                              match make_auth_context updated_creds with
+                              | Error msg ->
+                                  on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
+                              | Ok new_auth_ctx ->
+                                  action new_auth_ctx
+                                    (fun retry_response ->
+                                      handle_response retry_response on_result)
+                                    (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
                             (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
                         (fun err ->
                           on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
