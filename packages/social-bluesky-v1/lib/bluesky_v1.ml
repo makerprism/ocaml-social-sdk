@@ -178,7 +178,7 @@ module Auth = struct
         access_token = identifier;
         refresh_token = Some app_password;
         expires_at = None;  (* App passwords don't expire *)
-        token_type = "AppPassword";
+        auth_type = App_password;
       }
   end
 end

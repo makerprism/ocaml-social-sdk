@@ -159,7 +159,7 @@ module Mock_config = struct
       access_token = "test_token";
       refresh_token = Some "refresh_tok";
       expires_at = Some (future_expiry ());
-      token_type = "Bearer";
+      auth_type = Bearer;
     }
   
   (** Helper: Setup test environment with expired credentials *)
@@ -171,7 +171,7 @@ module Mock_config = struct
       access_token = "old_token";
       refresh_token = Some "refresh_tok";
       expires_at = Some (past_expiry ());
-      token_type = "Bearer";
+      auth_type = Bearer;
     }
 end
 
@@ -230,7 +230,7 @@ let test_token_exchange () =
     (fun creds ->
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = Some "refresh_token_456");
-      assert (creds.token_type = "bearer");
+      assert (creds.auth_type = Bearer);
       assert (creds.expires_at <> None);
       print_endline "✓ Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
@@ -1497,7 +1497,7 @@ let test_token_refresh_no_refresh_token () =
       access_token = "old_token";
       refresh_token = None;
       expires_at = Some (past_expiry ());
-      token_type = "Bearer";
+      auth_type = Bearer;
     };
   
   Reddit.submit_self_post
@@ -1555,7 +1555,7 @@ let test_authorization_header () =
       access_token = "my_access_token_123";
       refresh_token = Some "refresh_tok";
       expires_at = Some (future_expiry ());
-      token_type = "Bearer";
+      auth_type = Bearer;
     };
   
   let response_body = {|{
@@ -1594,7 +1594,7 @@ let test_missing_credentials () =
       access_token = "old_token";
       refresh_token = Some "refresh_tok";
       expires_at = Some (past_expiry ());  (* expired, so refresh will be attempted *)
-      token_type = "Bearer";
+      auth_type = Bearer;
     };
   
   Reddit.submit_self_post

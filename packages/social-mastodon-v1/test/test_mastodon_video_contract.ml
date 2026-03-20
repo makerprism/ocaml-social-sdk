@@ -83,7 +83,7 @@ module Video_config = struct
         {|{"access_token":"video_token","instance_url":"https://mastodon.social"}|};
       refresh_token = None;
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Social_core.Bearer;
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()

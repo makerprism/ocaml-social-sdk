@@ -55,17 +55,15 @@ module OAuth = struct
       | Some exp -> Some (Ptime.to_rfc3339 exp)
       | None -> None
     in
-    let token_type =
-      try
-        let t = json |> member "token_type" |> to_string in
-        if String.lowercase_ascii t = "bearer" then "Bearer" else t
+    let token_type_str =
+      try json |> member "token_type" |> to_string
       with _ -> "Bearer"
     in
     ({
       access_token;
       refresh_token = None;
       expires_at;
-      token_type;
+      auth_type = auth_type_of_string token_type_str;
     } : credentials)
 
   let parse_api_error ~status_code ~response_body =

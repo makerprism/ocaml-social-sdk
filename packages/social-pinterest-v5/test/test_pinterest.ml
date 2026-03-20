@@ -150,7 +150,7 @@ let setup_valid_credentials ?(account_id="test_account") () =
       access_token = "test_access_token";
       refresh_token = Some "test_refresh_token";
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Bearer;
     }
 
 let past_expiry () =
@@ -195,7 +195,7 @@ let test_token_exchange () =
     (fun creds ->
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = Some "refresh_token_456");
-      assert (creds.token_type = "Bearer");
+      assert (creds.auth_type = Bearer);
       assert (creds.expires_at <> None);
       print_endline "✓ Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
@@ -234,7 +234,7 @@ let test_post_single_refreshes_expired_token () =
       access_token = "expired_access_token";
       refresh_token = Some "refresh_token_456";
       expires_at = Some (past_expiry ());
-      token_type = "Bearer";
+      auth_type = Bearer;
     };
 
   let refresh_response =
@@ -281,7 +281,7 @@ let test_post_single_expired_token_without_refresh_fails () =
       access_token = "expired_access_token";
       refresh_token = None;
       expires_at = Some (past_expiry ());
-      token_type = "Bearer";
+      auth_type = Bearer;
     };
 
   Pinterest.post_single

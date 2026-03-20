@@ -376,7 +376,7 @@ let test_refresh_account_credentials_success () =
           access_token = "stored-token";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds (-10));
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -422,7 +422,7 @@ let test_refresh_account_credentials_persist_failure () =
           access_token = "stored-token";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_config.update_credentials_error_override := Some "db write failed";
@@ -573,7 +573,7 @@ let test_exchange_code_empty_token_response_fails () =
       assert (string_contains err "empty access token");
       print_endline "ok: exchange code empty token response")
 
-let test_exchange_code_empty_token_type_defaults_bearer () =
+let test_exchange_code_empty_auth_type_defaults_bearer () =
   Mock_http.reset ();
   Mock_http.set_responses
     [
@@ -590,8 +590,8 @@ let test_exchange_code_empty_token_type_defaults_bearer () =
     ~redirect_uri:"https://example.com/callback"
     ~code:"auth-code"
     (fun creds ->
-      assert (creds.token_type = "Bearer");
-      print_endline "ok: exchange code empty token_type defaults")
+      assert (creds.auth_type = Bearer);
+      print_endline "ok: exchange code empty auth_type defaults")
     (fun err -> failwith ("unexpected oauth exchange error: " ^ err))
 
 let test_exchange_code_lowercase_bearer_normalized () =
@@ -611,7 +611,7 @@ let test_exchange_code_lowercase_bearer_normalized () =
     ~redirect_uri:"https://example.com/callback"
     ~code:"auth-code"
     (fun creds ->
-      assert (creds.token_type = "Bearer");
+      assert (creds.auth_type = Bearer);
       print_endline "ok: exchange code bearer normalized")
     (fun err -> failwith ("unexpected oauth exchange error: " ^ err))
 
@@ -782,7 +782,7 @@ let test_get_me_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -811,7 +811,7 @@ let test_get_me_malformed_payload_returns_internal_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -838,7 +838,7 @@ let test_get_me_retries_500_then_succeeds () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -873,7 +873,7 @@ let test_get_me_retry_config_single_attempt () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -907,7 +907,7 @@ let test_get_me_retry_config_clamps_low_to_one () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -941,7 +941,7 @@ let test_get_me_retry_config_clamps_high_to_ten () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -976,7 +976,7 @@ let test_get_me_retry_config_invalid_falls_back_to_default () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1016,7 +1016,7 @@ let test_get_me_retry_disable_429 () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1050,7 +1050,7 @@ let test_get_me_retry_enable_429 () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1085,7 +1085,7 @@ let test_get_me_retry_disable_5xx () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1119,7 +1119,7 @@ let test_get_me_retry_disable_network_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   (* No responses configured -> mock emits network-like on_error path *)
@@ -1141,7 +1141,7 @@ let test_get_me_retry_toggle_invalid_429_defaults_to_disabled () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1175,7 +1175,7 @@ let test_get_me_retry_toggle_invalid_5xx_defaults_to_enabled () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1210,7 +1210,7 @@ let test_get_me_retry_toggle_invalid_network_defaults_to_enabled () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   (* No responses configured: mock emits network-like on_error on each attempt *)
@@ -1231,7 +1231,7 @@ let test_post_single_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1263,7 +1263,7 @@ let test_post_single_text_trimmed_before_send () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1298,7 +1298,7 @@ let test_post_single_no_retry_on_publish_500 () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1329,7 +1329,7 @@ let test_get_posts_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1371,7 +1371,7 @@ let test_get_posts_malformed_payload_returns_internal_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1403,7 +1403,7 @@ let test_get_posts_limit_clamped_to_minimum () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1439,7 +1439,7 @@ let test_get_posts_limit_clamped_to_maximum () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1475,7 +1475,7 @@ let test_get_posts_after_cursor_trimmed () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1512,7 +1512,7 @@ let test_get_posts_after_cursor_whitespace_omitted () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1548,7 +1548,7 @@ let test_get_account_insights_contract () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1601,7 +1601,7 @@ let test_get_account_insights_malformed_payload_returns_internal_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1636,7 +1636,7 @@ let test_get_post_insights_contract () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1679,7 +1679,7 @@ let test_get_post_insights_malformed_payload_returns_internal_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1706,7 +1706,7 @@ let test_insights_network_error_redacts_query_token () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_errors
@@ -1733,7 +1733,7 @@ let test_post_single_image_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1771,7 +1771,7 @@ let test_post_single_media_only_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1803,7 +1803,7 @@ let test_post_single_with_idempotency_key () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1836,7 +1836,7 @@ let test_post_single_idempotency_key_trimmed () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1870,7 +1870,7 @@ let test_post_single_reply_control_forwarded () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1922,7 +1922,7 @@ let test_post_single_media_url_with_query_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1948,7 +1948,7 @@ let test_post_single_media_url_uppercase_scheme_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -1974,7 +1974,7 @@ let test_post_single_media_url_trimmed_before_send () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2011,7 +2011,7 @@ let test_get_me_rate_limited () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2052,7 +2052,7 @@ let test_get_me_rate_limited_non_json_body () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2089,7 +2089,7 @@ let test_get_me_rate_limited_negative_retry_after_clamped () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2116,7 +2116,7 @@ let test_get_me_rate_limited_float_retry_after_rounded () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2143,7 +2143,7 @@ let test_get_me_rate_limited_retry_after_clamped_high () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2170,7 +2170,7 @@ let test_get_me_rate_limited_retry_after_huge_float_clamped () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2197,7 +2197,7 @@ let test_get_me_api_error_request_id () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2234,7 +2234,7 @@ let test_get_me_api_error_request_id_fallback_header () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2272,7 +2272,7 @@ let test_get_me_api_error_preserves_provider_metadata () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2303,7 +2303,7 @@ let test_get_me_api_error_raw_response_redacts_sensitive_fields () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2347,7 +2347,7 @@ let test_get_me_api_error_raw_response_redacts_sensitive_non_json_body () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2387,7 +2387,7 @@ let test_get_me_api_error_message_redacts_sensitive_text () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2440,7 +2440,7 @@ let test_get_me_empty_access_token_treated_missing () =
           access_token = "   ";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2542,7 +2542,7 @@ let test_get_me_token_expiry_skew_default_blocks_near_expiry () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2563,7 +2563,7 @@ let test_get_me_token_expiry_skew_override_allows_request () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2593,7 +2593,7 @@ let test_get_me_token_expiry_skew_invalid_defaults_to_60 () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2614,7 +2614,7 @@ let test_get_me_token_expiry_skew_high_clamped_to_3600 () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 3500);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2635,7 +2635,7 @@ let test_get_me_token_expiry_skew_negative_clamped_to_0 () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2664,7 +2664,7 @@ let test_get_me_malformed_expiry_treated_as_expired () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = Some "not-a-timestamp";
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2685,7 +2685,7 @@ let test_get_me_malformed_expiry_with_auto_refresh () =
           access_token = "expired-token";
           refresh_token = None;
           expires_at = Some "not-a-timestamp";
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2721,7 +2721,7 @@ let test_get_me_auto_refresh_enabled_refreshes_and_proceeds () =
           access_token = "expired-token";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2759,7 +2759,7 @@ let test_get_me_auto_refresh_empty_token_from_refresh_fails () =
           access_token = "expired-token";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2787,7 +2787,7 @@ let test_get_me_auto_refresh_enabled_refresh_failure_returns_expired () =
           access_token = "expired-token";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2817,7 +2817,7 @@ let test_get_me_auto_refresh_persist_failure_returns_error () =
           access_token = "expired-token";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2848,7 +2848,7 @@ let test_get_me_auto_refresh_updates_health_status () =
           access_token = "expired-token";
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2887,7 +2887,7 @@ let test_post_thread_multi_item_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2936,7 +2936,7 @@ let test_post_thread_multi_item_with_media_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -2979,7 +2979,7 @@ let test_post_thread_idempotency_key_suffixes () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3015,7 +3015,7 @@ let test_post_thread_idempotency_key_trimmed_suffixes () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3051,7 +3051,7 @@ let test_post_thread_reply_control_forwarded () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3087,7 +3087,7 @@ let test_post_thread_partial_failure () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3124,7 +3124,7 @@ let test_post_thread_first_item_failure () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3238,7 +3238,7 @@ let test_post_single_gif_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3273,7 +3273,7 @@ let test_post_single_with_topic_tag () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3307,7 +3307,7 @@ let test_post_single_topic_tag_trimmed () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3341,7 +3341,7 @@ let test_post_single_empty_topic_tag_omitted () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3375,7 +3375,7 @@ let test_check_container_status_finished () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3502,7 +3502,7 @@ let test_post_carousel_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3601,7 +3601,7 @@ let test_post_carousel_with_topic_tag () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3637,7 +3637,7 @@ let test_post_carousel_child_creation_failure () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3665,7 +3665,7 @@ let test_get_replies_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3702,7 +3702,7 @@ let test_get_replies_with_pagination () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3735,7 +3735,7 @@ let test_get_conversation_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3770,7 +3770,7 @@ let test_post_single_as_reply () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3801,7 +3801,7 @@ let test_get_publishing_limit_success () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3839,7 +3839,7 @@ let test_get_publishing_limit_defaults () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3870,7 +3870,7 @@ let test_get_publishing_limit_api_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3898,7 +3898,7 @@ let test_validate_media_urls_allows_20_for_carousel () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   (* Create 20 URLs and try to post carousel - it should pass validation *)
@@ -3934,7 +3934,7 @@ let test_post_thread_with_topic_tag () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -3989,7 +3989,7 @@ let test_get_replies_rejects_empty_media_id () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_replies ~account_id:"acct-1" ~media_id:"   "
@@ -4007,7 +4007,7 @@ let test_get_conversation_rejects_empty_media_id () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Threads.get_conversation ~account_id:"acct-1" ~media_id:"   "
@@ -4025,7 +4025,7 @@ let test_get_replies_api_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -4051,7 +4051,7 @@ let test_get_conversation_api_error () =
           access_token = "access-xyz";
           refresh_token = None;
           expires_at = None;
-          token_type = "Bearer";
+          auth_type = Bearer;
         } );
     ];
   Mock_http.set_responses
@@ -4127,7 +4127,7 @@ let () =
   test_exchange_code_error_redacts_sensitive_fields ();
   test_exchange_code_error_redacts_sensitive_non_json_body ();
   test_exchange_code_empty_token_response_fails ();
-  test_exchange_code_empty_token_type_defaults_bearer ();
+  test_exchange_code_empty_auth_type_defaults_bearer ();
   test_exchange_code_lowercase_bearer_normalized ();
   test_exchange_code_negative_expires_in_clamped ();
   test_exchange_code_huge_expires_in_clamped ();

@@ -137,7 +137,7 @@ module Mock_config = struct
       Social_core.access_token = creds_json;
       refresh_token = None;
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Bearer;
     }
   
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
@@ -1250,7 +1250,7 @@ let test_verify_credentials () =
   let mastodon_creds : Social_mastodon_v1.mastodon_credentials = {
     access_token = "test_access_token";
     refresh_token = None;
-    token_type = "Bearer";
+    auth_type = Bearer;
     instance_url = "https://mastodon.social";
   } in
   Mastodon.verify_credentials ~mastodon_creds

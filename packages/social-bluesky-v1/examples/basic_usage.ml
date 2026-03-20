@@ -61,7 +61,7 @@ let example_post_simple () =
     Social_core.access_token = "your.bsky.handle";
     refresh_token = Some "your-app-password";
     expires_at = None;
-    token_type = "Bearer";
+    auth_type = Social_core.Bearer;
   };
   
   (* Post using CPS style with outcome type *)

@@ -9,15 +9,11 @@ let merge_refreshed_credentials ~(current : Social_core.credentials) ~(refreshed
     | Some timestamp when String.trim timestamp <> "" -> Some timestamp
     | _ -> current.Social_core.expires_at
   in
-  let token_type =
-    if String.trim refreshed.Social_core.token_type <> "" then refreshed.Social_core.token_type
-    else current.Social_core.token_type
-  in
   {
     refreshed with
     Social_core.refresh_token;
     expires_at;
-    token_type;
+    auth_type = current.Social_core.auth_type;
   }
 
 let is_blank value = String.trim value = ""

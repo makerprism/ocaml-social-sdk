@@ -213,7 +213,7 @@ let test_token_exchange () =
     (fun creds ->
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = None);
-      assert (creds.token_type = "Bearer");
+      assert (creds.auth_type = Bearer);
       assert (creds.expires_at <> None);
       print_endline "✓ Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
@@ -274,7 +274,7 @@ let test_ensure_valid_token_fresh () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -304,7 +304,7 @@ let test_ensure_valid_token_expired () =
     access_token = "expired_token";
     refresh_token = None;
     expires_at = Some past_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1090,7 +1090,7 @@ let test_token_expiry_detection () =
     access_token = "expiring_soon_token";
     refresh_token = None;
     expires_at = Some near_future;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1212,7 +1212,7 @@ let test_post_with_alt_text () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1249,7 +1249,7 @@ let test_post_with_multiple_alt_texts () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1288,7 +1288,7 @@ let test_post_with_indexed_attached_media_payload () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1336,7 +1336,7 @@ let test_post_recovers_page_token_from_user_token () =
     access_token = "user_token_initial";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let permission_error = {|{
@@ -1406,7 +1406,7 @@ let test_post_recovery_uses_stored_user_token_fallback () =
     access_token = "stale_page_token";
     refresh_token = Some "stored_user_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let permission_error = {|{
@@ -1470,7 +1470,7 @@ let test_post_recovery_stops_on_rate_limit () =
     access_token = "stale_page_token";
     refresh_token = Some "stored_user_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let permission_error = {|{
@@ -1532,7 +1532,7 @@ let test_post_cleans_up_uploaded_photos_on_publish_failure () =
     access_token = "page_token_initial";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let publish_error = {|{
@@ -1613,7 +1613,7 @@ let test_post_without_alt_text () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1669,7 +1669,7 @@ let test_partial_alt_texts () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1764,7 +1764,7 @@ let test_post_story_photo () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1799,7 +1799,7 @@ let test_post_story_video () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1836,7 +1836,7 @@ let test_post_story_video_recovers_on_upload_auth_error () =
     access_token = "user_token_story";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let permission_error = {|{
@@ -1897,7 +1897,7 @@ let test_post_story_video_no_recovery_on_upload_rate_limit () =
     access_token = "user_token_story_rl";
     refresh_token = Some "stored_user_token_story_rl";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let rate_limit_error = {|{
@@ -1948,7 +1948,7 @@ let test_post_story_auto_image () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1983,7 +1983,7 @@ let test_post_story_auto_video () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2087,7 +2087,7 @@ let test_post_reel () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2125,7 +2125,7 @@ let test_post_reel_no_recovery_on_non_auth_error () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2168,7 +2168,7 @@ let test_post_reel_recovers_on_auth_error () =
     access_token = "user_token_for_reel";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let permission_error = {|{
@@ -2226,7 +2226,7 @@ let test_post_reel_recovers_on_upload_auth_error () =
     access_token = "user_token_reel_upload";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let permission_error = {|{
@@ -2288,7 +2288,7 @@ let test_post_reel_no_recovery_on_upload_rate_limit () =
     access_token = "user_token_reel_rl";
     refresh_token = Some "stored_user_token_reel_rl";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let rate_limit_error = {|{
@@ -2340,7 +2340,7 @@ let test_reel_caption_validation () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2567,7 +2567,7 @@ let test_post_with_link () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2611,7 +2611,7 @@ let test_post_with_scheduled_publish_time () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;

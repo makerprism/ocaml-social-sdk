@@ -48,19 +48,17 @@ let parse_credentials_from_json json =
     if access_token = "" then
       Error "empty access token in OAuth response"
     else
-      let token_type =
+      let token_type_str =
         let parsed =
           try Some (json |> member "token_type" |> to_string)
           with _ -> None
         in
         match parsed with
-        | Some v when String.trim v <> "" ->
-            let normalized = String.trim v in
-            if String.lowercase_ascii normalized = "bearer" then "Bearer" else normalized
+        | Some v when String.trim v <> "" -> String.trim v
         | _ -> "Bearer"
       in
       let expires_at = parse_expires_in json |> expires_at_of_expires_in in
-      Ok ({ access_token; refresh_token = None; expires_at; token_type } : credentials)
+      Ok ({ access_token; refresh_token = None; expires_at; auth_type = auth_type_of_string token_type_str } : credentials)
   with exn ->
     Error (Printf.sprintf "invalid OAuth response payload: %s" (Printexc.to_string exn))
 

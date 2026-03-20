@@ -17,12 +17,31 @@ type multipart_part = {
   content: string;
 }
 
+(** Authentication type *)
+type auth_type =
+  | Bearer
+  | OAuth1a
+  | App_password
+  | Custom of string
+
+let auth_type_of_string = function
+  | "Bearer" | "bearer" -> Bearer
+  | "oauth1a" | "OAuth1a" -> OAuth1a
+  | "app_password" | "AppPassword" -> App_password
+  | s -> Custom s
+
+let string_of_auth_type = function
+  | Bearer -> "Bearer"
+  | OAuth1a -> "oauth1a"
+  | App_password -> "app_password"
+  | Custom s -> s
+
 (** Account credentials *)
 type credentials = {
   access_token: string;
   refresh_token: string option;
   expires_at: string option;
-  token_type: string;
+  auth_type: auth_type;
 }
 
 (** {1 HTTP Client Interface} 
@@ -225,8 +244,11 @@ let parse_credentials_json json_str =
     let access_token = json |> member "access_token" |> to_string in
     let refresh_token = try Some (json |> member "refresh_token" |> to_string) with _ -> None in
     let expires_at = try Some (json |> member "expires_at" |> to_string) with _ -> None in
-    let token_type = try json |> member "token_type" |> to_string with _ -> "Bearer" in
-    Ok { access_token; refresh_token; expires_at; token_type }
+    let auth_type =
+      let s = try json |> member "token_type" |> to_string with _ -> "Bearer" in
+      auth_type_of_string s
+    in
+    Ok { access_token; refresh_token; expires_at; auth_type }
   with e ->
     Error (Printf.sprintf "Failed to parse credentials: %s" (Printexc.to_string e))
 
@@ -236,5 +258,5 @@ let create_credentials_json (creds : credentials) =
     ("access_token", `String creds.access_token);
     ("refresh_token", match creds.refresh_token with Some rt -> `String rt | None -> `Null);
     ("expires_at", match creds.expires_at with Some exp -> `String exp | None -> `Null);
-    ("token_type", `String creds.token_type);
+    ("token_type", `String (string_of_auth_type creds.auth_type));
   ] |> Yojson.Basic.to_string

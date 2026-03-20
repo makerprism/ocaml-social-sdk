@@ -160,14 +160,14 @@ module OAuth = struct
                 match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
                 | Some exp -> Some (Ptime.to_rfc3339 exp)
                 | None -> None in
-              let token_type = 
+              let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
               let creds : credentials = {
                 access_token;
                 refresh_token = None;  (* Facebook doesn't use refresh tokens *)
                 expires_at;
-                token_type;
+                auth_type = auth_type_of_string token_type_str;
               } in
               on_success creds
             with e ->
@@ -212,14 +212,14 @@ module OAuth = struct
                 match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
                 | Some exp -> Some (Ptime.to_rfc3339 exp)
                 | None -> None in
-              let token_type = 
+              let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
               let creds : credentials = {
                 access_token;
                 refresh_token = None;
                 expires_at;
-                token_type;
+                auth_type = auth_type_of_string token_type_str;
               } in
               on_success creds
             with e ->
@@ -850,7 +850,7 @@ module Make (Config : CONFIG) = struct
                         creds with
                         access_token = page_access_token;
                         refresh_token = preserved_user_token;
-                        token_type = "Bearer";
+                        auth_type = Bearer;
                       } in
                       Config.update_credentials ~account_id ~credentials:updated_credentials
                         complete_success
@@ -1718,20 +1718,13 @@ module Make (Config : CONFIG) = struct
     if client_id = "" || client_secret = "" then
       on_error "Facebook OAuth credentials not configured"
     else
-      let normalize_token_type creds =
-        let token_type =
-          if String.lowercase_ascii creds.token_type = "bearer" then "Bearer"
-          else creds.token_type
-        in
-        { creds with token_type }
-      in
       OAuth_http.exchange_code ~client_id ~client_secret ~redirect_uri ~code
         (fun short_lived_creds ->
           OAuth_http.exchange_for_long_lived_token
             ~client_id
             ~client_secret
             ~short_lived_token:short_lived_creds.access_token
-            (fun long_lived_creds -> on_success (normalize_token_type long_lived_creds))
+            (fun long_lived_creds -> on_success long_lived_creds)
             (fun err ->
               on_error (Printf.sprintf
                 "Failed to exchange for long-lived token: %s" err)))
@@ -1750,17 +1743,9 @@ module Make (Config : CONFIG) = struct
     if client_id = "" || client_secret = "" then
       on_error "Facebook OAuth credentials not configured"
     else
-      let normalize_token_type creds =
-        let token_type =
-          if String.lowercase_ascii creds.token_type = "bearer" then "Bearer"
-          else creds.token_type
-        in
-        { creds with token_type }
-      in
       OAuth_http.exchange_code ~client_id ~client_secret ~redirect_uri ~code
         (fun short_lived_creds ->
           let continue_with_user_creds user_creds =
-            let user_creds = normalize_token_type user_creds in
             OAuth_http.get_user_pages ~user_access_token:user_creds.access_token
               (fun pages -> on_success (user_creds, pages))
               on_error

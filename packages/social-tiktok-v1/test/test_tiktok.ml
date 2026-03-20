@@ -134,7 +134,7 @@ module Mock_config = struct
     Social_core.access_token = "test_access_token";
     refresh_token = Some "test_refresh_token";
     expires_at = Some "2099-12-31T23:59:59Z";
-    token_type = "Bearer";
+    auth_type = Bearer;
   }
 
   let set_credentials creds =
@@ -176,7 +176,7 @@ let reset_mock_state () =
     Social_core.access_token = "test_access_token";
     refresh_token = Some "test_refresh_token";
     expires_at = Some "2099-12-31T23:59:59Z";
-    token_type = "Bearer";
+    auth_type = Bearer;
   }
 
 (** Helper to handle outcome type for tests *)
@@ -849,7 +849,7 @@ let test_oauth_refresh_triggered_within_buffer () =
     Social_core.access_token = "stale_access";
     refresh_token = Some "old_refresh";
     expires_at = Some expiring_soon;
-    token_type = "Bearer";
+    auth_type = Bearer;
   };
   Mock_http.set_custom_post_handler (fun url _headers body ->
     if String.ends_with ~suffix:"oauth/token/" url then {
@@ -2072,7 +2072,7 @@ let test_refresh_without_new_refresh_token_keeps_old () =
     Social_core.access_token = "old_access";
     refresh_token = Some "persist_refresh";
     expires_at = Some expiring_soon;
-    token_type = "Bearer";
+    auth_type = Bearer;
   };
   Mock_http.set_custom_post_handler (fun url _headers _body ->
     if String.ends_with ~suffix:"oauth/token/" url then
@@ -2118,7 +2118,7 @@ let test_refresh_without_expires_in_uses_default () =
     Social_core.access_token = "old_access";
     refresh_token = Some "refresh_for_default";
     expires_at = Some expiring_soon;
-    token_type = "Bearer";
+    auth_type = Bearer;
   };
   Mock_http.set_custom_post_handler (fun url _headers _body ->
     if String.ends_with ~suffix:"oauth/token/" url then

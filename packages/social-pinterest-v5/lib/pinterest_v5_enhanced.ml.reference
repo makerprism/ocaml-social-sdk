@@ -260,7 +260,7 @@ module Make (Config : CONFIG) = struct
               access_token;
               refresh_token = new_refresh_token;
               expires_at = Some expires_at;
-              token_type = "Bearer";
+              auth_type = Bearer;
             } in
             
             (* Update stored credentials *)
@@ -749,7 +749,7 @@ module Make (Config : CONFIG) = struct
                 access_token;
                 refresh_token;
                 expires_at = Some expires_at;
-                token_type = "Bearer";
+                auth_type = Bearer;
               } in
               
               Config.log Info "Successfully exchanged OAuth code for tokens";

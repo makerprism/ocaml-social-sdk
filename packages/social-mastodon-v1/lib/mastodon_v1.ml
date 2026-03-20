@@ -262,8 +262,8 @@ module OAuth = struct
               let json = Yojson.Basic.from_string response.body in
               let open Yojson.Basic.Util in
               let access_token = json |> member "access_token" |> to_string in
-              let token_type = 
-                try json |> member "token_type" |> to_string 
+              let token_type_str =
+                try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
               let granted_scope =
                 try Some (json |> member "scope" |> to_string)
@@ -275,7 +275,7 @@ module OAuth = struct
                 access_token;
                 refresh_token = None;
                 expires_at = None;  (* Never expires *)
-                token_type;
+                auth_type = auth_type_of_string token_type_str;
               } in
               on_success (creds, granted_scope)
             with e ->
@@ -342,7 +342,7 @@ end
 type mastodon_credentials = {
   access_token: string;
   refresh_token: string option;
-  token_type: string;
+  auth_type: auth_type;
   instance_url: string;  (** The Mastodon instance URL (e.g., https://mastodon.social) *)
 }
 
@@ -712,7 +712,7 @@ module Make (Config : CONFIG) = struct
       let mastodon_creds = {
         access_token = actual_token;
         refresh_token = credentials.refresh_token;
-        token_type = credentials.token_type;
+        auth_type = credentials.auth_type;
         instance_url;
       } in
       on_success mastodon_creds
@@ -731,7 +731,7 @@ module Make (Config : CONFIG) = struct
       access_token = creds_json;
       refresh_token = mastodon_creds.refresh_token;
       expires_at = None; (* Mastodon tokens don't expire *)
-      token_type = mastodon_creds.token_type;
+      auth_type = mastodon_creds.auth_type;
     }
   
   (** Generate a UUID v4 for idempotency keys *)

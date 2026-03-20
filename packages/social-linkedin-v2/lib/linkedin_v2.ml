@@ -34,14 +34,6 @@ module OAuth = struct
   let has_surrounding_whitespace value = value <> String.trim value
   let is_blank value = String.trim value = ""
 
-  let normalize_token_type = function
-    | None -> "Bearer"
-    | Some raw ->
-        let trimmed = String.trim raw in
-        if trimmed = "" then "Bearer"
-        else if String.lowercase_ascii trimmed = "bearer" then "Bearer"
-        else trimmed
-
   let normalize_expires_in seconds =
     if seconds < 0 then 0 else if seconds > 31_536_000 then 31_536_000 else seconds
 
@@ -258,13 +250,13 @@ module OAuth = struct
                 | Some exp -> Some (Ptime.to_rfc3339 exp)
                 | None -> None in
               
-              let token_type = normalize_token_type (json |> member "token_type" |> to_string_option) in
-              
+              let token_type_str = json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer" in
+
               let creds : credentials = {
                 access_token;
                 refresh_token;
                 expires_at;
-                token_type;
+                auth_type = auth_type_of_string token_type_str;
               } in
               on_success creds
             with e ->
@@ -331,12 +323,12 @@ module OAuth = struct
                 match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
                 | Some exp -> Some (Ptime.to_rfc3339 exp)
                 | None -> None in
-              let token_type = normalize_token_type (json |> member "token_type" |> to_string_option) in
+              let token_type_str = json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer" in
               let creds : credentials = {
                 access_token;
                 refresh_token = new_refresh;
                 expires_at;
-                token_type;
+                auth_type = auth_type_of_string token_type_str;
               } in
               on_success creds
             with e ->
@@ -508,14 +500,6 @@ module Make (Config : CONFIG) = struct
 
   let has_surrounding_whitespace value = value <> String.trim value
   let is_blank value = String.trim value = ""
-
-  let normalize_token_type = function
-    | None -> "Bearer"
-    | Some raw ->
-        let trimmed = String.trim raw in
-        if trimmed = "" then "Bearer"
-        else if String.lowercase_ascii trimmed = "bearer" then "Bearer"
-        else trimmed
 
   let normalize_expires_in seconds =
     if seconds < 0 then 0 else if seconds > 31_536_000 then 31_536_000 else seconds
@@ -1000,7 +984,7 @@ module Make (Config : CONFIG) = struct
                 Social_core.access_token = new_access;
                 refresh_token = Some new_refresh;
                 expires_at = Some expires_at;
-                token_type = "Bearer";
+                auth_type = Bearer;
               })
             (fun err ->
               let message = user_friendly_refresh_error err in
@@ -1608,7 +1592,7 @@ module Make (Config : CONFIG) = struct
                 access_token;
                 refresh_token;
                 expires_at = Some expires_at;
-                token_type = normalize_token_type (json |> member "token_type" |> to_string_option);
+                auth_type = auth_type_of_string (json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer");
               } in
               on_success credentials
             with e ->

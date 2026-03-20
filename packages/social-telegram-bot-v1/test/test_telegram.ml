@@ -134,7 +134,7 @@ let default_credentials = {
   access_token = "12345:ABCDEF_secret_token";
   refresh_token = None;
   expires_at = None;
-  token_type = "Bearer";
+  auth_type = Bearer;
 }
 
 let setup () =

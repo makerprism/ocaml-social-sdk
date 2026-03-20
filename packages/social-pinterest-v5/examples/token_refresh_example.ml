@@ -16,7 +16,7 @@ module MyConfig = struct
     access_token = "old_access_token";
     refresh_token = Some "refresh_token_abc123";
     expires_at = Some (Unix.time () -. 3600.0); (* Expired 1 hour ago *)
-    token_type = "Bearer";
+    auth_type = Social_core.Bearer;
   }
   
   let get_credentials ~account_id on_success on_error =

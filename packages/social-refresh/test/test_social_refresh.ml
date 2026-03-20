@@ -7,12 +7,12 @@ let rfc3339_in_seconds seconds =
   in
   Ptime.to_rfc3339 target
 
-let make_credentials ?refresh_token ?expires_at ?(token_type = "Bearer") access_token =
+let make_credentials ?refresh_token ?expires_at ?(auth_type = Social_core.Bearer) access_token =
   {
     Social_core.access_token;
     refresh_token;
     expires_at;
-    token_type;
+    auth_type;
   }
 
 let test_refresh_time_boundaries () =
@@ -127,7 +127,7 @@ let test_orchestrator_preserves_refresh_token_when_missing_in_response () =
    | None -> failwith "Expected persisted credentials");
   print_endline "✓ orchestrator refresh token preservation"
 
-let test_orchestrator_preserves_expires_at_and_token_type_when_blank () =
+let test_orchestrator_preserves_expires_at_and_auth_type () =
   let persisted = ref None in
   let result = ref None in
   let current_expiry = rfc3339_in_seconds 1200 in
@@ -135,7 +135,7 @@ let test_orchestrator_preserves_expires_at_and_token_type_when_blank () =
     on_success
       (make_credentials
          ~expires_at:current_expiry
-         ~token_type:"Bearer"
+         ~auth_type:Social_core.OAuth1a
          ~refresh_token:"old_refresh"
          "old_access")
   in
@@ -144,7 +144,7 @@ let test_orchestrator_preserves_expires_at_and_token_type_when_blank () =
       (make_credentials
          ~refresh_token:"   "
          ~expires_at:"   "
-         ~token_type:"   "
+         ~auth_type:Social_core.Bearer
          "new_access")
   in
   let persist_credentials ~account_id:_ ~credentials on_success _on_error =
@@ -165,15 +165,15 @@ let test_orchestrator_preserves_expires_at_and_token_type_when_blank () =
        assert (credentials.Social_core.access_token = "new_access");
        assert (credentials.Social_core.refresh_token = Some "old_refresh");
        assert (credentials.Social_core.expires_at = Some current_expiry);
-       assert (credentials.Social_core.token_type = "Bearer")
+       assert (credentials.Social_core.auth_type = Social_core.OAuth1a)
    | _ -> failwith "Expected refreshed credentials");
   (match !persisted with
    | Some credentials ->
        assert (credentials.Social_core.refresh_token = Some "old_refresh");
        assert (credentials.Social_core.expires_at = Some current_expiry);
-       assert (credentials.Social_core.token_type = "Bearer")
+       assert (credentials.Social_core.auth_type = Social_core.OAuth1a)
    | None -> failwith "Expected persisted credentials");
-  print_endline "✓ orchestrator expiry/token-type preservation"
+  print_endline "✓ orchestrator expiry/auth-type preservation"
 
 let test_orchestrator_failure_keeps_root_error_when_health_update_fails () =
   let result = ref None in
@@ -326,7 +326,7 @@ let () =
   test_orchestrator_missing_refresh_token ();
   test_orchestrator_refresh_failure_mapping ();
   test_orchestrator_preserves_refresh_token_when_missing_in_response ();
-  test_orchestrator_preserves_expires_at_and_token_type_when_blank ();
+  test_orchestrator_preserves_expires_at_and_auth_type ();
   test_orchestrator_failure_keeps_root_error_when_health_update_fails ();
   test_orchestrator_health_transitions ();
   test_orchestrator_retries_transient_errors ();

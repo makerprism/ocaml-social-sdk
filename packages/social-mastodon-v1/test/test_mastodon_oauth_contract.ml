@@ -28,7 +28,7 @@ module Mock_config = struct
         {|{"access_token":"test_access_token","instance_url":"https://mastodon.social"}|};
       refresh_token = None;
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Social_core.Bearer;
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
@@ -283,8 +283,8 @@ let test_exchange_code_scope_order_tolerated () =
   assert !got_result;
   Printf.printf "✓\n"
 
-let test_exchange_code_missing_token_type_defaults () =
-  Printf.printf "Test: OAuth exchange missing token_type defaults... ";
+let test_exchange_code_missing_auth_type_defaults () =
+  Printf.printf "Test: OAuth exchange missing auth_type defaults... ";
   Contract_http.reset ();
   Contract_http.set_next_post_response {
     Social_core.status = 200;
@@ -301,8 +301,8 @@ let test_exchange_code_missing_token_type_defaults () =
     (fun result ->
       got_result := true;
       match result with
-      | Ok creds -> assert (String.equal creds.token_type "Bearer")
-      | Error err -> failwith (Printf.sprintf "Unexpected missing-token_type error: %s" (Error_types.error_to_string err)));
+      | Ok creds -> assert (creds.auth_type = Social_core.Bearer)
+      | Error err -> failwith (Printf.sprintf "Unexpected missing-auth_type error: %s" (Error_types.error_to_string err)));
   assert !got_result;
   Printf.printf "✓\n"
 
@@ -316,5 +316,5 @@ let () =
   test_exchange_code_http_error_mapping ();
   test_exchange_code_missing_scope_tolerated ();
   test_exchange_code_scope_order_tolerated ();
-  test_exchange_code_missing_token_type_defaults ();
+  test_exchange_code_missing_auth_type_defaults ();
   Printf.printf "\n✓ OAuth contract tests passed\n"

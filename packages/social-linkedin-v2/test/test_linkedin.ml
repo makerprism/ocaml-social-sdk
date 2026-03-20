@@ -189,7 +189,7 @@ let test_token_exchange () =
     (fun creds ->
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = Some "new_refresh_token_456");
-      assert (creds.token_type = "Bearer");
+      assert (creds.auth_type = Bearer);
       assert (creds.expires_at <> None);
       let requests = !Mock_http.requests in
       (match requests with
@@ -327,7 +327,7 @@ let test_get_organization_access () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -373,7 +373,7 @@ let test_get_organization_access_parsing_resilience () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -431,7 +431,7 @@ let test_get_organization_access_pagination () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -487,7 +487,7 @@ let test_get_organization_access_blank_role_filter () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -524,7 +524,7 @@ let test_get_organization_access_trims_role_state_filters () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -562,7 +562,7 @@ let test_get_organization_access_uppercases_role_state_filters () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -601,7 +601,7 @@ let test_get_organization_access_invalid_version_fallback () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -639,7 +639,7 @@ let test_get_organization_access_valid_version_header () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -677,7 +677,7 @@ let test_get_organization_access_invalid_month_version_fallback () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -715,7 +715,7 @@ let test_get_organization_access_dotted_version_fallback () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -752,7 +752,7 @@ let test_get_organization_access_deduplicates_by_org () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -791,7 +791,7 @@ let test_get_organization_access_non_advancing_paging_stops () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -838,7 +838,7 @@ let test_get_organization_access_pagination_fallback_uses_raw_count () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let invalid_elements =
@@ -894,7 +894,7 @@ let test_get_organization_access_pagination_fallback_has_page_cap () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   let invalid_elements =
@@ -936,7 +936,7 @@ let test_get_organization_access_prefers_admin_approved () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -976,7 +976,7 @@ let test_get_organization_access_preference_case_insensitive () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1016,7 +1016,7 @@ let test_get_organization_access_preference_trims_role_state () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1056,7 +1056,7 @@ let test_get_organization_access_preference_stable_on_tie () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1133,7 +1133,7 @@ let test_get_preferred_organization_access () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1172,7 +1172,7 @@ let test_get_preferred_organization_access_none () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1477,7 +1477,7 @@ let test_ensure_valid_token_fresh () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1507,7 +1507,7 @@ let test_get_profile () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1548,7 +1548,7 @@ let test_get_profile_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1579,7 +1579,7 @@ let test_api_error_redacts_sensitive_json () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1617,7 +1617,7 @@ let test_api_error_redacts_non_json () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1655,7 +1655,7 @@ let test_get_posts () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1723,7 +1723,7 @@ let test_get_posts_rejects_malformed_person_urn () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1756,7 +1756,7 @@ let test_get_posts_pagination_normalization () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1794,7 +1794,7 @@ let test_get_posts_rate_limited_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1826,7 +1826,7 @@ let test_get_posts_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1859,7 +1859,7 @@ let test_batch_get_posts () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1909,7 +1909,7 @@ let test_batch_get_posts_rejects_malformed_urns () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1941,7 +1941,7 @@ let test_batch_get_posts_malformed_json () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1973,7 +1973,7 @@ let test_batch_get_posts_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2007,7 +2007,7 @@ let test_posts_scroller () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2049,7 +2049,7 @@ let test_posts_scroller_back_from_second_page () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2099,7 +2099,7 @@ let test_posts_scroller_back_error_preserves_position () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2138,7 +2138,7 @@ let test_search_scroller_with_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2202,7 +2202,7 @@ let test_search_scroller_back_from_second_page () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2253,7 +2253,7 @@ let test_search_scroller_back_error_preserves_position () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2296,7 +2296,7 @@ let test_search_scroller_rejects_keywords () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2334,7 +2334,7 @@ let test_search_scroller_defaults_to_current_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2381,7 +2381,7 @@ let test_posts_scroller_page_size_normalization () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2417,7 +2417,7 @@ let test_search_scroller_page_size_normalization () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2450,7 +2450,7 @@ let test_search_posts () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2490,7 +2490,7 @@ let test_search_posts_author_filter_encoding () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2526,7 +2526,7 @@ let test_search_posts_defaults_to_current_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2566,7 +2566,7 @@ let test_search_posts_defaults_reject_malformed_person_urn () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2599,7 +2599,7 @@ let test_search_posts_rejects_whitespace_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2630,7 +2630,7 @@ let test_search_posts_rejects_malformed_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2660,7 +2660,7 @@ let test_search_posts_pagination_normalization () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2694,7 +2694,7 @@ let test_finder_zero_count_normalization () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2726,7 +2726,7 @@ let test_search_posts_api_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2759,7 +2759,7 @@ let test_like_post () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2791,7 +2791,7 @@ let test_like_post_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2867,7 +2867,7 @@ let test_comment_on_post () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2905,7 +2905,7 @@ let test_comment_on_post_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2995,7 +2995,7 @@ let test_get_post_comments () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3038,7 +3038,7 @@ let test_get_post_comments_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3111,7 +3111,7 @@ let test_get_post_engagement () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3158,7 +3158,7 @@ let test_get_post_engagement_missing_fields () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3193,7 +3193,7 @@ let test_get_post_engagement_api_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3270,7 +3270,7 @@ let test_get_account_analytics () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3351,7 +3351,7 @@ let test_post_with_url_preview () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3400,7 +3400,7 @@ let test_post_single_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3433,7 +3433,7 @@ let test_post_single_with_organization_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3490,7 +3490,7 @@ let test_post_single_org_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3524,7 +3524,7 @@ let test_post_single_rejects_malformed_author_urn () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3557,7 +3557,7 @@ let test_post_single_malformed_author_urn_short_circuits_network () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3590,7 +3590,7 @@ let test_post_single_rejects_whitespace_author_urn_short_circuits_network () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3974,7 +3974,7 @@ let test_expired_token_detection () =
     access_token = "expired_token";
     refresh_token = Some "refresh_token";
     expires_at = Some past_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4088,7 +4088,7 @@ let test_post_with_alt_text () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4120,7 +4120,7 @@ let test_post_with_multiple_alt_texts () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4152,7 +4152,7 @@ let test_post_without_alt_text () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4184,7 +4184,7 @@ let test_post_with_partial_alt_texts () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4216,7 +4216,7 @@ let test_alt_text_special_chars () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4248,7 +4248,7 @@ let test_thread_with_alt_texts () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4287,7 +4287,7 @@ let test_restli_protocol_version_header () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4330,7 +4330,7 @@ let test_authorization_header_format () =
     access_token = "test_bearer_token_12345";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4368,7 +4368,7 @@ let test_content_type_header_json () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4414,7 +4414,7 @@ let test_urn_path_encoding () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4458,7 +4458,7 @@ let test_get_post_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4535,7 +4535,7 @@ let test_batch_urns_encoding () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4583,7 +4583,7 @@ let test_finder_method_header () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4619,7 +4619,7 @@ let test_rest_post_request_body_structure () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4675,7 +4675,7 @@ let test_comment_request_body_structure () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4727,7 +4727,7 @@ let test_unlike_post_delete () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4775,7 +4775,7 @@ let test_unlike_post_insufficient_permissions_error () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4851,7 +4851,7 @@ let test_like_request_body_structure () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4931,7 +4931,7 @@ let test_query_param_encoding () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4971,7 +4971,7 @@ let test_negative_pagination_normalization () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5006,7 +5006,7 @@ let test_comments_count_cap () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5072,7 +5072,7 @@ let test_post_with_video () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5189,7 +5189,7 @@ let test_post_video_detection_from_url () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5233,7 +5233,7 @@ let test_delete_post () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5281,7 +5281,7 @@ let test_delete_post_insufficient_permissions () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5326,7 +5326,7 @@ let test_post_document () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5379,7 +5379,7 @@ let test_post_document_with_org_author () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5459,7 +5459,7 @@ let test_post_poll () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5511,7 +5511,7 @@ let test_post_poll_durations () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5583,7 +5583,7 @@ let test_post_poll_too_few_options () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5618,7 +5618,7 @@ let test_post_poll_too_many_options () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5653,7 +5653,7 @@ let test_post_poll_invalid_duration () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5688,7 +5688,7 @@ let test_post_poll_blank_question () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5723,7 +5723,7 @@ let test_linkedin_version_header_on_all_requests () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;

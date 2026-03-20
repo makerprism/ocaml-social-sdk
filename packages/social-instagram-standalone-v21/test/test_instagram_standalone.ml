@@ -266,7 +266,7 @@ let test_standalone_exchange_code_happy_path_int_user_id () =
     (handle_result
       (fun (creds, user_id) ->
         assert (creds.access_token = "short_tok_123");
-        assert (creds.token_type = "Bearer");
+        assert (creds.auth_type = Bearer);
         assert (user_id = "9876543210");
         (* Verify it was a POST request *)
         let requests = !Mock_http.requests in
@@ -301,8 +301,8 @@ let test_standalone_exchange_code_happy_path_string_user_id () =
         print_endline "PASS Standalone exchange_code happy path (string user_id)")
       (fun err -> failwith ("Standalone exchange_code string user_id failed: " ^ err)))
 
-(** Test: Standalone exchange_code normalizes token_type to Bearer *)
-let test_standalone_exchange_code_normalizes_token_type () =
+(** Test: Standalone exchange_code normalizes auth_type to Bearer *)
+let test_standalone_exchange_code_normalizes_auth_type () =
   Mock_http.reset ();
   Mock_http.set_response {
     status = 200;
@@ -317,9 +317,9 @@ let test_standalone_exchange_code_normalizes_token_type () =
     ~code:"code"
     (handle_result
       (fun (creds, _user_id) ->
-        assert (creds.token_type = "Bearer");
-        print_endline "PASS Standalone exchange_code normalizes token_type to Bearer")
-      (fun err -> failwith ("Standalone exchange_code token_type failed: " ^ err)))
+        assert (creds.auth_type = Bearer);
+        print_endline "PASS Standalone exchange_code normalizes auth_type to Bearer")
+      (fun err -> failwith ("Standalone exchange_code auth_type failed: " ^ err)))
 
 (** Test: Standalone exchange_code error when user_id is missing *)
 let test_standalone_exchange_code_missing_user_id () =
@@ -376,7 +376,7 @@ let test_standalone_exchange_long_lived_happy_path () =
     (handle_result
       (fun creds ->
         assert (creds.access_token = "long_lived_tok_abc");
-        assert (creds.token_type = "Bearer");
+        assert (creds.auth_type = Bearer);
         assert (creds.expires_at <> None);
         (* Verify it was a GET request to the correct endpoint *)
         let requests = !Mock_http.requests in
@@ -389,8 +389,8 @@ let test_standalone_exchange_long_lived_happy_path () =
         print_endline "PASS Standalone exchange_for_long_lived_token happy path")
       (fun err -> failwith ("Standalone exchange_for_long_lived_token failed: " ^ err)))
 
-(** Test: Standalone exchange_for_long_lived_token normalizes token_type *)
-let test_standalone_exchange_long_lived_normalizes_token_type () =
+(** Test: Standalone exchange_for_long_lived_token normalizes auth_type *)
+let test_standalone_exchange_long_lived_normalizes_auth_type () =
   Mock_http.reset ();
   Mock_http.set_response {
     status = 200;
@@ -403,9 +403,9 @@ let test_standalone_exchange_long_lived_normalizes_token_type () =
     ~short_lived_token:"sl_tok"
     (handle_result
       (fun creds ->
-        assert (creds.token_type = "Bearer");
-        print_endline "PASS Standalone exchange_for_long_lived_token normalizes token_type")
-      (fun err -> failwith ("Standalone long-lived token_type failed: " ^ err)))
+        assert (creds.auth_type = Bearer);
+        print_endline "PASS Standalone exchange_for_long_lived_token normalizes auth_type")
+      (fun err -> failwith ("Standalone long-lived auth_type failed: " ^ err)))
 
 (** Test: Standalone exchange_for_long_lived_token with appsecret_proof *)
 let test_standalone_exchange_long_lived_appsecret_proof () =
@@ -661,7 +661,7 @@ let test_post_single () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -796,7 +796,7 @@ let test_standalone_oauth_refresh_token () =
     (handle_result
       (fun creds ->
         assert (creds.access_token = "refreshed_tok");
-        assert (creds.token_type = "Bearer");
+        assert (creds.auth_type = Bearer);
         let requests = !Mock_http.requests in
         let has_refresh_endpoint = List.exists (fun (_, url, _, _) ->
           string_contains url "graph.instagram.com/refresh_access_token"
@@ -808,7 +808,7 @@ let test_standalone_oauth_refresh_token () =
           | None -> false
         ) requests in
         assert has_proof;
-        print_endline "PASS Standalone OAuth refresh_token (with token_type normalization)")
+        print_endline "PASS Standalone OAuth refresh_token (with auth_type normalization)")
       (fun err -> failwith ("Standalone OAuth refresh_token failed: " ^ err)))
 
 (** Test: OAuth.Make.exchange_code calls on_response callback *)
@@ -1249,7 +1249,7 @@ let test_post_reel_e2e_with_params () =
     access_token = "valid_token";
     refresh_token = None;
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1287,11 +1287,11 @@ let () =
   test_standalone_auth_url_custom_scopes ();
   test_standalone_exchange_code_happy_path_int_user_id ();
   test_standalone_exchange_code_happy_path_string_user_id ();
-  test_standalone_exchange_code_normalizes_token_type ();
+  test_standalone_exchange_code_normalizes_auth_type ();
   test_standalone_exchange_code_missing_user_id ();
   test_standalone_exchange_code_http_error ();
   test_standalone_exchange_long_lived_happy_path ();
-  test_standalone_exchange_long_lived_normalizes_token_type ();
+  test_standalone_exchange_long_lived_normalizes_auth_type ();
   test_standalone_exchange_long_lived_appsecret_proof ();
   test_standalone_get_profile_happy_path ();
   test_standalone_get_profile_no_picture ();

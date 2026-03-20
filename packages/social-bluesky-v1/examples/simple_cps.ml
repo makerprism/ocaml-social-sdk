@@ -55,7 +55,7 @@ module Demo_config = struct
       Social_core.access_token = "test.handle";
       refresh_token = Some "test_app_password";
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Social_core.Bearer;
     }
   
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =

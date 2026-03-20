@@ -146,7 +146,7 @@ let set_valid_credentials ~account_id =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   Mock_config.set_credentials ~account_id ~credentials:creds
 
@@ -191,7 +191,7 @@ let test_token_exchange () =
     (fun creds ->
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = Some "refresh_token_456");
-      assert (creds.token_type = "Bearer");
+      assert (creds.auth_type = Bearer);
       assert (creds.expires_at <> None);
       print_endline "✓ Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
@@ -254,7 +254,7 @@ let test_ensure_valid_token_fresh () =
     access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -283,7 +283,7 @@ let test_ensure_valid_token_expired () =
     access_token = "expired_token";
     refresh_token = Some "refresh_token";
     expires_at = Some past_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -679,7 +679,7 @@ let test_video_upload_init () =
     Social_core.access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
@@ -752,7 +752,7 @@ let test_video_resumable_upload () =
     Social_core.access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
@@ -799,7 +799,7 @@ let test_video_upload_error_handling () =
     Social_core.access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   
@@ -874,7 +874,7 @@ let test_thread_youtube_single_post () =
     Social_core.access_token = "valid_token";
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
-    token_type = "Bearer";
+    auth_type = Bearer;
   } in
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   

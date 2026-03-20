@@ -61,7 +61,7 @@ module Mock_config = struct
       Social_core.access_token = "test";
       refresh_token = Some "test";
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Social_core.Bearer;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"

@@ -93,7 +93,7 @@ module List_ops_config = struct
       Social_core.access_token = {|{"access_token":"list_token","instance_url":"https://mastodon.social"}|};
       refresh_token = None;
       expires_at = None;
-      token_type = "Bearer";
+      auth_type = Social_core.Bearer;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
