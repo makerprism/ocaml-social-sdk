@@ -41,13 +41,13 @@ module OAuth = struct
     let analytics = [
       "https://www.googleapis.com/auth/yt-analytics.readonly";
     ]
-    
+
     (** Scopes required for video upload *)
     let write = [
       "https://www.googleapis.com/auth/youtube.upload";
       "https://www.googleapis.com/auth/youtube";
     ]
-    
+
     (** All commonly used scopes for YouTube management *)
     let all = [
       "https://www.googleapis.com/auth/youtube";
@@ -56,7 +56,7 @@ module OAuth = struct
       "https://www.googleapis.com/auth/youtube.force-ssl";
       "https://www.googleapis.com/auth/yt-analytics.readonly";
     ]
-    
+
     (** Operations that can be performed with YouTube API *)
     type operation =
       | Upload_video
@@ -76,247 +76,69 @@ module OAuth = struct
       (if needs_read && not needs_manage then ["https://www.googleapis.com/auth/youtube.readonly"] else []) @
       (if needs_analytics then ["https://www.googleapis.com/auth/yt-analytics.readonly"] else [])
   end
-  
+
   (** Platform metadata for YouTube OAuth *)
   module Metadata = struct
     (** YouTube/Google supports PKCE with S256 method *)
     let supports_pkce = true
-    
+
     (** YouTube supports token refresh *)
     let supports_refresh = true
-    
+
     (** Access tokens expire after 1 hour *)
     let access_token_seconds = Some 3600
-    
+
     (** Refresh tokens never expire (unless revoked) *)
     let refresh_token_seconds = None
-    
+
     (** Recommended buffer before expiry (10 minutes) *)
     let refresh_buffer_seconds = 600
-    
+
     (** Maximum retry attempts for token operations *)
     let max_refresh_attempts = 5
-    
-    (** Google OAuth 2.0 authorization endpoint *)
-    let authorization_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
-    
-    (** Google OAuth 2.0 token endpoint *)
-    let token_endpoint = "https://oauth2.googleapis.com/token"
-    
-    (** Token revocation endpoint *)
-    let revocation_endpoint = "https://oauth2.googleapis.com/revoke"
-    
+
     (** YouTube API base URL *)
     let api_base = "https://www.googleapis.com/youtube/v3"
-    
+
     (** YouTube Upload API base URL *)
     let upload_base = "https://www.googleapis.com/upload/youtube/v3"
   end
-  
-  (** PKCE helper module for YouTube/Google OAuth *)
-  module Pkce = struct
-    (** Generate a code challenge from a code verifier using SHA256
-        
-        @param code_verifier The randomly generated code verifier (43-128 chars)
-        @return Base64-URL-encoded SHA256 hash of the code verifier
-    *)
-    let generate_challenge code_verifier =
-      let digest = Digestif.SHA256.digest_string code_verifier in
-      let raw = Digestif.SHA256.to_raw_string digest in
-      Base64.encode_string ~pad:false raw
-      |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
-    
-    (** Code challenge method for Google OAuth *)
-    let challenge_method = "S256"
-  end
-  
-  (** Generate authorization URL for YouTube OAuth 2.0 flow with PKCE
-      
-      Note: Uses "access_type=offline" and "prompt=consent" to ensure
-      a refresh token is returned.
-      
-      @param client_id Google OAuth 2.0 Client ID
-      @param redirect_uri Registered callback URL
-      @param state CSRF protection state parameter
-      @param code_verifier PKCE code verifier (will be hashed for challenge)
-      @param scopes OAuth scopes to request (defaults to Scopes.write)
-      @return Full authorization URL to redirect user to
-  *)
+
+  module Pkce = Social_google_oauth.Pkce
+
+  (** Generate authorization URL for YouTube OAuth 2.0 flow with PKCE *)
   let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.write) () =
-    let code_challenge = Pkce.generate_challenge code_verifier in
-    let scope_str = String.concat " " scopes in
-    let params = [
-      ("client_id", client_id);
-      ("redirect_uri", redirect_uri);
-      ("response_type", "code");
-      ("scope", scope_str);
-      ("state", state);
-      ("access_type", "offline");  (* Required to get refresh token *)
-      ("prompt", "consent");       (* Force consent to get refresh token *)
-      ("code_challenge", code_challenge);
-      ("code_challenge_method", Pkce.challenge_method);
-    ] in
-    let query = List.map (fun (k, v) ->
-      Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-    ) params |> String.concat "&" in
-    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
-  
+    Social_google_oauth.get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
-    (** Exchange authorization code for access token with PKCE
-        
-        @param client_id Google OAuth 2.0 Client ID
-        @param client_secret Google OAuth 2.0 Client Secret
-        @param redirect_uri Registered callback URL
-        @param code Authorization code from callback
-        @param code_verifier PKCE code verifier (same as used for challenge)
-        @param on_success Continuation receiving credentials
-        @param on_error Continuation receiving error message
-    *)
-    let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-        (Uri.pct_encode client_id)
-        (Uri.pct_encode client_secret)
-        (Uri.pct_encode code_verifier)
-      in
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
-      
-      Http.post ~headers ~body Metadata.token_endpoint
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              let open Yojson.Basic.Util in
-              let access_token = json |> member "access_token" |> to_string in
-              let refresh_token = 
-                try Some (json |> member "refresh_token" |> to_string)
-                with _ -> None in
-              let expires_in = 
-                try json |> member "expires_in" |> to_int
-                with _ -> 3600 (* Default to 1 hour *)
-              in
-              let expires_at = 
-                let now = Ptime_clock.now () in
-                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-                | Some exp -> Some (Ptime.to_rfc3339 exp)
-                | None -> None in
-              let token_type_str =
-                try json |> member "token_type" |> to_string
-                with _ -> "Bearer" in
-              let creds : credentials = {
-                access_token;
-                refresh_token;
-                expires_at;
-                auth_type = auth_type_of_string token_type_str;
-              } in
-              on_success creds
-            with e ->
-              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
-          else
-            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
-        on_error
-    
-    (** Refresh access token
-        
-        Google access tokens expire after 1 hour. Use this to get a new
-        access token using the refresh token (which never expires).
-        
-        Note: Google doesn't always return a new refresh token. If not
-        returned, continue using the original refresh token.
-        
-        @param client_id Google OAuth 2.0 Client ID
-        @param client_secret Google OAuth 2.0 Client Secret
-        @param refresh_token The refresh token from initial auth
-        @param on_success Continuation receiving refreshed credentials
-        @param on_error Continuation receiving error message
-    *)
+    module Shared = Social_google_oauth.Make(Http)
+
+    let exchange_code = Shared.exchange_code
+
     let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
-        (Uri.pct_encode refresh_token)
-        (Uri.pct_encode client_id)
-        (Uri.pct_encode client_secret)
-      in
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
-      
-      Http.post ~headers ~body Metadata.token_endpoint
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              let open Yojson.Basic.Util in
-              let access_token = json |> member "access_token" |> to_string in
-              (* Google doesn't always return new refresh token *)
-              let new_refresh_token = 
-                try Some (json |> member "refresh_token" |> to_string)
-                with _ -> Some refresh_token in
-              let expires_in = 
-                try json |> member "expires_in" |> to_int
-                with _ -> 3600
-              in
-              let expires_at = 
-                let now = Ptime_clock.now () in
-                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-                | Some exp -> Some (Ptime.to_rfc3339 exp)
-                | None -> None in
-              let token_type_str =
-                try json |> member "token_type" |> to_string
-                with _ -> "Bearer" in
-              let creds : credentials = {
-                access_token;
-                refresh_token = new_refresh_token;
-                expires_at;
-                auth_type = auth_type_of_string token_type_str;
-              } in
-              on_success creds
-            with e ->
-              on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
-          else
-            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+      Shared.refresh_token ~client_id ~client_secret ~refresh_token
+        (fun (new_access, new_refresh, expires_at) ->
+          let creds : credentials = {
+            access_token = new_access;
+            refresh_token = Some new_refresh;
+            expires_at = Some expires_at;
+            auth_type = Bearer;
+          } in
+          on_success creds)
         on_error
-    
-    (** Revoke access or refresh token
-        
-        @param token The token to revoke (access or refresh)
-        @param on_result Continuation receiving api_result
-    *)
+
     let revoke_token ~token on_result =
-      let url = Printf.sprintf "%s?token=%s" 
-        Metadata.revocation_endpoint (Uri.pct_encode token) in
-      
-      Http.post ~headers:[] ~body:"" url
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            on_result (Ok ())
-          else
-            on_result (Error (Error_types.Api_error {
-              status_code = response.status;
-              message = Printf.sprintf "Token revocation failed: %s" response.body;
-              platform = Platform_types.YouTubeShorts;
-              raw_response = Some response.body;
-              request_id = None;
-            })))
-        (fun err -> on_result (Error (Error_types.Internal_error err)))
-    
-    (** Get user's channel info using access token
-        
-        @param access_token Valid access token
-        @param on_result Continuation receiving api_result with channel info as JSON
-    *)
+      Shared.revoke_token ~platform:Platform_types.YouTubeShorts ~token on_result
+
+    (** Get user's channel info using access token *)
     let get_channel_info ~access_token on_result =
-      let url = Printf.sprintf "%s/channels?part=snippet,statistics&mine=true" 
+      let url = Printf.sprintf "%s/channels?part=snippet,statistics&mine=true"
         Metadata.api_base in
       let headers = [
         ("Authorization", "Bearer " ^ access_token);
       ] in
-      
+
       Http.get ~headers url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -351,10 +173,11 @@ end
 
 (** Make functor to create YouTube provider with given configuration *)
 module Make (Config : CONFIG) = struct
+  module Shared_oauth = Social_google_oauth.Make(Config.Http)
+
   let youtube_api_base = "https://www.googleapis.com/youtube/v3"
   let youtube_upload_base = "https://www.googleapis.com/upload/youtube/v3"
   let youtube_analytics_reports_base = "https://youtubeanalytics.googleapis.com/v2"
-  let google_oauth_base = "https://oauth2.googleapis.com"
   
   (** {1 Platform Constants} *)
   
@@ -474,44 +297,7 @@ module Make (Config : CONFIG) = struct
   
   (** Refresh OAuth 2.0 access token *)
   let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
-    let url = google_oauth_base ^ "/token" in
-    
-    let body = Printf.sprintf
-      "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
-      (Uri.pct_encode refresh_token)
-      (Uri.pct_encode client_id)
-      (Uri.pct_encode client_secret)
-    in
-    
-    let headers = [
-      ("Content-Type", "application/x-www-form-urlencoded");
-    ] in
-    
-    Config.Http.post ~headers ~body url
-      (fun response ->
-        if response.status >= 200 && response.status < 300 then
-          try
-            let open Yojson.Basic.Util in
-            let json = Yojson.Basic.from_string response.body in
-            let new_access = json |> member "access_token" |> to_string in
-            (* Google doesn't always return new refresh token *)
-            let new_refresh = 
-              try json |> member "refresh_token" |> to_string
-              with _ -> refresh_token
-            in
-            let expires_in = json |> member "expires_in" |> to_int in
-            let expires_at = 
-              let now = Ptime_clock.now () in
-              match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-              | Some exp -> Ptime.to_rfc3339 exp
-              | None -> Ptime.to_rfc3339 now
-            in
-            on_success (new_access, new_refresh, expires_at)
-          with e ->
-            on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
-        else
-          on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
-      on_error
+    Shared_oauth.refresh_token ~client_id ~client_secret ~refresh_token on_success on_error
   
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
@@ -1515,93 +1301,25 @@ module Make (Config : CONFIG) = struct
   (** OAuth authorization URL with PKCE *)
   let get_oauth_url ~redirect_uri ~state ~code_verifier on_success on_error =
     let client_id = Config.get_env "YOUTUBE_CLIENT_ID" |> Option.value ~default:"" in
-    
+
     if client_id = "" then
       on_error "YouTube client ID not configured"
-    else (
-      (* Generate code_challenge from code_verifier using SHA256 *)
-      let code_challenge = 
-        let digest = Digestif.SHA256.digest_string code_verifier in
-        let raw = Digestif.SHA256.to_raw_string digest in
-        Base64.encode_string ~pad:false raw
-        |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
-      in
-      
-      let scopes = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube" in
-      
-      let params = [
-        ("client_id", client_id);
-        ("redirect_uri", redirect_uri);
-        ("response_type", "code");
-        ("scope", scopes);
-        ("state", state);
-        ("access_type", "offline"); (* Get refresh token *)
-        ("prompt", "consent"); (* Force consent to get refresh token *)
-        ("code_challenge", code_challenge);
-        ("code_challenge_method", "S256");
-      ] in
-      
-      let query = List.map (fun (k, v) ->
-        Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-      ) params |> String.concat "&" in
-      
-      let url = OAuth.Metadata.authorization_endpoint ^ "?" ^ query in
+    else
+      let url = Social_google_oauth.get_authorization_url
+        ~client_id ~redirect_uri ~state ~code_verifier
+        ~scopes:OAuth.Scopes.write in
       on_success url
-    )
   
   (** Exchange OAuth code for access token with PKCE *)
   let exchange_code ~code ~redirect_uri ~code_verifier on_success on_error =
     let client_id = Config.get_env "YOUTUBE_CLIENT_ID" |> Option.value ~default:"" in
     let client_secret = Config.get_env "YOUTUBE_CLIENT_SECRET" |> Option.value ~default:"" in
-    
+
     if client_id = "" || client_secret = "" then
       on_error "YouTube OAuth credentials not configured"
-    else (
-      let url = google_oauth_base ^ "/token" in
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-        (Uri.pct_encode client_id)
-        (Uri.pct_encode client_secret)
-        (Uri.pct_encode code_verifier)
-      in
-      
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
-      
-      Config.Http.post ~headers ~body url
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              let open Yojson.Basic.Util in
-              let access_token = json |> member "access_token" |> to_string in
-              let refresh_token = 
-                try Some (json |> member "refresh_token" |> to_string)
-                with _ -> None
-              in
-              let expires_in = json |> member "expires_in" |> to_int in
-              let expires_at = 
-                let now = Ptime_clock.now () in
-                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-                | Some exp -> Ptime.to_rfc3339 exp
-                | None -> Ptime.to_rfc3339 now
-              in
-              let credentials = {
-                access_token;
-                refresh_token;
-                expires_at = Some expires_at;
-                auth_type = Bearer;
-              } in
-              on_success credentials
-            with e ->
-              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
-          else
-            on_error (Printf.sprintf "OAuth exchange failed (%d): %s" response.status response.body))
-        on_error
-    )
+    else
+      Shared_oauth.exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier
+        on_success on_error
   
   (** Update video metadata via PUT /youtube/v3/videos
 

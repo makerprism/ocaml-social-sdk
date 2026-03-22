@@ -131,12 +131,26 @@
   digestif))
 
 (package
+ (name social-google-oauth)
+ (synopsis "Shared Google OAuth 2.0 infrastructure")
+ (description "PKCE, token exchange, refresh, revocation, and user info retrieval shared across Google-based providers (YouTube, Google Business Profile).")
+ (depends
+  (ocaml (>= 4.14))
+  (social-core (= :version))
+  yojson
+  uri
+  ptime
+  digestif
+  base64))
+
+(package
  (name social-youtube-data-v3)
  (synopsis "YouTube Data API v3 client")
  (description "YouTube Data API v3 client. Supports video upload, shorts, and channel management.")
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-google-oauth (= :version))
   (social-refresh (= :version))
   yojson
   uri
@@ -151,6 +165,7 @@
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
+  (social-google-oauth (= :version))
   (social-refresh (= :version))
   yojson
   uri

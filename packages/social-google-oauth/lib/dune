@@ -1,0 +1,12 @@
+(library
+ (name social_google_oauth)
+ (public_name social-google-oauth)
+ (modules social_google_oauth google_oauth)
+ (libraries
+  social-core
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  digestif
+  base64))

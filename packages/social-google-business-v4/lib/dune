@@ -4,6 +4,7 @@
  (modules social_google_business_v4 google_business_v4)
  (libraries
   social-core
+  social-google-oauth
   social-refresh
   yojson
   uri

@@ -72,15 +72,6 @@ module OAuth = struct
     (** Maximum retry attempts for token operations *)
     let max_refresh_attempts = 5
 
-    (** Google OAuth 2.0 authorization endpoint *)
-    let authorization_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
-
-    (** Google OAuth 2.0 token endpoint *)
-    let token_endpoint = "https://oauth2.googleapis.com/token"
-
-    (** Token revocation endpoint *)
-    let revocation_endpoint = "https://oauth2.googleapis.com/revoke"
-
     (** My Business Account Management API v1 base URL *)
     let account_management_base = "https://mybusinessaccountmanagement.googleapis.com/v1"
 
@@ -91,180 +82,35 @@ module OAuth = struct
     let mybusiness_v4_base = "https://mybusiness.googleapis.com/v4"
   end
 
-  (** PKCE helper module for Google OAuth *)
-  module Pkce = struct
-    (** Generate a code challenge from a code verifier using SHA256 *)
-    let generate_challenge code_verifier =
-      let digest = Digestif.SHA256.digest_string code_verifier in
-      let raw = Digestif.SHA256.to_raw_string digest in
-      Base64.encode_string ~pad:false raw
-      |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
-
-    (** Code challenge method for Google OAuth *)
-    let challenge_method = "S256"
-  end
+  module Pkce = Social_google_oauth.Pkce
 
   (** Generate authorization URL for Google Business Profile OAuth 2.0 flow with PKCE *)
   let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.all) () =
-    let code_challenge = Pkce.generate_challenge code_verifier in
-    let scope_str = String.concat " " scopes in
-    let params = [
-      ("client_id", client_id);
-      ("redirect_uri", redirect_uri);
-      ("response_type", "code");
-      ("scope", scope_str);
-      ("state", state);
-      ("access_type", "offline");
-      ("prompt", "consent");
-      ("code_challenge", code_challenge);
-      ("code_challenge_method", Pkce.challenge_method);
-    ] in
-    let query = List.map (fun (k, v) ->
-      Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-    ) params |> String.concat "&" in
-    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+    Social_google_oauth.get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
 
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
-    (** Exchange authorization code for access token with PKCE *)
-    let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-        (Uri.pct_encode client_id)
-        (Uri.pct_encode client_secret)
-        (Uri.pct_encode code_verifier)
-      in
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
+    module Shared = Social_google_oauth.Make(Http)
 
-      Http.post ~headers ~body Metadata.token_endpoint
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              let open Yojson.Basic.Util in
-              let access_token = json |> member "access_token" |> to_string in
-              let refresh_token =
-                try Some (json |> member "refresh_token" |> to_string)
-                with _ -> None in
-              let expires_in =
-                try json |> member "expires_in" |> to_int
-                with _ -> 3600
-              in
-              let expires_at =
-                let now = Ptime_clock.now () in
-                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-                | Some exp -> Some (Ptime.to_rfc3339 exp)
-                | None -> None in
-              let token_type_str =
-                try json |> member "token_type" |> to_string
-                with _ -> "Bearer" in
-              let creds : credentials = {
-                access_token;
-                refresh_token;
-                expires_at;
-                auth_type = auth_type_of_string token_type_str;
-              } in
-              on_success creds
-            with e ->
-              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
-          else
-            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
-        on_error
+    let exchange_code = Shared.exchange_code
 
-    (** Refresh access token *)
     let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
-        (Uri.pct_encode refresh_token)
-        (Uri.pct_encode client_id)
-        (Uri.pct_encode client_secret)
-      in
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
-
-      Http.post ~headers ~body Metadata.token_endpoint
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              let open Yojson.Basic.Util in
-              let access_token = json |> member "access_token" |> to_string in
-              let new_refresh_token =
-                try Some (json |> member "refresh_token" |> to_string)
-                with _ -> Some refresh_token in
-              let expires_in =
-                try json |> member "expires_in" |> to_int
-                with _ -> 3600
-              in
-              let expires_at =
-                let now = Ptime_clock.now () in
-                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-                | Some exp -> Some (Ptime.to_rfc3339 exp)
-                | None -> None in
-              let token_type_str =
-                try json |> member "token_type" |> to_string
-                with _ -> "Bearer" in
-              let creds : credentials = {
-                access_token;
-                refresh_token = new_refresh_token;
-                expires_at;
-                auth_type = auth_type_of_string token_type_str;
-              } in
-              on_success creds
-            with e ->
-              on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
-          else
-            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+      Shared.refresh_token ~client_id ~client_secret ~refresh_token
+        (fun (new_access, new_refresh, expires_at) ->
+          let creds : credentials = {
+            access_token = new_access;
+            refresh_token = Some new_refresh;
+            expires_at = Some expires_at;
+            auth_type = Bearer;
+          } in
+          on_success creds)
         on_error
 
-    (** Revoke access or refresh token *)
     let revoke_token ~token on_result =
-      let url = Printf.sprintf "%s?token=%s"
-        Metadata.revocation_endpoint (Uri.pct_encode token) in
+      Shared.revoke_token ~platform:Platform_types.GoogleBusinessProfile ~token on_result
 
-      Http.post ~headers:[] ~body:"" url
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            on_result (Ok ())
-          else
-            on_result (Error (Error_types.Api_error {
-              status_code = response.status;
-              message = Printf.sprintf "Token revocation failed: %s" response.body;
-              platform = Platform_types.GoogleBusinessProfile;
-              raw_response = Some response.body;
-              request_id = None;
-            })))
-        (fun err -> on_result (Error (Error_types.Internal_error err)))
-
-    (** Get user info using access token *)
     let get_user_info ~access_token on_result =
-      let url = "https://www.googleapis.com/oauth2/v2/userinfo" in
-      let headers = [
-        ("Authorization", "Bearer " ^ access_token);
-      ] in
-
-      Http.get ~headers url
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              on_result (Ok json)
-            with e ->
-              on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse user info: %s" (Printexc.to_string e))))
-          else
-            on_result (Error (Error_types.Api_error {
-              status_code = response.status;
-              message = Printf.sprintf "Get user info failed: %s" response.body;
-              platform = Platform_types.GoogleBusinessProfile;
-              raw_response = Some response.body;
-              request_id = None;
-            })))
-        (fun err -> on_result (Error (Error_types.Internal_error err)))
+      Shared.get_user_info ~platform:Platform_types.GoogleBusinessProfile ~access_token on_result
   end
 end
 
@@ -346,7 +192,8 @@ end
 
 (** Make functor to create Google Business Profile provider with given configuration *)
 module Make (Config : CONFIG) = struct
-  let google_oauth_base = "https://oauth2.googleapis.com"
+  module Shared_oauth = Social_google_oauth.Make(Config.Http)
+
   let account_management_base = "https://mybusinessaccountmanagement.googleapis.com/v1"
   let business_information_base = "https://mybusinessbusinessinformation.googleapis.com/v1"
   let mybusiness_v4_base = "https://mybusiness.googleapis.com/v4"
@@ -437,41 +284,7 @@ module Make (Config : CONFIG) = struct
 
   (** Refresh OAuth 2.0 access token *)
   let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
-    let url = google_oauth_base ^ "/token" in
-    let body = Printf.sprintf
-      "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
-      (Uri.pct_encode refresh_token)
-      (Uri.pct_encode client_id)
-      (Uri.pct_encode client_secret)
-    in
-    let headers = [
-      ("Content-Type", "application/x-www-form-urlencoded");
-    ] in
-
-    Config.Http.post ~headers ~body url
-      (fun response ->
-        if response.status >= 200 && response.status < 300 then
-          try
-            let open Yojson.Basic.Util in
-            let json = Yojson.Basic.from_string response.body in
-            let new_access = json |> member "access_token" |> to_string in
-            let new_refresh =
-              try json |> member "refresh_token" |> to_string
-              with _ -> refresh_token
-            in
-            let expires_in = json |> member "expires_in" |> to_int in
-            let expires_at =
-              let now = Ptime_clock.now () in
-              match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-              | Some exp -> Ptime.to_rfc3339 exp
-              | None -> Ptime.to_rfc3339 now
-            in
-            on_success (new_access, new_refresh, expires_at)
-          with e ->
-            on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
-        else
-          on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
-      on_error
+    Shared_oauth.refresh_token ~client_id ~client_secret ~refresh_token on_success on_error
 
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
@@ -759,52 +572,9 @@ module Make (Config : CONFIG) = struct
 
     if client_id = "" || client_secret = "" then
       on_error "Google Business OAuth credentials not configured"
-    else (
-      let url = google_oauth_base ^ "/token" in
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-        (Uri.pct_encode client_id)
-        (Uri.pct_encode client_secret)
-        (Uri.pct_encode code_verifier)
-      in
-
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
-
-      Config.Http.post ~headers ~body url
-        (fun response ->
-          if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              let open Yojson.Basic.Util in
-              let access_token = json |> member "access_token" |> to_string in
-              let refresh_token =
-                try Some (json |> member "refresh_token" |> to_string)
-                with _ -> None
-              in
-              let expires_in = json |> member "expires_in" |> to_int in
-              let expires_at =
-                let now = Ptime_clock.now () in
-                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-                | Some exp -> Ptime.to_rfc3339 exp
-                | None -> Ptime.to_rfc3339 now
-              in
-              let credentials = {
-                access_token;
-                refresh_token;
-                expires_at = Some expires_at;
-                auth_type = Bearer;
-              } in
-              on_success credentials
-            with e ->
-              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
-          else
-            on_error (Printf.sprintf "OAuth exchange failed (%d): %s" response.status response.body))
-        on_error
-    )
+    else
+      Shared_oauth.exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier
+        on_success on_error
 
   (** Validate content length *)
   let validate_content ~text =
