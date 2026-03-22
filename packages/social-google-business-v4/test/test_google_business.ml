@@ -10,10 +10,6 @@ let string_contains s substr =
     true
   with Not_found -> false
 
-let query_param url key =
-  try Uri.get_query_param (Uri.of_string url) key
-  with _ -> None
-
 (** Mock HTTP client for testing *)
 module Mock_http = struct
   let requests = ref []
