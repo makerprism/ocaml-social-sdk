@@ -62,9 +62,14 @@ let test_url_file_extension () =
   (* No extension *)
   t ~context:"no extension" ~expected:"" "https://example.com/media/12345";
   t ~context:"no extension with query" ~expected:"" "https://example.com/media?id=1";
+  (* Bare hostname — dot in .com must not be treated as file extension *)
+  t ~context:"bare hostname" ~expected:"" "https://example.com";
+  t ~context:"bare hostname with port" ~expected:"" "https://example.com:8080";
   (* Dot in path but not an extension *)
   t ~context:"dot in directory" ~expected:".jpg"
     "https://example.com/v2.0/media/photo.jpg";
+  t ~context:"dot in directory no ext" ~expected:""
+    "https://example.com/v2.0/media/12345";
   Printf.printf "  ✓ url_file_extension tests passed\n"
 
 let () =
