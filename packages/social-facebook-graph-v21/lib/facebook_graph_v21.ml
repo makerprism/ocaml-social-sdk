@@ -1440,13 +1440,9 @@ module Make (Config : CONFIG) = struct
   
   (** Detect media type from URL extension *)
   let detect_media_type url =
-    let url_lower = String.lowercase_ascii (Content_validator.url_path url) in
-    if Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\|avi\\)$") url_lower 0 then
-      "VIDEO"
-    else if Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\|gif\\)$") url_lower 0 then
-      "IMAGE"
-    else
-      "IMAGE" (* Default to image *)
+    match Content_validator.url_file_extension url with
+    | ".mp4" | ".mov" | ".avi" -> "VIDEO"
+    | _ -> "IMAGE"
   
   (** Post story to Facebook Page (auto-detect media type)
       
@@ -1472,18 +1468,12 @@ module Make (Config : CONFIG) = struct
   *)
   let validate_story ~media_url =
     let url_lower = String.lowercase_ascii media_url in
-    (* Check if URL is accessible (starts with http/https) *)
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       Error "Story media URL must be a publicly accessible HTTP(S) URL"
     else
-      (* Check for valid image or video extension (strip query params for presigned URLs) *)
-      let path_lower = String.lowercase_ascii (Content_validator.url_path media_url) in
-      let is_image = Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\|gif\\)$") path_lower 0 in
-      let is_video = Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") path_lower 0 in
-      if not (is_image || is_video) then
-        Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
-      else
-        Ok ()
+      match Content_validator.url_file_extension media_url with
+      | ".jpg" | ".jpeg" | ".png" | ".gif" | ".mp4" | ".mov" -> Ok ()
+      | _ -> Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
   
   (** Post to Facebook Page
       

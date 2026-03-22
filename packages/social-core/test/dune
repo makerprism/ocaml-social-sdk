@@ -2,3 +2,8 @@
  (name test_analytics_normalization)
  (modules test_analytics_normalization)
  (libraries social-core))
+
+(test
+ (name test_content_validator)
+ (modules test_content_validator)
+ (libraries social-core))

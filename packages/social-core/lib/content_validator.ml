@@ -15,6 +15,21 @@ let url_path url =
   | Some i -> String.sub without_fragment 0 i
   | None -> without_fragment
 
+(** Extract the lowercased file extension from a URL, stripping query parameters
+    and fragments first. Returns the extension including the dot (e.g. [".jpg"]),
+    or [""] if no extension is found. Only considers the filename segment (after
+    the last [/]) to avoid matching dots in the hostname or path directories. *)
+let url_file_extension url =
+  let path_lower = String.lowercase_ascii (url_path url) in
+  let last_slash = match String.rindex_opt path_lower '/' with
+    | Some i -> i
+    | None -> 0
+  in
+  let filename = String.sub path_lower last_slash (String.length path_lower - last_slash) in
+  match String.rindex_opt filename '.' with
+  | Some i -> String.sub filename i (String.length filename - i)
+  | None -> ""
+
 (** Validate text length for a platform *)
 let validate_text_length ~platform ~text ~max_length =
   if String.length text > max_length then

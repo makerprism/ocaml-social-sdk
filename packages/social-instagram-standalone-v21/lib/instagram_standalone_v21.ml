@@ -1041,13 +1041,10 @@ module Make (Config : CONFIG) = struct
 
   (** Media type detection from URL *)
   let classify_media_url url =
-    let url_lower = String.lowercase_ascii (Content_validator.url_path url) in
-    if Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") url_lower 0 then
-      `Video
-    else if Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\)$") url_lower 0 then
-      `Image
-    else
-      `Unsupported
+    match Content_validator.url_file_extension url with
+    | ".mp4" | ".mov" -> `Video
+    | ".jpg" | ".jpeg" | ".png" -> `Image
+    | _ -> `Unsupported
 
   let detect_media_type url =
     match classify_media_url url with
@@ -1828,13 +1825,9 @@ module Make (Config : CONFIG) = struct
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       Error "Story media URL must be a publicly accessible HTTP(S) URL"
     else
-      let path_lower = String.lowercase_ascii (Content_validator.url_path media_url) in
-      let is_image = Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\)$") path_lower 0 in
-      let is_video = Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") path_lower 0 in
-      if not (is_image || is_video) then
-        Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
-      else
-        Ok ()
+      match classify_media_url media_url with
+      | `Image | `Video -> Ok ()
+      | `Unsupported -> Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
 
   (** Post thread (Instagram doesn't support threads, posts only first item with warning) *)
   let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) on_result =
@@ -1956,14 +1949,13 @@ module Make (Config : CONFIG) = struct
 
   (** Validate video URL *)
   let validate_video ~video_url ~media_type =
-    let path_lower = String.lowercase_ascii (Content_validator.url_path video_url) in
-    if not (Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") path_lower 0) then
-      Error "Instagram videos must be MP4 or MOV format"
-    else
-      match media_type with
-      | "REELS" -> Ok ()
-      | "VIDEO" -> Ok ()
-      | _ -> Error "Invalid video media type"
+    match classify_media_url video_url with
+    | `Video ->
+        (match media_type with
+         | "REELS" | "VIDEO" -> Ok ()
+         | _ -> Error "Invalid video media type")
+    | `Image | `Unsupported ->
+        Error "Instagram videos must be MP4 or MOV format"
 
   (** Validate media URLs for carousel *)
   let validate_carousel_items ~media_urls =
