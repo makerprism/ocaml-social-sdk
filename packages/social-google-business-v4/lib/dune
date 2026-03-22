@@ -1,0 +1,13 @@
+(library
+ (name social_google_business_v4)
+ (public_name social-google-business-v4)
+ (modules social_google_business_v4 google_business_v4)
+ (libraries
+  social-core
+  social-refresh
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  digestif
+  base64))

@@ -1,0 +1,855 @@
+(** Google Business Profile API v4 Provider
+
+    This implementation supports posting updates, events, and offers
+    to Google Business Profile locations.
+
+    - Google OAuth 2.0 with PKCE (same infrastructure as YouTube)
+    - Access tokens expire after 1 hour
+    - Refresh tokens don't expire (unless revoked)
+    - Uses My Business v4 API for posting (localPosts)
+    - Uses My Business Account Management v1 for account/location discovery
+*)
+
+open Social_core
+
+(** OAuth 2.0 module for Google Business Profile
+
+    Uses the same Google OAuth 2.0 infrastructure as YouTube.
+
+    Required environment variables (or pass directly to functions):
+    - GOOGLE_BUSINESS_CLIENT_ID: OAuth 2.0 Client ID from Google Cloud Console
+    - GOOGLE_BUSINESS_CLIENT_SECRET: OAuth 2.0 Client Secret
+    - GOOGLE_BUSINESS_REDIRECT_URI: Registered callback URL
+*)
+module OAuth = struct
+  (** Scope definitions for Google Business Profile API *)
+  module Scopes = struct
+    (** Scope for managing business profile *)
+    let business_manage = [
+      "https://www.googleapis.com/auth/business.manage";
+    ]
+
+    (** Scope for user profile info *)
+    let userinfo = [
+      "https://www.googleapis.com/auth/userinfo.profile";
+      "https://www.googleapis.com/auth/userinfo.email";
+    ]
+
+    (** All scopes needed for full Google Business Profile management *)
+    let all =
+      business_manage @ userinfo
+
+    (** Operations that can be performed with Google Business Profile API *)
+    type operation =
+      | Post
+      | List_locations
+
+    (** Get scopes required for specific operations *)
+    let for_operations ops =
+      let needs_post = List.exists (fun o -> o = Post) ops in
+      let needs_list = List.exists (fun o -> o = List_locations) ops in
+      (if needs_post || needs_list then business_manage else []) @
+      userinfo
+  end
+
+  (** Platform metadata for Google Business Profile OAuth *)
+  module Metadata = struct
+    (** Google supports PKCE with S256 method *)
+    let supports_pkce = true
+
+    (** Google supports token refresh *)
+    let supports_refresh = true
+
+    (** Access tokens expire after 1 hour *)
+    let access_token_seconds = Some 3600
+
+    (** Refresh tokens never expire (unless revoked) *)
+    let refresh_token_seconds = None
+
+    (** Recommended buffer before expiry (10 minutes) *)
+    let refresh_buffer_seconds = 600
+
+    (** Maximum retry attempts for token operations *)
+    let max_refresh_attempts = 5
+
+    (** Google OAuth 2.0 authorization endpoint *)
+    let authorization_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
+
+    (** Google OAuth 2.0 token endpoint *)
+    let token_endpoint = "https://oauth2.googleapis.com/token"
+
+    (** Token revocation endpoint *)
+    let revocation_endpoint = "https://oauth2.googleapis.com/revoke"
+
+    (** My Business Account Management API v1 base URL *)
+    let account_management_base = "https://mybusinessaccountmanagement.googleapis.com/v1"
+
+    (** My Business Business Information API v1 base URL *)
+    let business_information_base = "https://mybusinessbusinessinformation.googleapis.com/v1"
+
+    (** My Business API v4 base URL (for localPosts) *)
+    let mybusiness_v4_base = "https://mybusiness.googleapis.com/v4"
+  end
+
+  (** PKCE helper module for Google OAuth *)
+  module Pkce = struct
+    (** Generate a code challenge from a code verifier using SHA256 *)
+    let generate_challenge code_verifier =
+      let digest = Digestif.SHA256.digest_string code_verifier in
+      let raw = Digestif.SHA256.to_raw_string digest in
+      Base64.encode_string ~pad:false raw
+      |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
+
+    (** Code challenge method for Google OAuth *)
+    let challenge_method = "S256"
+  end
+
+  (** Generate authorization URL for Google Business Profile OAuth 2.0 flow with PKCE *)
+  let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.all) () =
+    let code_challenge = Pkce.generate_challenge code_verifier in
+    let scope_str = String.concat " " scopes in
+    let params = [
+      ("client_id", client_id);
+      ("redirect_uri", redirect_uri);
+      ("response_type", "code");
+      ("scope", scope_str);
+      ("state", state);
+      ("access_type", "offline");
+      ("prompt", "consent");
+      ("code_challenge", code_challenge);
+      ("code_challenge_method", Pkce.challenge_method);
+    ] in
+    let query = List.map (fun (k, v) ->
+      Printf.sprintf "%s=%s" k (Uri.pct_encode v)
+    ) params |> String.concat "&" in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+
+  (** Make functor for OAuth operations that need HTTP client *)
+  module Make (Http : HTTP_CLIENT) = struct
+    (** Exchange authorization code for access token with PKCE *)
+    let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
+      let body = Printf.sprintf
+        "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
+        (Uri.pct_encode code)
+        (Uri.pct_encode redirect_uri)
+        (Uri.pct_encode client_id)
+        (Uri.pct_encode client_secret)
+        (Uri.pct_encode code_verifier)
+      in
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let refresh_token =
+                try Some (json |> member "refresh_token" |> to_string)
+                with _ -> None in
+              let expires_in =
+                try json |> member "expires_in" |> to_int
+                with _ -> 3600
+              in
+              let expires_at =
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type_str =
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token;
+                expires_at;
+                auth_type = auth_type_of_string token_type_str;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
+        on_error
+
+    (** Refresh access token *)
+    let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
+      let body = Printf.sprintf
+        "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
+        (Uri.pct_encode refresh_token)
+        (Uri.pct_encode client_id)
+        (Uri.pct_encode client_secret)
+      in
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let new_refresh_token =
+                try Some (json |> member "refresh_token" |> to_string)
+                with _ -> Some refresh_token in
+              let expires_in =
+                try json |> member "expires_in" |> to_int
+                with _ -> 3600
+              in
+              let expires_at =
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Some (Ptime.to_rfc3339 exp)
+                | None -> None in
+              let token_type_str =
+                try json |> member "token_type" |> to_string
+                with _ -> "Bearer" in
+              let creds : credentials = {
+                access_token;
+                refresh_token = new_refresh_token;
+                expires_at;
+                auth_type = auth_type_of_string token_type_str;
+              } in
+              on_success creds
+            with e ->
+              on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+        on_error
+
+    (** Revoke access or refresh token *)
+    let revoke_token ~token on_result =
+      let url = Printf.sprintf "%s?token=%s"
+        Metadata.revocation_endpoint (Uri.pct_encode token) in
+
+      Http.post ~headers:[] ~body:"" url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            on_result (Ok ())
+          else
+            on_result (Error (Error_types.Api_error {
+              status_code = response.status;
+              message = Printf.sprintf "Token revocation failed: %s" response.body;
+              platform = Platform_types.GoogleBusinessProfile;
+              raw_response = Some response.body;
+              request_id = None;
+            })))
+        (fun err -> on_result (Error (Error_types.Internal_error err)))
+
+    (** Get user info using access token *)
+    let get_user_info ~access_token on_result =
+      let url = "https://www.googleapis.com/oauth2/v2/userinfo" in
+      let headers = [
+        ("Authorization", "Bearer " ^ access_token);
+      ] in
+
+      Http.get ~headers url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              on_result (Ok json)
+            with e ->
+              on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse user info: %s" (Printexc.to_string e))))
+          else
+            on_result (Error (Error_types.Api_error {
+              status_code = response.status;
+              message = Printf.sprintf "Get user info failed: %s" response.body;
+              platform = Platform_types.GoogleBusinessProfile;
+              raw_response = Some response.body;
+              request_id = None;
+            })))
+        (fun err -> on_result (Error (Error_types.Internal_error err)))
+  end
+end
+
+(** {1 Domain Types} *)
+
+(** Topic type for local posts *)
+type topic_type =
+  | Standard
+  | Event
+  | Offer
+
+(** Call to action type *)
+type call_to_action_type =
+  | Book
+  | Order
+  | Shop
+  | Learn_more
+  | Sign_up
+  | Get_offer
+  | Call
+
+(** Call to action *)
+type call_to_action = {
+  cta_type : call_to_action_type;
+  url : string option;
+}
+
+(** Event schedule *)
+type event_schedule = {
+  start_date : string;  (** YYYY-MM-DD *)
+  start_time : string option;  (** HH:MM *)
+  end_date : string option;
+  end_time : string option;
+}
+
+(** Event data *)
+type event_data = {
+  title : string;
+  schedule : event_schedule;
+}
+
+(** Offer data *)
+type offer_data = {
+  coupon_code : string option;
+  redeem_online_url : string option;
+  terms_conditions : string option;
+}
+
+(** Post content for Google Business Profile *)
+type post_content = {
+  summary : string;
+  topic : topic_type;
+  event : event_data option;
+  offer : offer_data option;
+  call_to_action : call_to_action option;
+  media_url : string option;
+  language_code : string option;
+}
+
+(** Location record *)
+type location = {
+  name : string;  (** Resource name: locations/{locationId} *)
+  title : string;
+  address : string option;
+  photo_url : string option;
+}
+
+(** Configuration module type for Google Business Profile provider *)
+module type CONFIG = sig
+  module Http : HTTP_CLIENT
+
+  val get_env : string -> string option
+  val get_credentials : account_id:string -> (credentials -> unit) -> (string -> unit) -> unit
+  val update_credentials : account_id:string -> credentials:credentials -> (unit -> unit) -> (string -> unit) -> unit
+  val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
+  val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
+  val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
+end
+
+(** Make functor to create Google Business Profile provider with given configuration *)
+module Make (Config : CONFIG) = struct
+  let google_oauth_base = "https://oauth2.googleapis.com"
+  let account_management_base = "https://mybusinessaccountmanagement.googleapis.com/v1"
+  let business_information_base = "https://mybusinessbusinessinformation.googleapis.com/v1"
+  let mybusiness_v4_base = "https://mybusiness.googleapis.com/v4"
+
+  (** {1 Platform Constants} *)
+
+  let max_post_length = 1500
+
+  (** {1 String Conversion Helpers} *)
+
+  let topic_type_to_string = function
+    | Standard -> "STANDARD"
+    | Event -> "EVENT"
+    | Offer -> "OFFER"
+
+  let call_to_action_type_to_string = function
+    | Book -> "BOOK"
+    | Order -> "ORDER"
+    | Shop -> "SHOP"
+    | Learn_more -> "LEARN_MORE"
+    | Sign_up -> "SIGN_UP"
+    | Get_offer -> "GET_OFFER"
+    | Call -> "CALL"
+
+  (** {1 Validation Functions} *)
+
+  (** Validate a post's content *)
+  let validate_post ~text =
+    let errors = ref [] in
+    let text_len = String.length text in
+    if text_len > max_post_length then
+      errors := Error_types.Text_too_long { length = text_len; max = max_post_length } :: !errors;
+    if text_len = 0 then
+      errors := Error_types.Text_too_long { length = 0; max = max_post_length } :: !errors;
+    if !errors = [] then Ok ()
+    else Error (List.rev !errors)
+
+  (** Validate a media URL *)
+  let validate_media_url url =
+    if String.length url = 0 then
+      Error [Error_types.Invalid_url ""]
+    else if not (String.sub url 0 (min 8 (String.length url)) = "https://" ||
+                 String.sub url 0 (min 7 (String.length url)) = "http://") then
+      Error [Error_types.Invalid_url url]
+    else
+      Ok ()
+
+  (** Parse API error response and return structured Error_types.error *)
+  let parse_api_error ~status_code ~response_body =
+    try
+      let json = Yojson.Basic.from_string response_body in
+      let open Yojson.Basic.Util in
+      let error_msg =
+        try
+          let error = json |> member "error" in
+          try error |> member "message" |> to_string
+          with _ -> response_body
+        with _ -> response_body
+      in
+
+      if status_code = 401 then
+        Error_types.Auth_error Error_types.Token_invalid
+      else if status_code = 403 then
+        Error_types.Auth_error (Error_types.Insufficient_permissions ["business.manage"])
+      else if status_code = 429 then
+        Error_types.Rate_limited {
+          retry_after_seconds = Some 60;
+          limit = None;
+          remaining = Some 0;
+          reset_at = None;
+        }
+      else
+        Error_types.Api_error {
+          status_code;
+          message = error_msg;
+          platform = Platform_types.GoogleBusinessProfile;
+          raw_response = Some response_body;
+          request_id = None;
+        }
+    with _ ->
+      Error_types.Api_error {
+        status_code;
+        message = response_body;
+        platform = Platform_types.GoogleBusinessProfile;
+        raw_response = Some response_body;
+        request_id = None;
+      }
+
+  (** Refresh OAuth 2.0 access token *)
+  let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
+    let url = google_oauth_base ^ "/token" in
+    let body = Printf.sprintf
+      "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
+      (Uri.pct_encode refresh_token)
+      (Uri.pct_encode client_id)
+      (Uri.pct_encode client_secret)
+    in
+    let headers = [
+      ("Content-Type", "application/x-www-form-urlencoded");
+    ] in
+
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          try
+            let open Yojson.Basic.Util in
+            let json = Yojson.Basic.from_string response.body in
+            let new_access = json |> member "access_token" |> to_string in
+            let new_refresh =
+              try json |> member "refresh_token" |> to_string
+              with _ -> refresh_token
+            in
+            let expires_in = json |> member "expires_in" |> to_int in
+            let expires_at =
+              let now = Ptime_clock.now () in
+              match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+              | Some exp -> Ptime.to_rfc3339 exp
+              | None -> Ptime.to_rfc3339 now
+            in
+            on_success (new_access, new_refresh, expires_at)
+          with e ->
+            on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+        else
+          on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status response.body))
+      on_error
+
+  (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
+  let ensure_valid_token ~account_id on_success on_error =
+    let perform_refresh ~credentials on_refresh_success on_refresh_error =
+      match credentials.Social_core.refresh_token with
+      | None -> on_refresh_error (Error_types.Auth_error Error_types.Missing_credentials)
+      | Some refresh_token ->
+          let client_id = Config.get_env "GOOGLE_BUSINESS_CLIENT_ID" |> Option.value ~default:"" in
+          let client_secret = Config.get_env "GOOGLE_BUSINESS_CLIENT_SECRET" |> Option.value ~default:"" in
+          refresh_access_token ~client_id ~client_secret ~refresh_token
+            (fun (new_access, new_refresh, expires_at) ->
+              on_refresh_success {
+                Social_core.access_token = new_access;
+                refresh_token = Some new_refresh;
+                expires_at = Some expires_at;
+                auth_type = Bearer;
+              })
+            (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
+    in
+    Social_refresh.Orchestrator.ensure_valid_access_token
+      ~policy:{ Social_refresh.refresh_window_seconds = 600 }
+      ~account_id
+      ~load_credentials:Config.get_credentials
+      ~perform_refresh
+      ~persist_credentials:Config.update_credentials
+      ~update_health:Config.update_health_status
+      (fun credentials -> on_success credentials.Social_core.access_token)
+      on_error
+
+  (** {1 JSON Body Builders} *)
+
+  (** Build JSON body for a local post *)
+  let build_post_body (content : post_content) =
+    let fields = ref [] in
+
+    fields := ("summary", `String content.summary) :: !fields;
+    fields := ("topicType", `String (topic_type_to_string content.topic)) :: !fields;
+
+    (match content.language_code with
+     | Some lang -> fields := ("languageCode", `String lang) :: !fields
+     | None -> ());
+
+    (match content.event with
+     | Some event ->
+         let schedule_fields = ref [
+           ("startDate", `Assoc [
+             ("year", `Int (try int_of_string (String.sub event.schedule.start_date 0 4) with _ -> 2026));
+             ("month", `Int (try int_of_string (String.sub event.schedule.start_date 5 2) with _ -> 1));
+             ("day", `Int (try int_of_string (String.sub event.schedule.start_date 8 2) with _ -> 1));
+           ]);
+         ] in
+         (match event.schedule.start_time with
+          | Some time ->
+              schedule_fields := ("startTime", `Assoc [
+                ("hours", `Int (try int_of_string (String.sub time 0 2) with _ -> 0));
+                ("minutes", `Int (try int_of_string (String.sub time 3 2) with _ -> 0));
+              ]) :: !schedule_fields
+          | None -> ());
+         (match event.schedule.end_date with
+          | Some end_d ->
+              schedule_fields := ("endDate", `Assoc [
+                ("year", `Int (try int_of_string (String.sub end_d 0 4) with _ -> 2026));
+                ("month", `Int (try int_of_string (String.sub end_d 5 2) with _ -> 1));
+                ("day", `Int (try int_of_string (String.sub end_d 8 2) with _ -> 1));
+              ]) :: !schedule_fields
+          | None -> ());
+         (match event.schedule.end_time with
+          | Some time ->
+              schedule_fields := ("endTime", `Assoc [
+                ("hours", `Int (try int_of_string (String.sub time 0 2) with _ -> 0));
+                ("minutes", `Int (try int_of_string (String.sub time 3 2) with _ -> 0));
+              ]) :: !schedule_fields
+          | None -> ());
+         fields := ("event", `Assoc [
+           ("title", `String event.title);
+           ("schedule", `Assoc (List.rev !schedule_fields));
+         ]) :: !fields
+     | None -> ());
+
+    (match content.offer with
+     | Some offer ->
+         let offer_fields = ref [] in
+         (match offer.coupon_code with
+          | Some code -> offer_fields := ("couponCode", `String code) :: !offer_fields
+          | None -> ());
+         (match offer.redeem_online_url with
+          | Some url -> offer_fields := ("redeemOnlineUrl", `String url) :: !offer_fields
+          | None -> ());
+         (match offer.terms_conditions with
+          | Some terms -> offer_fields := ("termsConditions", `String terms) :: !offer_fields
+          | None -> ());
+         if !offer_fields <> [] then
+           fields := ("offer", `Assoc (List.rev !offer_fields)) :: !fields
+     | None -> ());
+
+    (match content.call_to_action with
+     | Some cta ->
+         let cta_fields = [
+           ("actionType", `String (call_to_action_type_to_string cta.cta_type));
+         ] @ (match cta.url with
+              | Some url -> [("url", `String url)]
+              | None -> [])
+         in
+         fields := ("callToAction", `Assoc cta_fields) :: !fields
+     | None -> ());
+
+    (match content.media_url with
+     | Some url ->
+         fields := ("media", `List [
+           `Assoc [
+             ("mediaFormat", `String "PHOTO");
+             ("sourceUrl", `String url);
+           ]
+         ]) :: !fields
+     | None -> ());
+
+    `Assoc (List.rev !fields)
+
+  (** {1 Location Discovery} *)
+
+  (** List accounts for the authenticated user *)
+  let list_accounts ~account_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = account_management_base ^ "/accounts" in
+        let headers = [("Authorization", "Bearer " ^ access_token)] in
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                on_result (Ok json)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse accounts response: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** List locations for a given account *)
+  let list_locations ~account_id ~account_name on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/%s/locations?readMask=name,title,storefrontAddress" business_information_base account_name in
+        let headers = [("Authorization", "Bearer " ^ access_token)] in
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                on_result (Ok json)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse locations response: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Get a single location *)
+  let get_location ~account_id ~location_name on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/%s?readMask=name,title,storefrontAddress" business_information_base location_name in
+        let headers = [("Authorization", "Bearer " ^ access_token)] in
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let loc : location = {
+                  name = (try json |> member "name" |> to_string with _ -> location_name);
+                  title = (try json |> member "title" |> to_string with _ -> "");
+                  address = (try Some (json |> member "storefrontAddress" |> member "addressLines" |> to_list |> List.hd |> to_string) with _ -> None);
+                  photo_url = None;
+                } in
+                on_result (Ok loc)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse location: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** {1 Posting} *)
+
+  (** Post a single update to a location *)
+  let post_single ~account_id ~text ~media_urls on_result =
+    let media_url = match media_urls with
+      | url :: _ -> Some url
+      | [] -> None
+    in
+    let content = {
+      summary = text;
+      topic = Standard;
+      event = None;
+      offer = None;
+      call_to_action = None;
+      media_url;
+      language_code = None;
+    } in
+    match validate_post ~text with
+    | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
+    | Ok () ->
+        (* Validate media URL if provided *)
+        let media_valid = match media_url with
+          | None -> Ok ()
+          | Some url -> validate_media_url url
+        in
+        (match media_valid with
+         | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
+         | Ok () ->
+             ensure_valid_token ~account_id
+               (fun access_token ->
+                 (* Get location_name from env or credentials metadata *)
+                 let location_name = Config.get_env "GOOGLE_BUSINESS_LOCATION_NAME" |> Option.value ~default:"" in
+                 if location_name = "" then
+                   on_result (Error_types.Failure (Error_types.Internal_error "Google Business location name not configured"))
+                 else
+                   let url = Printf.sprintf "%s/%s/localPosts" mybusiness_v4_base location_name in
+                   let body = Yojson.Basic.to_string (build_post_body content) in
+                   let headers = [
+                     ("Authorization", "Bearer " ^ access_token);
+                     ("Content-Type", "application/json");
+                   ] in
+
+                   Config.Http.post ~headers ~body url
+                     (fun response ->
+                       if response.status >= 200 && response.status < 300 then
+                         try
+                           let open Yojson.Basic.Util in
+                           let json = Yojson.Basic.from_string response.body in
+                           let post_name = json |> member "name" |> to_string in
+                           on_result (Error_types.Success post_name)
+                         with _e ->
+                           on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse response: %s" response.body)))
+                       else
+                         on_result (Error_types.Failure (parse_api_error ~status_code:response.status ~response_body:response.body)))
+                     (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
+               (fun err -> on_result (Error_types.Failure err)))
+
+  (** Post thread - Google Business Profile doesn't support threads *)
+  let post_thread ~account_id ~texts ~media_urls_per_post on_result =
+    if List.length texts = 0 then
+      on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Thread_empty]))
+    else
+      let first_text = List.hd texts in
+      let first_media = try List.hd media_urls_per_post with _ -> [] in
+      let total_requested = List.length texts in
+      post_single ~account_id ~text:first_text ~media_urls:first_media
+        (fun outcome ->
+          match outcome with
+          | Error_types.Success post_name ->
+              let thread_result = {
+                Error_types.posted_ids = [post_name];
+                failed_at_index = None;
+                total_requested;
+              } in
+              if total_requested > 1 then
+                on_result (Error_types.Partial_success {
+                  result = thread_result;
+                  warnings = [Error_types.Generic_warning {
+                    code = "google_business_no_threads";
+                    message = Printf.sprintf "Google Business Profile does not support threads. Only first of %d items posted." total_requested;
+                    recoverable = false
+                  }]
+                })
+              else
+                on_result (Error_types.Success thread_result)
+          | Error_types.Partial_success { result = post_name; warnings } ->
+              let thread_result = {
+                Error_types.posted_ids = [post_name];
+                failed_at_index = None;
+                total_requested;
+              } in
+              on_result (Error_types.Partial_success { result = thread_result; warnings })
+          | Error_types.Failure err ->
+              on_result (Error_types.Failure err))
+
+  (** {1 OAuth Helpers (CPS)} *)
+
+  (** OAuth authorization URL with PKCE *)
+  let get_oauth_url ~redirect_uri ~state ~code_verifier on_success on_error =
+    let client_id = Config.get_env "GOOGLE_BUSINESS_CLIENT_ID" |> Option.value ~default:"" in
+
+    if client_id = "" then
+      on_error "Google Business client ID not configured"
+    else (
+      let code_challenge =
+        let digest = Digestif.SHA256.digest_string code_verifier in
+        let raw = Digestif.SHA256.to_raw_string digest in
+        Base64.encode_string ~pad:false raw
+        |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
+      in
+
+      let scopes = "https://www.googleapis.com/auth/business.manage https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email" in
+
+      let params = [
+        ("client_id", client_id);
+        ("redirect_uri", redirect_uri);
+        ("response_type", "code");
+        ("scope", scopes);
+        ("state", state);
+        ("access_type", "offline");
+        ("prompt", "consent");
+        ("code_challenge", code_challenge);
+        ("code_challenge_method", "S256");
+      ] in
+
+      let query = List.map (fun (k, v) ->
+        Printf.sprintf "%s=%s" k (Uri.pct_encode v)
+      ) params |> String.concat "&" in
+
+      let url = OAuth.Metadata.authorization_endpoint ^ "?" ^ query in
+      on_success url
+    )
+
+  (** Exchange OAuth code for access token with PKCE *)
+  let exchange_code ~code ~redirect_uri ~code_verifier on_success on_error =
+    let client_id = Config.get_env "GOOGLE_BUSINESS_CLIENT_ID" |> Option.value ~default:"" in
+    let client_secret = Config.get_env "GOOGLE_BUSINESS_CLIENT_SECRET" |> Option.value ~default:"" in
+
+    if client_id = "" || client_secret = "" then
+      on_error "Google Business OAuth credentials not configured"
+    else (
+      let url = google_oauth_base ^ "/token" in
+      let body = Printf.sprintf
+        "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
+        (Uri.pct_encode code)
+        (Uri.pct_encode redirect_uri)
+        (Uri.pct_encode client_id)
+        (Uri.pct_encode client_secret)
+        (Uri.pct_encode code_verifier)
+      in
+
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+
+      Config.Http.post ~headers ~body url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            try
+              let json = Yojson.Basic.from_string response.body in
+              let open Yojson.Basic.Util in
+              let access_token = json |> member "access_token" |> to_string in
+              let refresh_token =
+                try Some (json |> member "refresh_token" |> to_string)
+                with _ -> None
+              in
+              let expires_in = json |> member "expires_in" |> to_int in
+              let expires_at =
+                let now = Ptime_clock.now () in
+                match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
+                | Some exp -> Ptime.to_rfc3339 exp
+                | None -> Ptime.to_rfc3339 now
+              in
+              let credentials = {
+                access_token;
+                refresh_token;
+                expires_at = Some expires_at;
+                auth_type = Bearer;
+              } in
+              on_success credentials
+            with e ->
+              on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+          else
+            on_error (Printf.sprintf "OAuth exchange failed (%d): %s" response.status response.body))
+        on_error
+    )
+
+  (** Validate content length *)
+  let validate_content ~text =
+    let len = String.length text in
+    if len = 0 then
+      Error "Text cannot be empty"
+    else if len > max_post_length then
+      Error (Printf.sprintf "Post exceeds %d character limit (current: %d)" max_post_length len)
+    else
+      Ok ()
+end

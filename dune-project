@@ -145,6 +145,20 @@
   base64))
 
 (package
+ (name social-google-business-v4)
+ (synopsis "Google Business Profile API v4 client")
+ (description "Google Business Profile API client. Supports posting updates, events, and offers to business locations.")
+ (depends
+  (ocaml (>= 4.14))
+  (social-core (= :version))
+  (social-refresh (= :version))
+  yojson
+  uri
+  ptime
+  digestif
+  base64))
+
+(package
  (name social-pinterest-v5)
  (synopsis "Pinterest API v5 client")
  (description "Pinterest API v5 client. Supports creating pins, boards, and media upload.")

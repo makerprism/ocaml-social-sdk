@@ -1,0 +1,9 @@
+(test
+ (name test_google_business)
+ (modules test_google_business)
+ (libraries
+  social-google-business-v4
+  social-core
+  ptime
+  ptime.clock.os
+  str))
