@@ -380,7 +380,7 @@ module Make (Config : CONFIG) = struct
     if text_len > max_post_length then
       errors := Error_types.Text_too_long { length = text_len; max = max_post_length } :: !errors;
     if text_len = 0 then
-      errors := Error_types.Text_too_long { length = 0; max = max_post_length } :: !errors;
+      errors := Error_types.Text_empty :: !errors;
     if !errors = [] then Ok ()
     else Error (List.rev !errors)
 
@@ -503,92 +503,80 @@ module Make (Config : CONFIG) = struct
 
   (** {1 JSON Body Builders} *)
 
+  (** Parse "YYYY-MM-DD" into JSON date fields. Raises on malformed input. *)
+  let date_to_json date_str =
+    `Assoc [
+      ("year", `Int (int_of_string (String.sub date_str 0 4)));
+      ("month", `Int (int_of_string (String.sub date_str 5 2)));
+      ("day", `Int (int_of_string (String.sub date_str 8 2)));
+    ]
+
+  (** Parse "HH:MM" into JSON time fields. Raises on malformed input. *)
+  let time_to_json time_str =
+    `Assoc [
+      ("hours", `Int (int_of_string (String.sub time_str 0 2)));
+      ("minutes", `Int (int_of_string (String.sub time_str 3 2)));
+    ]
+
+  (** Helper to include an optional field *)
+  let optional_field key f = function
+    | Some v -> [(key, f v)]
+    | None -> []
+
   (** Build JSON body for a local post *)
   let build_post_body (content : post_content) =
-    let fields = ref [] in
-
-    fields := ("summary", `String content.summary) :: !fields;
-    fields := ("topicType", `String (topic_type_to_string content.topic)) :: !fields;
-
-    (match content.language_code with
-     | Some lang -> fields := ("languageCode", `String lang) :: !fields
-     | None -> ());
-
-    (match content.event with
-     | Some event ->
-         let schedule_fields = ref [
-           ("startDate", `Assoc [
-             ("year", `Int (try int_of_string (String.sub event.schedule.start_date 0 4) with _ -> 2026));
-             ("month", `Int (try int_of_string (String.sub event.schedule.start_date 5 2) with _ -> 1));
-             ("day", `Int (try int_of_string (String.sub event.schedule.start_date 8 2) with _ -> 1));
-           ]);
-         ] in
-         (match event.schedule.start_time with
-          | Some time ->
-              schedule_fields := ("startTime", `Assoc [
-                ("hours", `Int (try int_of_string (String.sub time 0 2) with _ -> 0));
-                ("minutes", `Int (try int_of_string (String.sub time 3 2) with _ -> 0));
-              ]) :: !schedule_fields
-          | None -> ());
-         (match event.schedule.end_date with
-          | Some end_d ->
-              schedule_fields := ("endDate", `Assoc [
-                ("year", `Int (try int_of_string (String.sub end_d 0 4) with _ -> 2026));
-                ("month", `Int (try int_of_string (String.sub end_d 5 2) with _ -> 1));
-                ("day", `Int (try int_of_string (String.sub end_d 8 2) with _ -> 1));
-              ]) :: !schedule_fields
-          | None -> ());
-         (match event.schedule.end_time with
-          | Some time ->
-              schedule_fields := ("endTime", `Assoc [
-                ("hours", `Int (try int_of_string (String.sub time 0 2) with _ -> 0));
-                ("minutes", `Int (try int_of_string (String.sub time 3 2) with _ -> 0));
-              ]) :: !schedule_fields
-          | None -> ());
-         fields := ("event", `Assoc [
-           ("title", `String event.title);
-           ("schedule", `Assoc (List.rev !schedule_fields));
-         ]) :: !fields
-     | None -> ());
-
-    (match content.offer with
-     | Some offer ->
-         let offer_fields = ref [] in
-         (match offer.coupon_code with
-          | Some code -> offer_fields := ("couponCode", `String code) :: !offer_fields
-          | None -> ());
-         (match offer.redeem_online_url with
-          | Some url -> offer_fields := ("redeemOnlineUrl", `String url) :: !offer_fields
-          | None -> ());
-         (match offer.terms_conditions with
-          | Some terms -> offer_fields := ("termsConditions", `String terms) :: !offer_fields
-          | None -> ());
-         if !offer_fields <> [] then
-           fields := ("offer", `Assoc (List.rev !offer_fields)) :: !fields
-     | None -> ());
-
-    (match content.call_to_action with
-     | Some cta ->
-         let cta_fields = [
-           ("actionType", `String (call_to_action_type_to_string cta.cta_type));
-         ] @ (match cta.url with
-              | Some url -> [("url", `String url)]
-              | None -> [])
-         in
-         fields := ("callToAction", `Assoc cta_fields) :: !fields
-     | None -> ());
-
-    (match content.media_url with
-     | Some url ->
-         fields := ("media", `List [
-           `Assoc [
-             ("mediaFormat", `String "PHOTO");
-             ("sourceUrl", `String url);
-           ]
-         ]) :: !fields
-     | None -> ());
-
-    `Assoc (List.rev !fields)
+    let event_fields = match content.event with
+      | None -> []
+      | Some event ->
+          let schedule =
+            [("startDate", date_to_json event.schedule.start_date)]
+            @ optional_field "startTime" time_to_json event.schedule.start_time
+            @ optional_field "endDate" date_to_json event.schedule.end_date
+            @ optional_field "endTime" time_to_json event.schedule.end_time
+          in
+          [("event", `Assoc [
+            ("title", `String event.title);
+            ("schedule", `Assoc schedule);
+          ])]
+    in
+    let offer_fields = match content.offer with
+      | None -> []
+      | Some offer ->
+          let fields =
+            optional_field "couponCode" (fun s -> `String s) offer.coupon_code
+            @ optional_field "redeemOnlineUrl" (fun s -> `String s) offer.redeem_online_url
+            @ optional_field "termsConditions" (fun s -> `String s) offer.terms_conditions
+          in
+          if fields = [] then [] else [("offer", `Assoc fields)]
+    in
+    let cta_fields = match content.call_to_action with
+      | None -> []
+      | Some cta ->
+          let fields =
+            [("actionType", `String (call_to_action_type_to_string cta.cta_type))]
+            @ optional_field "url" (fun s -> `String s) cta.url
+          in
+          [("callToAction", `Assoc fields)]
+    in
+    let media_fields = match content.media_url with
+      | None -> []
+      | Some url ->
+          [("media", `List [
+            `Assoc [
+              ("mediaFormat", `String "PHOTO");
+              ("sourceUrl", `String url);
+            ]
+          ])]
+    in
+    `Assoc (
+      [("summary", `String content.summary);
+       ("topicType", `String (topic_type_to_string content.topic))]
+      @ optional_field "languageCode" (fun s -> `String s) content.language_code
+      @ event_fields
+      @ offer_fields
+      @ cta_fields
+      @ media_fields
+    )
 
   (** {1 Location Discovery} *)
 
@@ -759,35 +747,10 @@ module Make (Config : CONFIG) = struct
 
     if client_id = "" then
       on_error "Google Business client ID not configured"
-    else (
-      let code_challenge =
-        let digest = Digestif.SHA256.digest_string code_verifier in
-        let raw = Digestif.SHA256.to_raw_string digest in
-        Base64.encode_string ~pad:false raw
-        |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
-      in
-
-      let scopes = "https://www.googleapis.com/auth/business.manage https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email" in
-
-      let params = [
-        ("client_id", client_id);
-        ("redirect_uri", redirect_uri);
-        ("response_type", "code");
-        ("scope", scopes);
-        ("state", state);
-        ("access_type", "offline");
-        ("prompt", "consent");
-        ("code_challenge", code_challenge);
-        ("code_challenge_method", "S256");
-      ] in
-
-      let query = List.map (fun (k, v) ->
-        Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-      ) params |> String.concat "&" in
-
-      let url = OAuth.Metadata.authorization_endpoint ^ "?" ^ query in
+    else
+      let url = OAuth.get_authorization_url
+        ~client_id ~redirect_uri ~state ~code_verifier () in
       on_success url
-    )
 
   (** Exchange OAuth code for access token with PKCE *)
   let exchange_code ~code ~redirect_uri ~code_verifier on_success on_error =

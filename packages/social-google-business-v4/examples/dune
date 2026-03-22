@@ -1,0 +1,6 @@
+(executable
+ (name simple_cps)
+ (modules simple_cps)
+ (libraries
+  social-core
+  social-google-business-v4))
