@@ -115,18 +115,7 @@ module OAuth = struct
     module Shared = Social_google_oauth.Make(Http)
 
     let exchange_code = Shared.exchange_code
-
-    let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-      Shared.refresh_token ~client_id ~client_secret ~refresh_token
-        (fun (new_access, new_refresh, expires_at) ->
-          let creds : credentials = {
-            access_token = new_access;
-            refresh_token = Some new_refresh;
-            expires_at = Some expires_at;
-            auth_type = Bearer;
-          } in
-          on_success creds)
-        on_error
+    let refresh_token = Shared.refresh_token
 
     let revoke_token ~token on_result =
       Shared.revoke_token ~platform:Platform_types.YouTubeShorts ~token on_result
@@ -279,26 +268,6 @@ module Make (Config : CONFIG) = struct
         request_id = None;
       }
   
-  (** Check if token is expired or expiring soon *)
-  let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    match expires_at_opt with
-    | None -> false
-    | Some expires_at_str ->
-        try
-          match Ptime.of_rfc3339 expires_at_str with
-          | Ok (expires_at, _, _) ->
-              let now = Ptime_clock.now () in
-              let buffer = Ptime.Span.of_int_s buffer_seconds in
-              (match Ptime.add_span now buffer with
-               | Some future -> not (Ptime.is_later expires_at ~than:future)
-               | None -> false)
-          | Error _ -> true
-        with _ -> true
-  
-  (** Refresh OAuth 2.0 access token *)
-  let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
-    Shared_oauth.refresh_token ~client_id ~client_secret ~refresh_token on_success on_error
-  
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
   let ensure_valid_token ~account_id on_success on_error =
     let perform_refresh ~credentials on_refresh_success on_refresh_error =
@@ -307,14 +276,8 @@ module Make (Config : CONFIG) = struct
       | Some refresh_token ->
           let client_id = Config.get_env "YOUTUBE_CLIENT_ID" |> Option.value ~default:"" in
           let client_secret = Config.get_env "YOUTUBE_CLIENT_SECRET" |> Option.value ~default:"" in
-          refresh_access_token ~client_id ~client_secret ~refresh_token
-            (fun (new_access, new_refresh, expires_at) ->
-              on_refresh_success {
-                Social_core.access_token = new_access;
-                refresh_token = Some new_refresh;
-                expires_at = Some expires_at;
-                auth_type = Bearer;
-              })
+          Shared_oauth.refresh_token ~client_id ~client_secret ~refresh_token
+            on_refresh_success
             (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
