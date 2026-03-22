@@ -2,6 +2,19 @@
 
 open Platform_types
 
+(** Extract the path component of a URL, stripping query parameters and fragments.
+    Useful for matching file extensions on presigned URLs like
+    [https://s3.example.com/bucket/file.jpg?X-Amz-Signature=...] *)
+let url_path url =
+  let without_fragment =
+    match String.index_opt url '#' with
+    | Some i -> String.sub url 0 i
+    | None -> url
+  in
+  match String.index_opt without_fragment '?' with
+  | Some i -> String.sub without_fragment 0 i
+  | None -> without_fragment
+
 (** Validate text length for a platform *)
 let validate_text_length ~platform ~text ~max_length =
   if String.length text > max_length then

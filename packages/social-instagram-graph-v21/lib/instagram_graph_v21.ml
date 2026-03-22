@@ -1088,7 +1088,7 @@ module Make (Config : CONFIG) = struct
 
   (** Media type detection from URL *)
   let classify_media_url url =
-    let url_lower = String.lowercase_ascii url in
+    let url_lower = String.lowercase_ascii (Content_validator.url_path url) in
     if Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") url_lower 0 then
       `Video
     else if Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\)$") url_lower 0 then
@@ -1938,14 +1938,15 @@ module Make (Config : CONFIG) = struct
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       Error "Story media URL must be a publicly accessible HTTP(S) URL"
     else
-      (* Check for valid image or video extension *)
-      let is_image = Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\)$") url_lower 0 in
-      let is_video = Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") url_lower 0 in
+      (* Check for valid image or video extension (strip query params for presigned URLs) *)
+      let path_lower = String.lowercase_ascii (Content_validator.url_path media_url) in
+      let is_image = Str.string_match (Str.regexp ".*\\.\\(jpg\\|jpeg\\|png\\)$") path_lower 0 in
+      let is_video = Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") path_lower 0 in
       if not (is_image || is_video) then
         Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
       else
         Ok ()
-  
+
   (** Post thread (Instagram doesn't support threads, posts only first item with warning) *)
   let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) on_result =
     if List.length texts = 0 then
@@ -2077,9 +2078,9 @@ module Make (Config : CONFIG) = struct
   
   (** Validate video URL *)
   let validate_video ~video_url ~media_type =
-    let url_lower = String.lowercase_ascii video_url in
+    let path_lower = String.lowercase_ascii (Content_validator.url_path video_url) in
     (* Check if URL has video extension *)
-    if not (Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") url_lower 0) then
+    if not (Str.string_match (Str.regexp ".*\\.\\(mp4\\|mov\\)$") path_lower 0) then
       Error "Instagram videos must be MP4 or MOV format"
     else
       match media_type with
