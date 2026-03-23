@@ -193,6 +193,7 @@ module type CONFIG = sig
   val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
+  val resize_image : data:string -> mime_type:string -> max_bytes:int -> (string option -> unit) -> unit
 end
 
 (** Make functor to create Bluesky provider with given configuration *)
@@ -895,20 +896,26 @@ module Make (Config : CONFIG) = struct
                             (* Check size limit (1MB max for images) *)
                             let img_size = String.length img_response.body in
                             
-                            if img_size > 1000000 then begin
-                              warnings := Error_types.Thumbnail_skipped 
-                                (Printf.sprintf "Image too large: %d bytes" img_size) :: !warnings;
-                              create_card None
-                            end
-                            else
-                              (* Upload the image as a blob *)
-                              upload_blob ~access_jwt ~blob_data:img_response.body 
+                            let upload_thumbnail blob_data =
+                              upload_blob ~access_jwt ~blob_data
                                 ~mime_type ~alt_text:None
                                 (fun (blob, _) -> create_card (Some blob))
-                                (fun err -> 
-                                  warnings := Error_types.Thumbnail_skipped 
+                                (fun err ->
+                                  warnings := Error_types.Thumbnail_skipped
                                     (Printf.sprintf "Upload failed: %s" err) :: !warnings;
                                   create_card None)
+                            in
+                            if img_size > 1000000 then
+                              Config.resize_image ~data:img_response.body ~mime_type ~max_bytes:1000000
+                                (fun result ->
+                                  match result with
+                                  | Some resized -> upload_thumbnail resized
+                                  | None ->
+                                    warnings := Error_types.Thumbnail_skipped
+                                      (Printf.sprintf "Image too large (%d bytes) and resize failed" img_size) :: !warnings;
+                                    create_card None)
+                            else
+                              upload_thumbnail img_response.body
                         else begin
                           warnings := Error_types.Thumbnail_skipped 
                             (Printf.sprintf "HTTP %d fetching thumbnail" img_response.status) :: !warnings;
