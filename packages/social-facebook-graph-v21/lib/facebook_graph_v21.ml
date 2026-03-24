@@ -1047,38 +1047,33 @@ module Make (Config : CONFIG) = struct
         on_result
           (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
   
-  (** Upload video to Facebook Page for Reels using file_url approach.
+  (** Upload video to Facebook Page as a Reel.
 
-      Passes the publicly accessible video URL directly to Facebook via
-      the file_url parameter, avoiding the fragile 3-step resumable upload.
+      Uses the /{page_id}/videos endpoint with file_url, which lets Facebook
+      download and process the video. The response includes the video ID and
+      permalink once processing completes.
 
       @see <https://developers.facebook.com/docs/video-api/guides/reels-publishing>
   *)
   let upload_video_reel_typed ~page_id ~page_access_token ~video_url ~description on_success on_error =
-    let url = Printf.sprintf "%s/%s/video_reels" graph_api_base page_id in
-    let params = [
-      ("upload_phase", ["start"]);
-      ("access_token", [page_access_token]);
-      ("file_url", [video_url]);
-      ("description", [description]);
-      ("video_state", ["PUBLISHED"]);
-    ] @
-    (match compute_app_secret_proof ~access_token:page_access_token with
-     | Some proof -> [("appsecret_proof", [proof])]
-     | None -> [])
-    in
-    let body = Uri.encoded_of_query params in
+    let url = Printf.sprintf "%s/%s/videos?fields=id,permalink_url" graph_api_base page_id in
+    let json_body = `Assoc [
+      ("file_url", `String video_url);
+      ("description", `String description);
+      ("published", `Bool true);
+    ] |> Yojson.Basic.to_string in
     let headers = [
-      ("Content-Type", "application/x-www-form-urlencoded");
+      ("Content-Type", "application/json");
+      ("Authorization", Printf.sprintf "Bearer %s" page_access_token);
     ] in
-    Config.Http.post ~headers ~body url
+    Config.Http.post ~headers ~body:json_body url
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then
           try
             let open Yojson.Basic.Util in
             let json = Yojson.Basic.from_string response.body in
-            let video_id = json |> member "video_id" |> to_string in
+            let video_id = json |> member "id" |> to_string in
             on_success video_id
           with e ->
             on_error (Error_types.Internal_error (Printf.sprintf "Failed to parse reel response: %s" (Printexc.to_string e)))
