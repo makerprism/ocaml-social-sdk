@@ -1205,70 +1205,124 @@ let test_post_video_rejects_disallowed_privacy_level () =
       | Ok _ -> failwith "Expected policy error");
   assert !done_
 
-let test_post_video_rejects_comment_enabled_when_creator_disables_comments () =
-  print_string "Test: post_video rejects enabled comments policy... ";
+let find_init_body () =
+  let init_calls = List.filter (fun (c : Mock_http.post_call) ->
+    String.ends_with ~suffix:"video/init/" c.url
+  ) !(Mock_http.post_calls) in
+  match init_calls with
+  | c :: _ -> (match c.body with Some b -> Yojson.Basic.from_string b | None -> failwith "No body in init call")
+  | [] -> failwith "No video/init/ call found"
+
+let assert_init_body_flag field expected =
+  let json = find_init_body () in
+  let open Yojson.Basic.Util in
+  let post_info = json |> member "post_info" in
+  let actual = post_info |> member field |> to_bool in
+  if actual <> expected then
+    failwith (Printf.sprintf "Expected %s=%b in init body, got %b" field expected actual)
+
+let creator_info_response ~comment_disabled ~duet_disabled ~stitch_disabled ~privacy_levels =
+  Printf.sprintf {|{"data":{"creator_avatar_url":"https://example.com/avatar.jpg","creator_username":"testuser","creator_nickname":"Test User","privacy_level_options":[%s],"comment_disabled":%b,"duet_disabled":%b,"stitch_disabled":%b,"max_video_post_duration_sec":600}}|}
+    (String.concat "," (List.map (fun s -> "\"" ^ s ^ "\"") privacy_levels))
+    comment_disabled duet_disabled stitch_disabled
+
+let mock_post_handler_with_creator ~comment_disabled ~duet_disabled ~stitch_disabled ~privacy_levels init_called url _headers _body =
+  if String.ends_with ~suffix:"creator_info/query/" url then
+    { Social_core.status = 200;
+      headers = [("content-type", "application/json")];
+      body = creator_info_response ~comment_disabled ~duet_disabled ~stitch_disabled ~privacy_levels }
+  else if String.ends_with ~suffix:"video/init/" url then (
+    init_called := true;
+    { Social_core.status = 200;
+      headers = [("content-type", "application/json")];
+      body = {|{"data":{"publish_id":"pub_ok","upload_url":"https://upload.tiktok.com/video"}}|} })
+  else
+    { Social_core.status = 200;
+      headers = [("content-type", "application/json")];
+      body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|} }
+
+let test_post_video_auto_adjusts_comment_flag () =
+  print_string "Test: post_video auto-adjusts disable_comment when creator disables comments... ";
   reset_mock_state ();
   let init_called = ref false in
-  Mock_http.set_custom_post_handler (fun url _headers _body ->
-    if String.ends_with ~suffix:"creator_info/query/" url then
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"creator_avatar_url":"https://example.com/avatar.jpg","creator_username":"testuser","creator_nickname":"Test User","privacy_level_options":["PUBLIC_TO_EVERYONE","SELF_ONLY"],"comment_disabled":true,"duet_disabled":false,"stitch_disabled":false,"max_video_post_duration_sec":600}}|};
-      }
-    else if String.ends_with ~suffix:"video/init/" url then (
-      init_called := true;
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"publish_id":"pub_should_not_happen","upload_url":"https://upload.tiktok.com/video"}}|};
-      }
-    ) else
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
-      });
+  Mock_http.set_custom_post_handler
+    (mock_post_handler_with_creator
+       ~comment_disabled:true ~duet_disabled:false ~stitch_disabled:false
+       ~privacy_levels:["PUBLIC_TO_EVERYONE"; "SELF_ONLY"] init_called);
   let done_ = ref false in
   TikTok.post_video
     ~account_id:"test_account"
-    ~caption:"Comments policy"
+    ~caption:"Comments auto-adjusted"
     ~disable_comment:false
     ~video_content:"video-bytes"
-    (function
-      | Error (Error_types.Content_policy_violation msg) ->
-          assert (String.length msg > 0);
-          assert (not !init_called);
-          done_ := true;
-          print_endline "PASSED"
-      | Error err -> failwith ("Expected Content_policy_violation, got: " ^ Error_types.error_to_string err)
-      | Ok _ -> failwith "Expected policy error");
+    (handle_api_result
+      (fun _publish_id ->
+        assert !init_called;
+        assert_init_body_flag "disable_comment" true;
+        assert_init_body_flag "disable_duet" false;
+        assert_init_body_flag "disable_stitch" false;
+        done_ := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !done_
+
+let test_post_video_auto_adjusts_duet_flag () =
+  print_string "Test: post_video auto-adjusts disable_duet when creator disables duet... ";
+  reset_mock_state ();
+  let init_called = ref false in
+  Mock_http.set_custom_post_handler
+    (mock_post_handler_with_creator
+       ~comment_disabled:false ~duet_disabled:true ~stitch_disabled:false
+       ~privacy_levels:["PUBLIC_TO_EVERYONE"; "SELF_ONLY"] init_called);
+  let done_ = ref false in
+  TikTok.post_video
+    ~account_id:"test_account"
+    ~caption:"Duet auto-adjusted"
+    ~disable_duet:false
+    ~video_content:"video-bytes"
+    (handle_api_result
+      (fun _publish_id ->
+        assert !init_called;
+        assert_init_body_flag "disable_duet" true;
+        assert_init_body_flag "disable_comment" false;
+        assert_init_body_flag "disable_stitch" false;
+        done_ := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !done_
+
+let test_post_video_auto_adjusts_all_creator_flags () =
+  print_string "Test: post_video auto-adjusts all flags when creator disables all... ";
+  reset_mock_state ();
+  let init_called = ref false in
+  Mock_http.set_custom_post_handler
+    (mock_post_handler_with_creator
+       ~comment_disabled:true ~duet_disabled:true ~stitch_disabled:true
+       ~privacy_levels:["PUBLIC_TO_EVERYONE"; "SELF_ONLY"] init_called);
+  let done_ = ref false in
+  TikTok.post_video
+    ~account_id:"test_account"
+    ~caption:"All auto-adjusted"
+    ~video_content:"video-bytes"
+    (handle_api_result
+      (fun _publish_id ->
+        assert !init_called;
+        assert_init_body_flag "disable_comment" true;
+        assert_init_body_flag "disable_duet" true;
+        assert_init_body_flag "disable_stitch" true;
+        done_ := true;
+        print_endline "PASSED")
+      (fun err -> failwith ("Unexpected error: " ^ err)));
   assert !done_
 
 let test_post_video_allows_when_creator_policies_satisfied () =
   print_string "Test: post_video allows when creator policies satisfied... ";
   reset_mock_state ();
   let init_called = ref false in
-  Mock_http.set_custom_post_handler (fun url _headers _body ->
-    if String.ends_with ~suffix:"creator_info/query/" url then
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"creator_avatar_url":"https://example.com/avatar.jpg","creator_username":"testuser","creator_nickname":"Test User","privacy_level_options":["PUBLIC_TO_EVERYONE","SELF_ONLY"],"comment_disabled":true,"duet_disabled":true,"stitch_disabled":true,"max_video_post_duration_sec":600}}|};
-      }
-    else if String.ends_with ~suffix:"video/init/" url then (
-      init_called := true;
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"publish_id":"pub_policy_ok","upload_url":"https://upload.tiktok.com/video"}}|};
-      }
-    ) else
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
-      });
+  Mock_http.set_custom_post_handler
+    (mock_post_handler_with_creator
+       ~comment_disabled:true ~duet_disabled:true ~stitch_disabled:true
+       ~privacy_levels:["PUBLIC_TO_EVERYONE"; "SELF_ONLY"] init_called);
   let done_ = ref false in
   TikTok.post_video
     ~account_id:"test_account"
@@ -1279,9 +1333,11 @@ let test_post_video_allows_when_creator_policies_satisfied () =
     ~disable_stitch:true
     ~video_content:"video-bytes"
     (handle_api_result
-      (fun publish_id ->
-        assert (publish_id = "pub_policy_ok");
+      (fun _publish_id ->
         assert !init_called;
+        assert_init_body_flag "disable_comment" true;
+        assert_init_body_flag "disable_duet" true;
+        assert_init_body_flag "disable_stitch" true;
         done_ := true;
         print_endline "PASSED")
       (fun err -> failwith ("Unexpected error: " ^ err)));
@@ -3022,7 +3078,9 @@ let () =
   test_post_video_uses_multi_chunk_upload ();
   test_post_video_caption_too_long_validation_error ();
   test_post_video_rejects_disallowed_privacy_level ();
-  test_post_video_rejects_comment_enabled_when_creator_disables_comments ();
+  test_post_video_auto_adjusts_comment_flag ();
+  test_post_video_auto_adjusts_duet_flag ();
+  test_post_video_auto_adjusts_all_creator_flags ();
   test_post_video_allows_when_creator_policies_satisfied ();
   test_post_video_from_url_propagates_content_type ();
   test_post_video_from_url_normalizes_content_type ();
