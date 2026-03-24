@@ -949,7 +949,17 @@ module Make (Config : CONFIG) = struct
       else
         Error_types.Auth_error Error_types.Token_invalid
     else if status_code = 403 then
-      Error_types.Auth_error (Error_types.Insufficient_permissions required_scopes)
+      (* Check if the error body indicates a scope/permission issue *)
+      if has_substring lower_error_signals "scope" || has_substring lower_error_signals "permission" then
+        Error_types.Auth_error (Error_types.Insufficient_permissions required_scopes)
+      else
+        Error_types.Api_error {
+          status_code = 403;
+          message = error_msg;
+          platform = Platform_types.TikTok;
+          raw_response = Some response_body;
+          request_id;
+        }
     else if status_code = 404 then
       Error_types.Resource_not_found (if error_msg = "" then "TikTok resource" else error_msg)
     else if status_code = 429 then
@@ -1873,7 +1883,7 @@ module Make (Config : CONFIG) = struct
       let url = get_authorization_url
         ~client_id:client_key
         ~redirect_uri
-        ~scope:"user.info.basic,video.publish"
+        ~scope:"user.info.basic,video.publish,video.upload"
         ~state
       in
       if code_verifier = "" then
