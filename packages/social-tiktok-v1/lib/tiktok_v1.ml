@@ -1745,7 +1745,7 @@ module Make (Config : CONFIG) = struct
       ?(disable_stitch=false) ?video_cover_timestamp_ms ?(is_aigc=false)
       ?(validate_media_before_upload=false) on_result =
     let _ = alt_texts in (* TikTok doesn't support alt text *)
-    let _ = validate_media_before_upload in (* Not needed for PULL_FROM_URL *)
+    let _ = validate_media_before_upload in
     let media_count = List.length media_urls in
     match validate_post ~text ~media_count () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1755,7 +1755,10 @@ module Make (Config : CONFIG) = struct
         if not (is_valid_http_url video_url) then
           on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Invalid_url video_url]))
         else
-          post_video_via_pull ~account_id ~caption:text ~video_url
+          (* Use FILE_UPLOAD: download video then upload in chunks.
+             PULL_FROM_URL requires TikTok domain ownership verification which
+             doesn't work with S3 presigned URLs. *)
+          post_video_from_url ~account_id ~caption:text ~video_url
             ~privacy_level ~disable_duet ~disable_comment ~disable_stitch
             ?video_cover_timestamp_ms ~is_aigc
             (function
@@ -1796,7 +1799,7 @@ module Make (Config : CONFIG) = struct
           | text :: rest_texts, urls :: rest_media ->
               (* Validation ensures urls is non-empty *)
               let video_url = List.hd urls in
-              post_video_via_pull ~account_id ~caption:text ~video_url ~is_aigc
+              post_video_from_url ~account_id ~caption:text ~video_url ~is_aigc
                 (function
                   | Ok post_id -> post_all (post_id :: acc) (post_index + 1) rest_texts rest_media
                   | Error err ->
