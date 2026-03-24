@@ -1159,6 +1159,7 @@ module Make (Config : CONFIG) = struct
       ~user_id
       ~media_url
       ~kind
+      ?alt_text
       on_result =
     create_media_container
       ~access_token
@@ -1167,17 +1168,18 @@ module Make (Config : CONFIG) = struct
       ~media_url
       ~kind
       ~is_carousel_item:true
+      ?alt_text
       on_result
 
   let rec create_carousel_children
       ~access_token
       ~user_id
-      ~media_urls
+      ~media_urls_with_alt
       ~acc
       on_result =
-    match media_urls with
+    match media_urls_with_alt with
     | [] -> on_result (Ok (List.rev acc))
-    | url :: rest ->
+    | (url, alt_text) :: rest ->
         let normalized = normalize_media_url url in
         (match media_kind_of_url normalized with
          | Some kind ->
@@ -1186,12 +1188,13 @@ module Make (Config : CONFIG) = struct
                ~user_id
                ~media_url:normalized
                ~kind
+               ?alt_text
                (function
                  | Ok child_id ->
                      create_carousel_children
                        ~access_token
                        ~user_id
-                       ~media_urls:rest
+                       ~media_urls_with_alt:rest
                        ~acc:(child_id :: acc)
                        on_result
                  | Error err -> on_result (Error err))
@@ -1247,7 +1250,7 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
 
-  let post_carousel ~account_id ~text ~media_urls ?topic_tag ?reply_control on_result =
+  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control on_result =
     let validation_errors =
       [ validate_media_urls ~max_items:20 media_urls ]
       |> List.filter_map (fun x -> x)
@@ -1262,6 +1265,12 @@ module Make (Config : CONFIG) = struct
     if validation_errors <> [] then
       on_result (Error_types.Failure (Error_types.Validation_error validation_errors))
     else
+      let media_urls_with_alt =
+        List.mapi (fun i url ->
+          let alt_text = try List.nth alt_texts i with _ -> None in
+          (url, alt_text)
+        ) media_urls
+      in
       with_valid_credentials ~account_id
         (fun creds ->
           get_user_id ~access_token:creds.access_token
@@ -1271,7 +1280,7 @@ module Make (Config : CONFIG) = struct
                   create_carousel_children
                     ~access_token:creds.access_token
                     ~user_id
-                    ~media_urls
+                    ~media_urls_with_alt
                     ~acc:[]
                     (function
                       | Error err -> on_result (Error_types.Failure err)

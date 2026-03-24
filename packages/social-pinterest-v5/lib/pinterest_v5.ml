@@ -1259,7 +1259,7 @@ module Make (Config : CONFIG) = struct
                       in
                       create_pin_with_media
                         ~media_source:video_media_source
-                        ~alt_text_opt:None)
+                        ~alt_text_opt:alt_text)
                     handle_video_error
                 in
                 if is_likely_video_url first_media_url then

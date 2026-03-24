@@ -1702,13 +1702,18 @@ module Make (Config : CONFIG) = struct
   (** {1 Instagram Stories} *)
 
   (** Create story container for image *)
-  let create_story_image_container ~ig_user_id ~access_token ~image_url on_result =
+  let create_story_image_container ~ig_user_id ~access_token ~image_url ?alt_text on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let params = [
       ("media_type", ["STORIES"]);
       ("image_url", [image_url]);
     ] @
+    (match alt_text with
+     | Some alt when String.length alt > 0 ->
+         [("custom_accessibility_caption", [alt])]
+     | _ -> [])
+    @
     (match compute_app_secret_proof ~access_token with
      | Some proof -> [("appsecret_proof", [proof])]
      | None -> [])
@@ -1736,13 +1741,18 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Create story container for video *)
-  let create_story_video_container ~ig_user_id ~access_token ~video_url on_result =
+  let create_story_video_container ~ig_user_id ~access_token ~video_url ?alt_text on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let params = [
       ("media_type", ["STORIES"]);
       ("video_url", [video_url]);
     ] @
+    (match alt_text with
+     | Some alt when String.length alt > 0 ->
+         [("custom_accessibility_caption", [alt])]
+     | _ -> [])
+    @
     (match compute_app_secret_proof ~access_token with
      | Some proof -> [("appsecret_proof", [proof])]
      | None -> [])
@@ -1770,12 +1780,12 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Post image story to Instagram *)
-  let post_story_image ~account_id ~image_url on_result =
+  let post_story_image ~account_id ~image_url ?alt_text on_result =
     ensure_valid_token ~account_id
       (fun access_token ->
         Config.get_ig_user_id ~account_id
           (fun ig_user_id ->
-            create_story_image_container ~ig_user_id ~access_token ~image_url
+            create_story_image_container ~ig_user_id ~access_token ~image_url ?alt_text
               (function
                 | Ok container_id ->
                     poll_container_status ~container_id ~access_token ~ig_user_id
@@ -1789,12 +1799,12 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error_types.Failure err))
 
   (** Post video story to Instagram *)
-  let post_story_video ~account_id ~video_url on_result =
+  let post_story_video ~account_id ~video_url ?alt_text on_result =
     ensure_valid_token ~account_id
       (fun access_token ->
         Config.get_ig_user_id ~account_id
           (fun ig_user_id ->
-            create_story_video_container ~ig_user_id ~access_token ~video_url
+            create_story_video_container ~ig_user_id ~access_token ~video_url ?alt_text
               (function
                 | Ok container_id ->
                     poll_container_status ~container_id ~access_token ~ig_user_id
@@ -1808,14 +1818,14 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error_types.Failure err))
 
   (** Post story to Instagram (auto-detect media type) *)
-  let post_story ~account_id ~media_url on_result =
+  let post_story ~account_id ~media_url ?alt_text on_result =
     let url_lower = String.lowercase_ascii media_url in
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Invalid_url media_url]))
     else
       match classify_media_url media_url with
-      | `Video -> post_story_video ~account_id ~video_url:media_url on_result
-      | `Image -> post_story_image ~account_id ~image_url:media_url on_result
+      | `Video -> post_story_video ~account_id ~video_url:media_url ?alt_text on_result
+      | `Image -> post_story_image ~account_id ~image_url:media_url ?alt_text on_result
       | `Unsupported ->
           on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"]))
 
