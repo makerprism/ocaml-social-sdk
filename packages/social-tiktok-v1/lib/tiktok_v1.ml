@@ -1502,7 +1502,7 @@ module Make (Config : CONFIG) = struct
         | Ok analytics -> on_success analytics
         | Error err -> on_error err)
 
-  let validate_post_info_against_creator ~(post_info : post_info) ~creator_info =
+  let adjust_post_info_for_creator ~(post_info : post_info) ~creator_info =
     let privacy_allowed =
       List.exists (fun p -> p = post_info.privacy_level) creator_info.privacy_level_options
     in
@@ -1510,17 +1510,12 @@ module Make (Config : CONFIG) = struct
       Error (Error_types.Content_policy_violation
                (Printf.sprintf "Privacy level %s not allowed for this creator"
                   (string_of_privacy_level post_info.privacy_level)))
-    else if creator_info.comment_disabled && not post_info.disable_comment then
-      Error (Error_types.Content_policy_violation
-               "Comments are disabled for this creator; post must disable comments")
-    else if creator_info.duet_disabled && not post_info.disable_duet then
-      Error (Error_types.Content_policy_violation
-               "Duet is disabled for this creator; post must disable duet")
-    else if creator_info.stitch_disabled && not post_info.disable_stitch then
-      Error (Error_types.Content_policy_violation
-               "Stitch is disabled for this creator; post must disable stitch")
     else
-      Ok ()
+      Ok { post_info with
+        disable_comment = post_info.disable_comment || creator_info.comment_disabled;
+        disable_duet = post_info.disable_duet || creator_info.duet_disabled;
+        disable_stitch = post_info.disable_stitch || creator_info.stitch_disabled;
+      }
 
   (** Poll publish status until terminal state or timeout.
 
@@ -1589,9 +1584,9 @@ module Make (Config : CONFIG) = struct
             (function
               | Error e -> on_result (Error e)
               | Ok creator_info ->
-                  (match validate_post_info_against_creator ~post_info ~creator_info with
+                  (match adjust_post_info_for_creator ~post_info ~creator_info with
                    | Error e -> on_result (Error e)
-                   | Ok () ->
+                   | Ok post_info ->
                        let effective_chunk_size =
                          let requested = if upload_chunk_size_bytes <= 0 then video_size else upload_chunk_size_bytes in
                          min requested video_size
@@ -1731,9 +1726,9 @@ module Make (Config : CONFIG) = struct
         (function
           | Error e -> on_result (Error e)
           | Ok creator_info ->
-              (match validate_post_info_against_creator ~post_info ~creator_info with
+              (match adjust_post_info_for_creator ~post_info ~creator_info with
                | Error e -> on_result (Error e)
-               | Ok () ->
+               | Ok post_info ->
                    init_video_pull_from_url ~account_id ~post_info ~video_url on_result))
 
   (** Post single video (matches other provider signatures)
