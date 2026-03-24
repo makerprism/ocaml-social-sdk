@@ -439,7 +439,7 @@ module Make (Config : CONFIG) = struct
   (** {1 Posting} *)
 
   (** Post a single update to a location *)
-  let post_single ~account_id ~text ~media_urls on_result =
+  let post_single ~account_id ~location_name ~text ~media_urls on_result =
     let media_url = match media_urls with
       | url :: _ -> Some url
       | [] -> None
@@ -453,6 +453,9 @@ module Make (Config : CONFIG) = struct
       media_url;
       language_code = None;
     } in
+    if location_name = "" then
+      on_result (Error_types.Failure (Error_types.Internal_error "Google Business location name not configured"))
+    else
     match validate_post ~text with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
@@ -466,11 +469,6 @@ module Make (Config : CONFIG) = struct
          | Ok () ->
              ensure_valid_token ~account_id
                (fun access_token ->
-                 (* Get location_name from env or credentials metadata *)
-                 let location_name = Config.get_env "GOOGLE_BUSINESS_LOCATION_NAME" |> Option.value ~default:"" in
-                 if location_name = "" then
-                   on_result (Error_types.Failure (Error_types.Internal_error "Google Business location name not configured"))
-                 else
                    let url = Printf.sprintf "%s/%s/localPosts" mybusiness_v4_base location_name in
                    let body = Yojson.Basic.to_string (build_post_body content) in
                    let headers = [
@@ -494,14 +492,14 @@ module Make (Config : CONFIG) = struct
                (fun err -> on_result (Error_types.Failure err)))
 
   (** Post thread - Google Business Profile doesn't support threads *)
-  let post_thread ~account_id ~texts ~media_urls_per_post on_result =
+  let post_thread ~account_id ~location_name ~texts ~media_urls_per_post on_result =
     if List.length texts = 0 then
       on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Thread_empty]))
     else
       let first_text = List.hd texts in
       let first_media = try List.hd media_urls_per_post with _ -> [] in
       let total_requested = List.length texts in
-      post_single ~account_id ~text:first_text ~media_urls:first_media
+      post_single ~account_id ~location_name ~text:first_text ~media_urls:first_media
         (fun outcome ->
           match outcome with
           | Error_types.Success post_name ->
