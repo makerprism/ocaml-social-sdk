@@ -1098,8 +1098,8 @@ module Make (Config : CONFIG) = struct
 
   let detect_media_type url =
     match classify_media_url url with
-    | `Video -> "VIDEO"
-    | `Image | `Unknown -> "IMAGE"
+    | `Video | `Unknown -> "VIDEO"
+    | `Image -> "IMAGE"
 
   let validate_supported_media_urls ~media_urls:_ =
     Ok ()
