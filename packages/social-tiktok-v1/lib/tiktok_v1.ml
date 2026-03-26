@@ -1094,7 +1094,7 @@ module Make (Config : CONFIG) = struct
     let resolved_chunk_size =
       match chunk_size with
       | Some cs when cs > 0 -> cs
-      | _ -> video_size
+      | _ -> min video_size default_upload_chunk_size_bytes
     in
     let resolved_total_chunk_count =
       match total_chunk_count with
@@ -1208,7 +1208,7 @@ module Make (Config : CONFIG) = struct
     let resolved_chunk_size =
       match chunk_size with
       | Some cs when cs > 0 -> cs
-      | _ -> video_size
+      | _ -> min video_size default_upload_chunk_size_bytes
     in
     let resolved_total_chunk_count =
       match total_chunk_count with

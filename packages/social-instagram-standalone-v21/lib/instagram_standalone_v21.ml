@@ -1410,7 +1410,7 @@ module Make (Config : CONFIG) = struct
                                    | Ok carousel_id ->
                                        (* Step 3: Poll carousel status and publish when ready *)
                                        poll_container_status ~container_id:carousel_id
-                                         ~access_token ~ig_user_id ~attempt:1 ~max_attempts:5
+                                         ~access_token ~ig_user_id ~attempt:1 ~max_attempts:10
                                          (fun media_id -> on_result (Error_types.Success media_id))
                                          (fun err -> on_result (Error_types.Failure
                                            (Error_types.Internal_error err)))
@@ -1439,7 +1439,7 @@ module Make (Config : CONFIG) = struct
                                    | Ok container_id ->
                                        (* Step 2: Poll container status and publish when ready *)
                                        poll_container_status ~container_id ~access_token ~ig_user_id
-                                         ~attempt:1 ~max_attempts:5
+                                         ~attempt:1 ~max_attempts:10
                                          (fun media_id -> on_result (Error_types.Success media_id))
                                          (fun err -> on_result (Error_types.Failure
                                            (Error_types.Internal_error err)))
@@ -1451,7 +1451,7 @@ module Make (Config : CONFIG) = struct
                                    | Ok container_id ->
                                        (* Step 2: Poll container status and publish when ready *)
                                        poll_container_status ~container_id ~access_token ~ig_user_id
-                                         ~attempt:1 ~max_attempts:5
+                                         ~attempt:1 ~max_attempts:10
                                          (fun media_id -> on_result (Error_types.Success media_id))
                                          (fun err -> on_result (Error_types.Failure
                                            (Error_types.Internal_error err)))
@@ -1689,7 +1689,7 @@ module Make (Config : CONFIG) = struct
                              | Ok container_id ->
                                  (* Poll and publish *)
                                  poll_container_status ~container_id ~access_token ~ig_user_id
-                                   ~attempt:1 ~max_attempts:5
+                                   ~attempt:1 ~max_attempts:10
                                    (fun media_id -> on_result (Error_types.Success media_id))
                                    (fun err -> on_result (Error_types.Failure
                                      (Error_types.Internal_error err)))
@@ -1788,7 +1788,7 @@ module Make (Config : CONFIG) = struct
               (function
                 | Ok container_id ->
                     poll_container_status ~container_id ~access_token ~ig_user_id
-                      ~attempt:1 ~max_attempts:5
+                      ~attempt:1 ~max_attempts:10
                       (fun media_id -> on_result (Error_types.Success media_id))
                       (fun err -> on_result (Error_types.Failure
                         (Error_types.Internal_error err)))
