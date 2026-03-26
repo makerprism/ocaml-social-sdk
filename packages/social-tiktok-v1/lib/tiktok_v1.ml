@@ -1305,13 +1305,20 @@ module Make (Config : CONFIG) = struct
     if total_size = 0 then
       on_result (Error (Error_types.Validation_error [Error_types.Media_required]))
     else
-      let total_chunks = (total_size + resolved_chunk_size - 1) / resolved_chunk_size in
+      (* TikTok requires floor division for chunk count: the last chunk
+         absorbs the remainder and may exceed chunk_size (up to 128 MB). *)
+      let total_chunks = max 1 (total_size / resolved_chunk_size) in
       let rec loop chunk_index start_byte =
         if chunk_index >= total_chunks then
           on_result (Ok ())
         else
-          let remaining = total_size - start_byte in
-          let current_chunk_size = min resolved_chunk_size remaining in
+          let current_chunk_size =
+            if chunk_index = total_chunks - 1 then
+              (* Last chunk absorbs all remaining bytes *)
+              total_size - start_byte
+            else
+              resolved_chunk_size
+          in
           let current_end_byte = start_byte + current_chunk_size - 1 in
           let chunk_data = String.sub video_content start_byte current_chunk_size in
           upload_video_chunk
@@ -1591,7 +1598,9 @@ module Make (Config : CONFIG) = struct
                          let requested = if upload_chunk_size_bytes <= 0 then video_size else upload_chunk_size_bytes in
                          min requested video_size
                        in
-                       let total_chunk_count = (video_size + effective_chunk_size - 1) / effective_chunk_size in
+                       (* TikTok requires floor division: the last chunk absorbs the
+                          remainder and may exceed chunk_size (up to 128 MB). *)
+                       let total_chunk_count = max 1 (video_size / effective_chunk_size) in
                        init_video_upload
                          ~account_id
                          ~post_info
