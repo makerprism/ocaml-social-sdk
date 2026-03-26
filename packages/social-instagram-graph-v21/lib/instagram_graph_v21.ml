@@ -1086,27 +1086,23 @@ module Make (Config : CONFIG) = struct
       (fun access_token -> get_media_insights ~post_id ~access_token on_result)
       (fun err -> on_result (Error err))
 
-  (** Media type detection from URL *)
+  (** Media type detection from URL.
+      Recognizes common image and video extensions. URLs without a recognized
+      extension (e.g. presigned S3 URLs with no extension) return `Unknown so
+      callers that already know the media type can proceed. *)
   let classify_media_url url =
     match Content_validator.url_file_extension url with
-    | ".mp4" | ".mov" -> `Video
-    | ".jpg" | ".jpeg" | ".png" -> `Image
-    | _ -> `Unsupported
+    | ".mp4" | ".mov" | ".m4v" | ".webm" | ".mpeg" | ".avi" | ".mkv" -> `Video
+    | ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" -> `Image
+    | _ -> `Unknown
 
   let detect_media_type url =
     match classify_media_url url with
     | `Video -> "VIDEO"
-    | `Image | `Unsupported -> "IMAGE"  (* Keep legacy default; validated earlier in flows *)
+    | `Image | `Unknown -> "IMAGE"
 
-  let validate_supported_media_urls ~media_urls =
-    let errors =
-      List.fold_left (fun acc url ->
-        match classify_media_url url with
-        | `Image | `Video -> acc
-        | `Unsupported -> Error_types.Media_unsupported_format ("Unsupported media format URL: " ^ url) :: acc
-      ) [] media_urls
-    in
-    if errors = [] then Ok () else Error (List.rev errors)
+  let validate_supported_media_urls ~media_urls:_ =
+    Ok ()
   
   (** {1 Tagging helper} *)
 
@@ -1712,10 +1708,13 @@ module Make (Config : CONFIG) = struct
         (match validate_media ~media_urls:[video_url] with
          | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
          | Ok () ->
+             (* Reject only if URL is clearly an image. Unknown extensions
+                (e.g. presigned S3 URLs) are accepted because the caller
+                already validated the video format via MIME type. *)
              match classify_media_url video_url with
-             | `Unsupported | `Image ->
-                 on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format "Instagram videos must be MP4 or MOV format"]))
-             | `Video ->
+             | `Image ->
+                 on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format "Instagram Reels require a video, not an image"]))
+             | `Video | `Unknown ->
                  ensure_valid_token ~account_id
                    (fun access_token ->
                      Config.get_ig_user_id ~account_id
@@ -1919,8 +1918,10 @@ module Make (Config : CONFIG) = struct
       match classify_media_url media_url with
       | `Video -> post_story_video ~account_id ~video_url:media_url on_result
       | `Image -> post_story_image ~account_id ~image_url:media_url on_result
-      | `Unsupported ->
-          on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"]))
+      | `Unknown ->
+          (* Unknown extension: default to video for stories since images
+             always have recognizable extensions (.jpg/.png) *)
+          post_story_video ~account_id ~video_url:media_url on_result
   
   (** Validate story media
       
@@ -1935,8 +1936,7 @@ module Make (Config : CONFIG) = struct
       Error "Story media URL must be a publicly accessible HTTP(S) URL"
     else
       match classify_media_url media_url with
-      | `Image | `Video -> Ok ()
-      | `Unsupported -> Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
+      | `Image | `Video | `Unknown -> Ok ()
 
   (** Post thread (Instagram doesn't support threads, posts only first item with warning) *)
   let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) on_result =
@@ -2070,12 +2070,12 @@ module Make (Config : CONFIG) = struct
   (** Validate video URL *)
   let validate_video ~video_url ~media_type =
     match classify_media_url video_url with
-    | `Video ->
+    | `Image ->
+        Error "Expected a video URL, got an image"
+    | `Video | `Unknown ->
         (match media_type with
          | "REELS" | "VIDEO" -> Ok ()
          | _ -> Error "Invalid video media type")
-    | `Image | `Unsupported ->
-        Error "Instagram videos must be MP4 or MOV format"
   
   (** Validate media URLs for carousel *)
   let validate_carousel_items ~media_urls =
