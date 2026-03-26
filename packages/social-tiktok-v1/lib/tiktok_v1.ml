@@ -1099,7 +1099,7 @@ module Make (Config : CONFIG) = struct
     let resolved_total_chunk_count =
       match total_chunk_count with
       | Some c when c > 0 -> c
-      | _ -> 1
+      | _ -> max 1 (video_size / resolved_chunk_size)
     in
     ensure_valid_token ~account_id
       (fun access_token ->
@@ -1213,7 +1213,7 @@ module Make (Config : CONFIG) = struct
     let resolved_total_chunk_count =
       match total_chunk_count with
       | Some c when c > 0 -> c
-      | _ -> 1
+      | _ -> max 1 (video_size / resolved_chunk_size)
     in
     ensure_valid_token ~account_id
       (fun access_token ->
