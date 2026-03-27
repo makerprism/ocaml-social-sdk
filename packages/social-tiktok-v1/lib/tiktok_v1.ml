@@ -1097,11 +1097,8 @@ module Make (Config : CONFIG) = struct
       | Some cs when cs > 0 -> cs
       | _ -> min video_size default_upload_chunk_size_bytes
     in
-    (* TikTok requires chunk_size >= 5MB, except when file < 5MB (single chunk) *)
-    let resolved_chunk_size =
-      if video_size < min_upload_chunk_size_bytes then video_size
-      else max min_upload_chunk_size_bytes resolved_chunk_size
-    in
+    (* TikTok requires chunk_size >= 5MB for FILE_UPLOAD, even for small files *)
+    let resolved_chunk_size = max min_upload_chunk_size_bytes resolved_chunk_size in
     let resolved_total_chunk_count =
       match total_chunk_count with
       | Some c when c > 0 -> c
@@ -1122,7 +1119,7 @@ module Make (Config : CONFIG) = struct
             ("total_chunk_count", `Int resolved_total_chunk_count);
           ]);
         ] |> Yojson.Basic.to_string in
-        
+
         Config.Http.post ~headers ~body video_init_url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
@@ -1216,11 +1213,8 @@ module Make (Config : CONFIG) = struct
       | Some cs when cs > 0 -> cs
       | _ -> min video_size default_upload_chunk_size_bytes
     in
-    (* TikTok requires chunk_size >= 5MB, except when file < 5MB (single chunk) *)
-    let resolved_chunk_size =
-      if video_size < min_upload_chunk_size_bytes then video_size
-      else max min_upload_chunk_size_bytes resolved_chunk_size
-    in
+    (* TikTok requires chunk_size >= 5MB for FILE_UPLOAD, even for small files *)
+    let resolved_chunk_size = max min_upload_chunk_size_bytes resolved_chunk_size in
     let resolved_total_chunk_count =
       match total_chunk_count with
       | Some c when c > 0 -> c
@@ -1608,9 +1602,8 @@ module Make (Config : CONFIG) = struct
                        let effective_chunk_size =
                          let requested = if upload_chunk_size_bytes <= 0 then video_size else upload_chunk_size_bytes in
                          let capped = min requested video_size in
-                         (* TikTok requires chunk_size >= 5MB, except for files < 5MB *)
-                         if video_size < min_upload_chunk_size_bytes then video_size
-                         else max min_upload_chunk_size_bytes capped
+                         (* TikTok requires chunk_size >= 5MB for FILE_UPLOAD, even for small files *)
+                         max min_upload_chunk_size_bytes capped
                        in
                        (* TikTok requires floor division: the last chunk absorbs the
                           remainder and may exceed chunk_size (up to 128 MB). *)
