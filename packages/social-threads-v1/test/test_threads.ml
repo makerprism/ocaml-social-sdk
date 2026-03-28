@@ -153,7 +153,7 @@ let test_oauth_url () =
   Mock_config.env_vars := [ ("THREADS_CLIENT_ID", "client-123") ];
   Threads.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"state-xyz"
     (fun url ->
-      assert (string_contains url "www.threads.net/oauth/authorize");
+      assert (string_contains url "www.threads.com/oauth/authorize");
       assert (query_param url "client_id" = Some "client-123");
       assert (query_param url "redirect_uri" = Some "https://example.com/callback");
       assert (query_param url "state" = Some "state-xyz");

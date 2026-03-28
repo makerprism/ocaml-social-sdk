@@ -8,6 +8,7 @@
 - Added canonical analytics conversion helpers for social-core metric normalization.
 - Added request-contract and malformed-payload tests for analytics endpoints.
 - Added token redaction guard for network errors surfaced from query-token analytics/read URLs.
+- Changed OAuth authorization endpoint from `threads.net` to `www.threads.com` to match Meta's April 2025 domain migration (threads.net now 301-redirects to threads.com, breaking the GDPR consent flow).
 
 ## 0.1.0 - 2026-02-12
 

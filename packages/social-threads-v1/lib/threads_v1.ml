@@ -257,7 +257,7 @@ module OAuth = struct
     let read = ["threads_basic"]
   end
 
-  let authorization_endpoint = "https://threads.net/oauth/authorize"
+  let authorization_endpoint = "https://www.threads.com/oauth/authorize"
   let token_endpoint = "https://graph.threads.net/v1.0/oauth/access_token"
 
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
