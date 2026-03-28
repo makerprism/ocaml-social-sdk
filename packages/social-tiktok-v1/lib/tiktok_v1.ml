@@ -1117,14 +1117,21 @@ module Make (Config : CONFIG) = struct
           ("Authorization", "Bearer " ^ access_token);
           ("Content-Type", "application/json; charset=UTF-8");
         ] in
+        (* For single-chunk uploads (including small files < 5MB), omit
+           chunk_size and total_chunk_count. TikTok rejects chunk_size < 5MB
+           even for small files, and chunk_size > video_size is also invalid.
+           Omitting these fields lets TikTok infer single-chunk upload. *)
+        let source_info_fields =
+          [("source", `String "FILE_UPLOAD");
+           ("video_size", `Int video_size)]
+          @ (if resolved_total_chunk_count > 1 then
+               [("chunk_size", `Int resolved_chunk_size);
+                ("total_chunk_count", `Int resolved_total_chunk_count)]
+             else [])
+        in
         let body = `Assoc [
           ("post_info", post_info_to_json post_info);
-          ("source_info", `Assoc [
-            ("source", `String "FILE_UPLOAD");
-            ("video_size", `Int video_size);
-            ("chunk_size", `Int resolved_chunk_size);
-            ("total_chunk_count", `Int resolved_total_chunk_count);
-          ]);
+          ("source_info", `Assoc source_info_fields);
         ] |> Yojson.Basic.to_string in
 
         Config.Http.post ~headers ~body video_init_url
@@ -1240,14 +1247,17 @@ module Make (Config : CONFIG) = struct
           ("Authorization", "Bearer " ^ access_token);
           ("Content-Type", "application/json; charset=UTF-8");
         ] in
+        let source_info_fields =
+          [("source", `String "FILE_UPLOAD");
+           ("video_size", `Int video_size)]
+          @ (if resolved_total_chunk_count > 1 then
+               [("chunk_size", `Int resolved_chunk_size);
+                ("total_chunk_count", `Int resolved_total_chunk_count)]
+             else [])
+        in
         let body = `Assoc [
           ("post_info", post_info_to_json post_info);
-          ("source_info", `Assoc [
-            ("source", `String "FILE_UPLOAD");
-            ("video_size", `Int video_size);
-            ("chunk_size", `Int resolved_chunk_size);
-            ("total_chunk_count", `Int resolved_total_chunk_count);
-          ]);
+          ("source_info", `Assoc source_info_fields);
         ] |> Yojson.Basic.to_string in
 
         Config.Http.post ~headers ~body inbox_video_init_url
