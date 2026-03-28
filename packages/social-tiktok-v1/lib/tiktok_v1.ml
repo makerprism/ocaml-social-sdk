@@ -1092,13 +1092,20 @@ module Make (Config : CONFIG) = struct
   
   (** Initialize video upload and get upload URL *)
   let init_video_upload ~account_id ~post_info ~video_size ?chunk_size ?total_chunk_count on_result =
+    if video_size <= 0 then
+      on_result (Error (Error_types.Validation_error [Error_types.Media_required]))
+    else
     let resolved_chunk_size =
       match chunk_size with
       | Some cs when cs > 0 -> cs
       | _ -> min video_size default_upload_chunk_size_bytes
     in
-    (* TikTok requires chunk_size >= 5MB for FILE_UPLOAD, even for small files *)
-    let resolved_chunk_size = max min_upload_chunk_size_bytes resolved_chunk_size in
+    (* TikTok requires chunk_size >= 5MB for multi-chunk uploads.
+       Per TikTok docs, videos < 5MB must set chunk_size = video_size. *)
+    let resolved_chunk_size =
+      if video_size < min_upload_chunk_size_bytes then video_size
+      else max min_upload_chunk_size_bytes resolved_chunk_size
+    in
     let resolved_total_chunk_count =
       match total_chunk_count with
       | Some c when c > 0 -> c
@@ -1208,13 +1215,20 @@ module Make (Config : CONFIG) = struct
       Uses the /v2/post/publish/inbox/video/init/ endpoint with post_mode MEDIA_UPLOAD.
   *)
   let init_inbox_video_upload ~account_id ~post_info ~video_size ?chunk_size ?total_chunk_count on_result =
+    if video_size <= 0 then
+      on_result (Error (Error_types.Validation_error [Error_types.Media_required]))
+    else
     let resolved_chunk_size =
       match chunk_size with
       | Some cs when cs > 0 -> cs
       | _ -> min video_size default_upload_chunk_size_bytes
     in
-    (* TikTok requires chunk_size >= 5MB for FILE_UPLOAD, even for small files *)
-    let resolved_chunk_size = max min_upload_chunk_size_bytes resolved_chunk_size in
+    (* TikTok requires chunk_size >= 5MB for multi-chunk uploads.
+       Per TikTok docs, videos < 5MB must set chunk_size = video_size. *)
+    let resolved_chunk_size =
+      if video_size < min_upload_chunk_size_bytes then video_size
+      else max min_upload_chunk_size_bytes resolved_chunk_size
+    in
     let resolved_total_chunk_count =
       match total_chunk_count with
       | Some c when c > 0 -> c
@@ -1602,8 +1616,10 @@ module Make (Config : CONFIG) = struct
                        let effective_chunk_size =
                          let requested = if upload_chunk_size_bytes <= 0 then video_size else upload_chunk_size_bytes in
                          let capped = min requested video_size in
-                         (* TikTok requires chunk_size >= 5MB for FILE_UPLOAD, even for small files *)
-                         max min_upload_chunk_size_bytes capped
+                         (* TikTok requires chunk_size >= 5MB for multi-chunk uploads.
+                            Per TikTok docs, videos < 5MB must set chunk_size = video_size. *)
+                         if video_size < min_upload_chunk_size_bytes then video_size
+                         else max min_upload_chunk_size_bytes capped
                        in
                        (* TikTok requires floor division: the last chunk absorbs the
                           remainder and may exceed chunk_size (up to 128 MB). *)
