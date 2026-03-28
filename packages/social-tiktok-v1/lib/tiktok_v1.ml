@@ -1111,6 +1111,11 @@ module Make (Config : CONFIG) = struct
       | Some c when c > 0 -> c
       | _ -> max 1 (video_size / resolved_chunk_size)
     in
+    (* Single-chunk upload: chunk_size must equal video_size *)
+    let resolved_chunk_size =
+      if resolved_total_chunk_count = 1 then video_size
+      else resolved_chunk_size
+    in
     ensure_valid_token ~account_id
       (fun access_token ->
         let headers = [
@@ -1235,6 +1240,11 @@ module Make (Config : CONFIG) = struct
       match total_chunk_count with
       | Some c when c > 0 -> c
       | _ -> max 1 (video_size / resolved_chunk_size)
+    in
+    (* Single-chunk upload: chunk_size must equal video_size *)
+    let resolved_chunk_size =
+      if resolved_total_chunk_count = 1 then video_size
+      else resolved_chunk_size
     in
     ensure_valid_token ~account_id
       (fun access_token ->
@@ -1625,9 +1635,12 @@ module Make (Config : CONFIG) = struct
                          if video_size < min_upload_chunk_size_bytes then video_size
                          else max min_upload_chunk_size_bytes capped
                        in
-                       (* TikTok requires floor division: the last chunk absorbs the
-                          remainder and may exceed chunk_size (up to 128 MB). *)
                        let total_chunk_count = max 1 (video_size / effective_chunk_size) in
+                       (* Single-chunk upload: chunk_size must equal video_size *)
+                       let effective_chunk_size =
+                         if total_chunk_count = 1 then video_size
+                         else effective_chunk_size
+                       in
                        init_video_upload
                          ~account_id
                          ~post_info
