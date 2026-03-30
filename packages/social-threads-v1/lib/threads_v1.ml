@@ -275,12 +275,12 @@ module OAuth = struct
   module Make (Http : HTTP_CLIENT) = struct
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
       let body =
-        Uri.encoded_of_query
-          [ ("client_id", [client_id]);
-            ("client_secret", [client_secret]);
-            ("grant_type", ["authorization_code"]);
-            ("redirect_uri", [redirect_uri]);
-            ("code", [code]) ]
+        Social_core.form_urlencode_kvs
+          [ ("client_id", client_id);
+            ("client_secret", client_secret);
+            ("grant_type", "authorization_code");
+            ("redirect_uri", redirect_uri);
+            ("code", code) ]
       in
       let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
       Http.post ~headers ~body token_endpoint
@@ -895,25 +895,25 @@ module Make (Config : CONFIG) = struct
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
     let body =
-      Uri.encoded_of_query
-        ([ ("media_type", ["TEXT"]);
-           ("text", [normalized_text]);
-           ("access_token", [access_token]) ]
+      Social_core.form_urlencode_kvs
+        ([ ("media_type", "TEXT");
+           ("text", normalized_text);
+           ("access_token", access_token) ]
          @
          (match reply_to_id with
-          | Some id -> [ ("reply_to_id", [id]) ]
+          | Some id -> [ ("reply_to_id", id) ]
           | None -> [])
          @
          (match reply_control with
-          | Some v when String.trim v <> "" -> [ ("reply_control", [String.trim v]) ]
+          | Some v when String.trim v <> "" -> [ ("reply_control", String.trim v) ]
           | _ -> [])
          @
          (match topic_tag with
-          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", [String.trim tag]) ]
+          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
           | _ -> [])
          @
          (match normalized_idempotency_key with
-          | Some key -> [ ("client_request_id", [key]) ]
+          | Some key -> [ ("client_request_id", key) ]
           | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -959,33 +959,33 @@ module Make (Config : CONFIG) = struct
       | GIF -> ("image_url", "GIF")
     in
     let body =
-      Uri.encoded_of_query
-         ([ ("media_type", [media_type]);
-           (media_field, [media_url]);
-           ("access_token", [access_token]) ]
+      Social_core.form_urlencode_kvs
+         ([ ("media_type", media_type);
+           (media_field, media_url);
+           ("access_token", access_token) ]
          @
-         (if is_carousel_item then [ ("is_carousel_item", ["true"]) ] else [])
+         (if is_carousel_item then [ ("is_carousel_item", "true") ] else [])
          @
          (match alt_text with
-          | Some txt when String.trim txt <> "" -> [("alt_text", [String.trim txt])]
+          | Some txt when String.trim txt <> "" -> [("alt_text", String.trim txt)]
           | _ -> [])
          @
-         (if normalized_text = "" || is_carousel_item then [] else [ ("text", [normalized_text]) ])
+         (if normalized_text = "" || is_carousel_item then [] else [ ("text", normalized_text) ])
          @
          (match reply_to_id with
-          | Some id -> [ ("reply_to_id", [id]) ]
+          | Some id -> [ ("reply_to_id", id) ]
           | None -> [])
          @
          (match reply_control with
-          | Some v when String.trim v <> "" -> [ ("reply_control", [String.trim v]) ]
+          | Some v when String.trim v <> "" -> [ ("reply_control", String.trim v) ]
           | _ -> [])
          @
          (match topic_tag with
-          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", [String.trim tag]) ]
+          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
           | _ -> [])
          @
          (match normalized_idempotency_key with
-          | Some key -> [ ("client_request_id", [key]) ]
+          | Some key -> [ ("client_request_id", key) ]
           | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -1060,9 +1060,9 @@ module Make (Config : CONFIG) = struct
 
   let publish_container ~access_token ~user_id ~creation_id on_result =
     let body =
-      Uri.encoded_of_query
-        [ ("creation_id", [creation_id]);
-          ("access_token", [access_token]) ]
+      Social_core.form_urlencode_kvs
+        [ ("creation_id", creation_id);
+          ("access_token", access_token) ]
     in
     let url = Printf.sprintf "%s/%s/threads_publish" threads_api_base user_id in
     let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
@@ -1214,19 +1214,19 @@ module Make (Config : CONFIG) = struct
       on_result =
     let normalized_text = String.trim text in
     let body =
-      Uri.encoded_of_query
-        ([ ("media_type", ["CAROUSEL"]);
-           ("children", [String.concat "," children_ids]);
-           ("access_token", [access_token]) ]
+      Social_core.form_urlencode_kvs
+        ([ ("media_type", "CAROUSEL");
+           ("children", String.concat "," children_ids);
+           ("access_token", access_token) ]
          @
-         (if normalized_text = "" then [] else [ ("text", [normalized_text]) ])
+         (if normalized_text = "" then [] else [ ("text", normalized_text) ])
          @
          (match reply_control with
-          | Some v when String.trim v <> "" -> [ ("reply_control", [String.trim v]) ]
+          | Some v when String.trim v <> "" -> [ ("reply_control", String.trim v) ]
           | _ -> [])
          @
          (match topic_tag with
-          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", [String.trim tag]) ]
+          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
           | _ -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in

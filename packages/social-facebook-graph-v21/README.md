@@ -253,8 +253,8 @@ Make a POST request to any Graph API endpoint.
 
 ```ocaml
 let params = [
-  ("message", ["Hello from OCaml!"]);
-  ("link", ["https://example.com"]);
+  ("message", "Hello from OCaml!");
+  ("link", "https://example.com");
 ] in
 
 Facebook.post ~path:"me/feed" ~access_token ~params

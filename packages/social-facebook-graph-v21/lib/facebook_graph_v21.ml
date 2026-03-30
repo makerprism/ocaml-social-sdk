@@ -1223,15 +1223,15 @@ module Make (Config : CONFIG) = struct
           let init_url = Printf.sprintf "%s/%s/video_stories" graph_api_base page_id in
           
           let init_params = [
-            ("upload_phase", ["start"]);
-            ("access_token", [page_access_token]);
+            ("upload_phase", "start");
+            ("access_token", page_access_token);
           ] @
           (match compute_app_secret_proof ~access_token:page_access_token with
-           | Some proof -> [("appsecret_proof", [proof])]
+           | Some proof -> [("appsecret_proof", proof)]
            | None -> [])
           in
-          
-          let init_body = Uri.encoded_of_query init_params in
+
+          let init_body = Social_core.form_urlencode_kvs init_params in
           let headers = [
             ("Content-Type", "application/x-www-form-urlencoded");
           ] in
@@ -1259,16 +1259,16 @@ module Make (Config : CONFIG) = struct
                         let finish_url = Printf.sprintf "%s/%s/video_stories" graph_api_base page_id in
                         
                         let finish_params = [
-                          ("upload_phase", ["finish"]);
-                          ("video_id", [video_id]);
-                          ("access_token", [page_access_token]);
+                          ("upload_phase", "finish");
+                          ("video_id", video_id);
+                          ("access_token", page_access_token);
                         ] @
                         (match compute_app_secret_proof ~access_token:page_access_token with
-                         | Some proof -> [("appsecret_proof", [proof])]
+                         | Some proof -> [("appsecret_proof", proof)]
                          | None -> [])
                         in
-                        
-                        let finish_body = Uri.encoded_of_query finish_params in
+
+                        let finish_body = Social_core.form_urlencode_kvs finish_params in
                         Config.Http.post ~headers ~body:finish_body finish_url
                           (fun finish_response ->
                             update_rate_limits finish_response;
@@ -1478,32 +1478,31 @@ module Make (Config : CONFIG) = struct
                         let url = Printf.sprintf "%s/%s/feed" graph_api_base page_id in
                         let attached_media_params =
                           List.mapi (fun i photo_id ->
-                            (Printf.sprintf "attached_media[%d]" i, [
-                              Yojson.Basic.to_string (`Assoc [("media_fbid", `String photo_id)])
-                            ])
+                            (Printf.sprintf "attached_media[%d]" i,
+                              Yojson.Basic.to_string (`Assoc [("media_fbid", `String photo_id)]))
                           ) photo_ids
                         in
-                        
+
                         let params =
                           [
-                            ("message", [text]);
+                            ("message", text);
                           ] @
                           attached_media_params @
                           (* Add link parameter for link posts *)
                           (match link with
-                           | Some l -> [("link", [l])]
+                           | Some l -> [("link", l)]
                            | None -> []) @
                           (* Add scheduled publishing parameters *)
                           (match scheduled_publish_time with
-                           | Some t -> [("scheduled_publish_time", [string_of_int t]); ("published", ["false"])]
+                           | Some t -> [("scheduled_publish_time", string_of_int t); ("published", "false")]
                            | None -> []) @
                           (* Add app secret proof *)
                           (match compute_app_secret_proof ~access_token:token with
-                           | Some proof -> [("appsecret_proof", [proof])]
+                           | Some proof -> [("appsecret_proof", proof)]
                            | None -> [])
                         in
-                        
-                        let body = Uri.encoded_of_query params in
+
+                        let body = Social_core.form_urlencode_kvs params in
                         let headers = [
                           ("Content-Type", "application/x-www-form-urlencoded");
                           ("Authorization", Printf.sprintf "Bearer %s" token);
@@ -2035,14 +2034,14 @@ module Make (Config : CONFIG) = struct
   (** Generic POST request to any Graph API endpoint *)
   let post ~path ~access_token ~params ?required_permissions on_result =
     let url = Printf.sprintf "%s/%s" graph_api_base path in
-    
+
     let all_params = params @
       (match compute_app_secret_proof ~access_token with
-       | Some proof -> [("appsecret_proof", [proof])]
+       | Some proof -> [("appsecret_proof", proof)]
        | None -> [])
     in
-    
-    let body = Uri.encoded_of_query all_params in
+
+    let body = Social_core.form_urlencode_kvs all_params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -2151,14 +2150,14 @@ module Make (Config : CONFIG) = struct
       let batch_json = Yojson.Basic.to_string (`List batch_items) in
       
       let params = [
-        ("batch", [batch_json]);
+        ("batch", batch_json);
       ] @
       (match compute_app_secret_proof ~access_token with
-       | Some proof -> [("appsecret_proof", [proof])]
+       | Some proof -> [("appsecret_proof", proof)]
        | None -> [])
       in
-      
-      let body = Uri.encoded_of_query params in
+
+      let body = Social_core.form_urlencode_kvs params in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -2218,7 +2217,7 @@ module Make (Config : CONFIG) = struct
   *)
   let post_comment ~post_id ~access_token ~message on_result =
     let path = Printf.sprintf "%s/comments" post_id in
-    let params = [("message", [message])] in
+    let params = [("message", message)] in
     post ~path ~access_token ~params
       (function
         | Ok response ->

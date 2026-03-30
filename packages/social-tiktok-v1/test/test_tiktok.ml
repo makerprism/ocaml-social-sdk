@@ -836,6 +836,29 @@ let test_oauth_exchange_request_includes_code_verifier_when_present () =
   assert (code_verifier = "pkce_verifier_123");
   print_endline "PASSED"
 
+let test_exchange_code_form_urlencodes_client_secret () =
+  print_string "Test: exchange_code form-urlencodes special chars in client_secret... ";
+  reset_mock_state ();
+  Mock_config.set_env "TIKTOK_CLIENT_SECRET" (Some "sec/ret=with+special@chars");
+  let success_called = ref false in
+  TikTok.exchange_code
+    ~code:"test_code"
+    ~redirect_uri:"https://example.com/callback"
+    (handle_api_result
+      (fun _ -> success_called := true)
+      (fun err -> failwith ("Unexpected error: " ^ err)));
+  assert !success_called;
+  let call =
+    match !(Mock_http.post_calls) with
+    | last :: _ -> last
+    | [] -> failwith "Expected at least one POST call"
+  in
+  let body = Option.value ~default:"" call.body in
+  let expected = "client_secret=sec%2Fret%3Dwith%2Bspecial%40chars" in
+  (try ignore (Str.search_forward (Str.regexp_string expected) body 0)
+   with Not_found -> failwith ("Expected body to contain " ^ expected ^ " but got: " ^ body));
+  print_endline "PASSED"
+
 let test_oauth_refresh_triggered_within_buffer () =
   print_string "Test: oauth_refresh_triggered_within_buffer... ";
   reset_mock_state ();
@@ -3053,6 +3076,9 @@ let () =
   test_thread_validation_missing_media ();
   test_thread_validation_invalid_media_url ();
   
+  print_endline "\n--- OAuth Encoding ---";
+  test_exchange_code_form_urlencodes_client_secret ();
+
   print_endline "\n--- API Operations ---";
   test_get_creator_info ();
   test_parse_creator_info_missing_optional_fields ();

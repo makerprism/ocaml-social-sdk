@@ -159,11 +159,11 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", redirect_uri);
+      ] in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
@@ -216,10 +216,10 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=refresh_token&refresh_token=%s"
-        (Uri.pct_encode refresh_token)
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
+      ] in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
@@ -1384,12 +1384,11 @@ module Make (Config : CONFIG) = struct
       let auth_string = String.trim client_id ^ ":" ^ String.trim client_secret in
       let auth_b64 = Base64.encode_exn auth_string in
       
-      (* Body contains grant_type, code, and redirect_uri *)
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", redirect_uri);
+      ] in
       
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");

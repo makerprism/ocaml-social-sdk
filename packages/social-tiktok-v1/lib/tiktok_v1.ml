@@ -143,20 +143,20 @@ module OAuth = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
-      let base_query = [
-        ("client_key", [client_key]);
-        ("client_secret", [client_secret]);
-        ("code", [code]);
-        ("grant_type", ["authorization_code"]);
-        ("redirect_uri", [redirect_uri]);
+      let base_params = [
+        ("client_key", client_key);
+        ("client_secret", client_secret);
+        ("code", code);
+        ("grant_type", "authorization_code");
+        ("redirect_uri", redirect_uri);
       ] in
-      let full_query =
+      let full_params =
         match code_verifier with
-        | Some cv when cv <> "" -> base_query @ [ ("code_verifier", [cv]) ]
-        | _ -> base_query
+        | Some cv when cv <> "" -> base_params @ [ ("code_verifier", cv) ]
+        | _ -> base_params
       in
-      let body = Uri.encoded_of_query full_query in
-      
+      let body = Social_core.form_urlencode_kvs full_params in
+
       Http.post ~headers ~body Metadata.token_endpoint
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -207,13 +207,13 @@ module OAuth = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
-      let body = Uri.encoded_of_query [
-        ("client_key", [client_key]);
-        ("client_secret", [client_secret]);
-        ("grant_type", ["refresh_token"]);
-        ("refresh_token", [refresh_token]);
+      let body = Social_core.form_urlencode_kvs [
+        ("client_key", client_key);
+        ("client_secret", client_secret);
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
       ] in
-      
+
       Http.post ~headers ~body Metadata.token_endpoint
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -260,7 +260,7 @@ module OAuth = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
-      let body = Uri.encoded_of_query [ ("access_token", [access_token]) ] in
+      let body = Social_core.form_urlencode_kvs [ ("access_token", access_token) ] in
 
       Http.post ~headers ~body url
         (fun response ->
@@ -1069,13 +1069,13 @@ module Make (Config : CONFIG) = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
-      let body = Uri.encoded_of_query [
-        ("client_key", [client_key]);
-        ("client_secret", [client_secret]);
-        ("grant_type", ["refresh_token"]);
-        ("refresh_token", [refresh_token]);
+      let body = Social_core.form_urlencode_kvs [
+        ("client_key", client_key);
+        ("client_secret", client_secret);
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
       ] in
-      
+
       Config.Http.post ~headers ~body token_url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -1971,20 +1971,20 @@ module Make (Config : CONFIG) = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
-      let base_query = [
-        ("client_key", [client_key]);
-        ("client_secret", [client_secret]);
-        ("code", [code]);
-        ("grant_type", ["authorization_code"]);
-        ("redirect_uri", [redirect_uri]);
+      let base_params = [
+        ("client_key", client_key);
+        ("client_secret", client_secret);
+        ("code", code);
+        ("grant_type", "authorization_code");
+        ("redirect_uri", redirect_uri);
       ] in
-      let full_query =
+      let full_params =
         match code_verifier with
-        | Some cv when cv <> "" -> base_query @ [ ("code_verifier", [cv]) ]
-        | _ -> base_query
+        | Some cv when cv <> "" -> base_params @ [ ("code_verifier", cv) ]
+        | _ -> base_params
       in
-      let body = Uri.encoded_of_query full_query in
-      
+      let body = Social_core.form_urlencode_kvs full_params in
+
       Config.Http.post ~headers ~body token_url
         (fun response ->
           if response.status >= 200 && response.status < 300 then

@@ -280,6 +280,29 @@ let test_token_exchange_rejects_missing_scopes () =
       assert (string_contains err "modposts");
       print_endline "✓ Token exchange rejects missing required scopes")
 
+let test_token_exchange_form_urlencodes_special_chars () =
+  Mock_config.reset ();
+  Mock_config.set_env "REDDIT_CLIENT_ID" "test_client";
+  Mock_config.set_env "REDDIT_CLIENT_SECRET" "test_secret";
+
+  let response_body = {|{
+    "access_token": "tok",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "scope": "submit read mysubreddits flair modposts"
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Reddit.exchange_code
+    ~code:"test_auth_code"
+    ~redirect_uri:"https://example.com/call?back=1"
+    (fun _ ->
+      let (_, _, _, body) = List.hd !Mock_http.requests in
+      assert (string_contains body "redirect_uri=https%3A%2F%2Fexample.com%2Fcall%3Fback%3D1");
+      print_endline "✓ Token exchange form-urlencodes special chars")
+    (fun err -> failwith ("Token exchange failed: " ^ err))
+
 (** {1 Validation Tests} *)
 
 let test_validate_title_empty () =
@@ -387,8 +410,8 @@ let test_submit_self_post () =
         assert (string_contains body "api_type=json");
         assert (string_contains body "kind=self");
         assert (string_contains body "sr=test");
-        assert (string_contains body "title=Test%20Title");
-        assert (string_contains body "text=Test%20Text");
+        assert (string_contains body "title=Test+Title");
+        assert (string_contains body "text=Test+Text");
         assert (string_contains body "spoiler=true");
         print_endline "✓ Submit self post")
       (fun err -> failwith ("Submit failed: " ^ err)))
@@ -1978,7 +2001,8 @@ let () =
   test_token_exchange ();
   test_token_exchange_basic_auth ();
   test_token_exchange_rejects_missing_scopes ();
-  
+  test_token_exchange_form_urlencodes_special_chars ();
+
   print_endline "\n--- Validation Tests ---";
   test_validate_title_empty ();
   test_validate_title_too_long ();
@@ -2062,7 +2086,7 @@ let () =
 
   print_endline "\n=== All tests passed! ===";
   print_endline "\nTest Coverage Summary:";
-  print_endline "  - OAuth 2.0 with Basic Auth (5 tests)";
+  print_endline "  - OAuth 2.0 with Basic Auth (6 tests)";
   print_endline "  - Content validation (7 tests)";
   print_endline "  - Post submission (4 tests)";
   print_endline "  - Subreddit operations (3 tests)";
@@ -2078,4 +2102,4 @@ let () =
   print_endline "  - Gallery posts (2 tests)";
   print_endline "  - Multi-subreddit posting (3 tests)";
   print_endline "";
-  print_endline "Total: 58 test functions\n"
+  print_endline "Total: 59 test functions\n"
