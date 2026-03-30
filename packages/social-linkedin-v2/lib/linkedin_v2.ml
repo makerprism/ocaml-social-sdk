@@ -179,7 +179,7 @@ module OAuth = struct
         @param client_secret OAuth 2.0 Client Secret
         @param redirect_uri Registered callback URL (must match authorization request)
         @param code Authorization code from callback
-        @param on_success Continuation receiving credentials
+        @param on_success Continuation receiving [(credentials, granted_scope)]
         @param on_error Continuation receiving error message
     *)
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
@@ -252,13 +252,14 @@ module OAuth = struct
               
               let token_type_str = json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer" in
 
+              let scope = json |> member "scope" |> to_string_option in
               let creds : credentials = {
                 access_token;
                 refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
               } in
-              on_success creds
+              on_success (creds, scope)
             with e ->
               on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
           else
@@ -1494,7 +1495,9 @@ module Make (Config : CONFIG) = struct
       on_success url
     )
   
-  (** Exchange OAuth code for access token *)
+  (** Exchange OAuth code for access token.
+      [on_success] receives [(credentials, granted_scope)] where [granted_scope]
+      is the [scope] field from LinkedIn's token response ([None] if absent). *)
   let exchange_code ~code ~redirect_uri on_success on_error =
     let raw_client_id = Config.get_env "LINKEDIN_CLIENT_ID" |> Option.value ~default:"" in
     let raw_client_secret = Config.get_env "LINKEDIN_CLIENT_SECRET" |> Option.value ~default:"" in
@@ -1588,13 +1591,14 @@ module Make (Config : CONFIG) = struct
                 | None -> Ptime.to_rfc3339 now
               in
               
+              let scope = json |> member "scope" |> to_string_option in
               let credentials = {
                 access_token;
                 refresh_token;
                 expires_at = Some expires_at;
                 auth_type = auth_type_of_string (json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer");
               } in
-              on_success credentials
+              on_success (credentials, scope)
             with e ->
               on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
           else
@@ -1621,7 +1625,7 @@ module Make (Config : CONFIG) = struct
   let exchange_code_and_get_organizations ~code ~redirect_uri ?role ?(acl_state="APPROVED")
       on_success on_error =
     exchange_code ~code ~redirect_uri
-      (fun creds ->
+      (fun (creds, _scope) ->
         let normalized_role = normalize_acl_role_filter role in
         let normalized_state = normalize_acl_state_filter (Some acl_state) in
         fetch_organization_accesses_by_token ?role:normalized_role ?state:normalized_state

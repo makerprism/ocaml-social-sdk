@@ -178,7 +178,8 @@ let test_token_exchange () =
   let response_body = {|{
     "access_token": "new_access_token_123",
     "refresh_token": "new_refresh_token_456",
-    "expires_in": 5184000
+    "expires_in": 5184000,
+    "scope": "openid profile email w_member_social"
   }|} in
   
   Mock_http.set_response { status = 200; body = response_body; headers = [] };
@@ -186,11 +187,12 @@ let test_token_exchange () =
   LinkedIn.exchange_code 
     ~code:"test_code"
     ~redirect_uri:"https://example.com/callback"
-    (fun creds ->
+    (fun (creds, scope) ->
       assert (creds.access_token = "new_access_token_123");
       assert (creds.refresh_token = Some "new_refresh_token_456");
       assert (creds.auth_type = Bearer);
       assert (creds.expires_at <> None);
+      assert (scope = Some "openid profile email w_member_social");
       let requests = !Mock_http.requests in
       (match requests with
       | ("POST", url, headers, body) :: _ ->
@@ -233,7 +235,7 @@ let test_token_exchange_non_invalid_client_no_retry () =
   LinkedIn.exchange_code
     ~code:"test_code"
     ~redirect_uri:"https://example.com/callback"
-    (fun _ -> failwith "Expected non-invalid_client response to fail without retry")
+    (fun (_creds, _scope) -> failwith "Expected non-invalid_client response to fail without retry")
     (fun err ->
       assert (string_contains err "invalid_grant" || string_contains err "400");
       let requests = !Mock_http.requests in
@@ -267,7 +269,7 @@ let test_exchange_code_rejects_whitespace_code () =
   Mock_config.set_env "LINKEDIN_CLIENT_ID" "test_client";
   Mock_config.set_env "LINKEDIN_CLIENT_SECRET" "test_secret";
   LinkedIn.exchange_code ~code:" code " ~redirect_uri:"https://example.com/callback"
-    (fun _ -> failwith "Expected whitespace code rejection")
+    (fun (_creds, _scope) -> failwith "Expected whitespace code rejection")
     (fun err ->
       assert (string_contains err "authorization code");
       print_endline "✓ exchange_code rejects whitespace code")
@@ -3865,7 +3867,7 @@ let test_token_exchange_invalid () =
   LinkedIn.exchange_code 
     ~code:"bad_code"
     ~redirect_uri:"https://example.com/callback"
-    (fun _ -> failwith "Should fail with invalid grant")
+    (fun (_creds, _scope) -> failwith "Should fail with invalid grant")
     (fun err ->
       assert (string_contains err "400" || string_contains err "invalid");
       print_endline "✓ Token exchange invalid response handling")
@@ -3882,10 +3884,11 @@ let test_token_exchange_missing_fields () =
   LinkedIn.exchange_code 
     ~code:"test_code"
     ~redirect_uri:"https://example.com/callback"
-    (fun creds ->
+    (fun (creds, scope) ->
       (* Should handle missing refresh_token gracefully *)
       assert (creds.access_token = "token123");
       assert (creds.refresh_token = None);
+      assert (scope = None);
       print_endline "✓ Token exchange with missing optional fields")
     (fun err -> failwith ("Should succeed with minimal response: " ^ err))
 
@@ -3901,7 +3904,7 @@ let test_token_exchange_blank_refresh_token () =
   LinkedIn.exchange_code
     ~code:"test_code"
     ~redirect_uri:"https://example.com/callback"
-    (fun creds ->
+    (fun (creds, _scope) ->
       assert (creds.access_token = "token123");
       assert (creds.refresh_token = None);
       print_endline "✓ Token exchange blank refresh token handled")
