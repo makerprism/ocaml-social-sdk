@@ -395,6 +395,24 @@ type account_analytics = {
   recent_video_analytics : video_analytics list;
 }
 
+(** Video metadata from /v2/video/list/ for import *)
+type video_list_item = {
+  vli_id : string;
+  vli_title : string;
+  vli_description : string;
+  vli_create_time : int;
+  vli_share_url : string;
+  vli_cover_image_url : string;
+  vli_duration : int;
+}
+
+(** Paginated video list response *)
+type video_list_page = {
+  videos : video_list_item list;
+  cursor : int;
+  has_more : bool;
+}
+
 let account_metric_names =
   [ "follower_count"; "following_count"; "likes_count"; "video_count" ]
 
@@ -736,6 +754,47 @@ let parse_video_ids_response json =
   with e ->
     Error (Printf.sprintf "Failed to parse video IDs: %s" (Printexc.to_string e))
 
+let read_json_string_field ~obj ~field ~default =
+  let open Yojson.Basic.Util in
+  try
+    let value = obj |> member field in
+    if value = `Null then default else to_string value
+  with _ -> default
+
+let parse_video_list_page_response json =
+  let open Yojson.Basic.Util in
+  try
+    let data = json |> member "data" in
+    let videos_json =
+      try data |> member "videos" |> to_list
+      with _ -> []
+    in
+    let videos =
+      videos_json
+      |> List.filter_map (fun video ->
+           try
+             let id = video |> member "id" |> to_string in
+             if id = "" then None
+             else Some {
+               vli_id = id;
+               vli_title = read_json_string_field ~obj:video ~field:"title" ~default:"";
+               vli_description = read_json_string_field ~obj:video ~field:"video_description" ~default:"";
+               vli_create_time = read_json_int_field ~obj:video ~field:"create_time" ~default:0;
+               vli_share_url = read_json_string_field ~obj:video ~field:"share_url" ~default:"";
+               vli_cover_image_url = read_json_string_field ~obj:video ~field:"cover_image_url" ~default:"";
+               vli_duration = read_json_int_field ~obj:video ~field:"duration" ~default:0;
+             }
+           with _ -> None)
+    in
+    let cursor = read_json_int_field ~obj:data ~field:"cursor" ~default:0 in
+    let has_more =
+      try data |> member "has_more" |> to_bool
+      with _ -> false
+    in
+    Ok { videos; cursor; has_more }
+  with e ->
+    Error (Printf.sprintf "Failed to parse video list page: %s" (Printexc.to_string e))
+
 let parse_video_analytics_response json =
   let open Yojson.Basic.Util in
   try
@@ -803,6 +862,7 @@ module Make (Config : CONFIG) = struct
   let status_fetch_url = api_base_url ^ "/post/publish/status/fetch/"
   let user_info_analytics_url = api_base_url ^ "/user/info/?fields=follower_count,following_count,likes_count,video_count"
   let video_list_url = api_base_url ^ "/video/list/?fields=id"
+  let video_list_import_url = api_base_url ^ "/video/list/?fields=id,title,video_description,create_time,share_url,cover_image_url,duration"
   let video_query_url = api_base_url ^ "/video/query/?fields=id,like_count,comment_count,share_count,view_count"
   
   (** {1 Validation Functions} *)
@@ -1523,6 +1583,41 @@ module Make (Config : CONFIG) = struct
         | Ok analytics ->
             on_result (Ok (to_canonical_video_analytics_series analytics))
         | Error err -> on_result (Error err))
+
+  (** List videos with full metadata for import.
+
+      Fetches a page of videos with title, description, create_time, share_url,
+      cover_image_url, and duration. Supports cursor-based pagination.
+
+      @param max_count Number of videos per page (max 20)
+      @param cursor Pagination cursor from previous response (0 for first page)
+  *)
+  let list_videos ~account_id ?(max_count=20) ?(cursor=0) on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json; charset=UTF-8");
+        ] in
+        let body =
+          let fields = [("max_count", `Int max_count)] in
+          let fields = if cursor > 0 then ("cursor", `Int cursor) :: fields else fields in
+          `Assoc fields |> Yojson.Basic.to_string
+        in
+        Config.Http.post ~headers ~body video_list_import_url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (try
+                 let json = Yojson.Basic.from_string response.body in
+                 (match parse_video_list_page_response json with
+                  | Ok page -> on_result (Ok page)
+                  | Error msg -> on_result (Error (Error_types.Internal_error msg)))
+               with e ->
+                 on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse video list response: %s" (Printexc.to_string e)))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.list"] ())))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
 
   (** Callback-style wrapper for get_account_analytics. *)
   let get_account_analytics_callbacks ~account_id
