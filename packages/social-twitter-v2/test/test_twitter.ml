@@ -1119,6 +1119,30 @@ let test_oauth_exchange_failure_redacts_sensitive_response () =
    | None -> failwith "No result in OAuth exchange redaction test");
   print_endline "✓ OAuth exchange failure redaction test passed"
 
+let test_oauth_exchange_code_form_urlencodes_special_chars () =
+  oauth_contract_last_url := "";
+  oauth_contract_last_headers := [];
+  oauth_contract_last_body := "";
+  oauth_contract_status := 200;
+  oauth_contract_body := {|{"access_token":"tok","refresh_token":"ref","expires_in":7200,"token_type":"Bearer"}|};
+  let result = ref None in
+  OAuth_contract_client.exchange_code
+    ~client_id:"test_client"
+    ~client_secret:"sec/ret=with+special@chars"
+    ~redirect_uri:"https://example.com/call?back=1"
+    ~code:"test_code"
+    ~code_verifier:"verifier"
+    (fun _ -> result := Some (Ok ()))
+    (fun err -> result := Some (Error err));
+
+  (match !result with
+   | Some (Ok ()) ->
+       assert (string_contains !oauth_contract_last_body "code_verifier=verifier");
+       assert (string_contains !oauth_contract_last_body "redirect_uri=https%3A%2F%2Fexample.com%2Fcall%3Fback%3D1")
+   | Some (Error err) -> failwith ("Expected OAuth exchange success but got error: " ^ err)
+   | None -> failwith "No result in OAuth exchange form-urlencode test");
+  print_endline "✓ OAuth exchange_code form-urlencodes special chars"
+
 let last_reply_quote_body = ref None
 
 module Mock_http_reply_quote_contract : Social_core.HTTP_CLIENT = struct
@@ -5949,6 +5973,7 @@ let () =
   test_oauth_exchange_code_deterministic_failure ();
   test_oauth_redaction_helper ();
   test_oauth_exchange_failure_redacts_sensitive_response ();
+  test_oauth_exchange_code_form_urlencodes_special_chars ();
   test_reply_payload_contract ();
   test_quote_payload_contract ();
   test_reply_payload_contract_includes_reply_settings_and_community_id ();

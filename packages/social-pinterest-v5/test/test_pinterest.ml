@@ -224,6 +224,31 @@ let test_token_exchange_rejects_missing_scopes () =
       assert (string_contains err "pins:write");
       print_endline "✓ Token exchange rejects missing required scopes")
 
+let test_token_exchange_form_urlencodes_special_chars () =
+  Mock_config.reset ();
+  Mock_config.set_env "PINTEREST_CLIENT_ID" "test_client";
+  Mock_config.set_env "PINTEREST_CLIENT_SECRET" "test_secret";
+
+  let response_body = {|{
+    "access_token": "new_access_token_123",
+    "refresh_token": "refresh_token_456",
+    "token_type": "bearer",
+    "expires_in": 2592000,
+    "scope": "boards:read,pins:read,pins:write,user_accounts:read"
+  }|} in
+
+  Mock_http.set_responses [{ status = 200; body = response_body; headers = [] }];
+
+  Pinterest.exchange_code
+    ~code:"test_code"
+    ~redirect_uri:"https://example.com/call?back=1"
+    (fun _creds ->
+      let chronological = List.rev !Mock_http.requests in
+      let (_, _, _, body) = List.hd chronological in
+      assert (string_contains body "redirect_uri=https%3A%2F%2Fexample.com%2Fcall%3Fback%3D1");
+      print_endline "✓ Token exchange form-urlencodes special chars in redirect_uri")
+    (fun err -> failwith ("Token exchange form encoding failed: " ^ err))
+
 let test_post_single_refreshes_expired_token () =
   Mock_config.reset ();
   Mock_config.set_env "PINTEREST_CLIENT_ID" "test_client";
@@ -1500,6 +1525,7 @@ let () =
   test_oauth_url ();
   test_token_exchange ();
   test_token_exchange_rejects_missing_scopes ();
+  test_token_exchange_form_urlencodes_special_chars ();
   test_post_single_refreshes_expired_token ();
   test_post_single_expired_token_without_refresh_fails ();
   test_content_validation ();

@@ -173,11 +173,11 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
-      let body = Uri.encoded_of_query [
-        ("grant_type", ["authorization_code"]);
-        ("code", [code]);
-        ("redirect_uri", [redirect_uri]);
-        ("code_verifier", [code_verifier]);
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", redirect_uri);
+        ("code_verifier", code_verifier);
       ] in
       
       let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
@@ -227,10 +227,10 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-      let body = Uri.encoded_of_query [
-        ("grant_type", ["refresh_token"]);
-        ("refresh_token", [refresh_token]);
-        ("client_id", [client_id]);
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
+        ("client_id", client_id);
       ] in
       
       let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
@@ -280,8 +280,8 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let revoke_token ~client_id ~client_secret ~token on_success on_error =
-      let body = Uri.encoded_of_query [
-        ("token", [token]);
+      let body = Social_core.form_urlencode_kvs [
+        ("token", token);
       ] in
       
       let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
@@ -851,12 +851,12 @@ module Make (Config : CONFIG) = struct
   let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
     let url = "https://api.twitter.com/2/oauth2/token" in
     
-    let body = Uri.encoded_of_query [
-      ("grant_type", ["refresh_token"]);
-      ("refresh_token", [refresh_token]);
-      ("client_id", [client_id]);
+    let body = Social_core.form_urlencode_kvs [
+      ("grant_type", "refresh_token");
+      ("refresh_token", refresh_token);
+      ("client_id", client_id);
     ] in
-    
+
     let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
     let headers = [
       ("Authorization", "Basic " ^ auth);
@@ -3488,13 +3488,13 @@ module Make (Config : CONFIG) = struct
     let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
     let redirect_uri = Config.get_env "TWITTER_LINK_REDIRECT_URI" |> Option.value ~default:"" in
     
-    let body = Uri.encoded_of_query [
-      ("grant_type", ["authorization_code"]);
-      ("code", [code]);
-      ("redirect_uri", [redirect_uri]);
-      ("code_verifier", [code_verifier]);
+    let body = Social_core.form_urlencode_kvs [
+      ("grant_type", "authorization_code");
+      ("code", code);
+      ("redirect_uri", redirect_uri);
+      ("code_verifier", code_verifier);
     ] in
-    
+
     let auth = Base64.encode_exn (client_id ^ ":" ^ client_secret) in
     let headers = [
       ("Authorization", "Basic " ^ auth);

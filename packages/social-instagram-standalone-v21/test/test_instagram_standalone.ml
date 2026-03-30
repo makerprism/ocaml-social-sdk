@@ -811,6 +811,29 @@ let test_standalone_oauth_refresh_token () =
         print_endline "PASS Standalone OAuth refresh_token (with auth_type normalization)")
       (fun err -> failwith ("Standalone OAuth refresh_token failed: " ^ err)))
 
+(** Test: Standalone exchange_code form-urlencodes special characters in client_secret *)
+let test_standalone_exchange_code_form_urlencodes_special_chars () =
+  Mock_http.reset ();
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"access_token":"tok","user_id":"123","token_type":"bearer"}|};
+    headers = [];
+  };
+
+  OAuth_standalone_client.exchange_code
+    ~client_id:"app_id"
+    ~client_secret:"sec/ret=with+special@chars"
+    ~redirect_uri:"https://example.com/cb"
+    ~code:"code"
+    (handle_result
+      (fun (_creds, _user_id) ->
+        let requests = !Mock_http.requests in
+        let post_req = List.find (fun (meth, _, _, _) -> meth = "POST") requests in
+        let (_, _, _, body) = post_req in
+        assert (string_contains body "client_secret=sec%2Fret%3Dwith%2Bspecial%40chars");
+        print_endline "PASS Standalone exchange_code form-urlencodes special chars in client_secret")
+      (fun err -> failwith ("Standalone exchange_code form-urlencodes failed: " ^ err)))
+
 (** Test: OAuth.Make.exchange_code calls on_response callback *)
 let test_standalone_exchange_code_on_response () =
   Mock_http.reset ();
@@ -1290,6 +1313,7 @@ let () =
   test_standalone_exchange_code_normalizes_auth_type ();
   test_standalone_exchange_code_missing_user_id ();
   test_standalone_exchange_code_http_error ();
+  test_standalone_exchange_code_form_urlencodes_special_chars ();
   test_standalone_exchange_long_lived_happy_path ();
   test_standalone_exchange_long_lived_normalizes_auth_type ();
   test_standalone_exchange_long_lived_appsecret_proof ();

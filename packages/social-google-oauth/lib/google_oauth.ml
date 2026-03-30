@@ -49,14 +49,14 @@ let expires_at_of_expires_in expires_in =
 
 module Make (Http : Social_core.HTTP_CLIENT) = struct
   let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
-    let body = Printf.sprintf
-      "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s&code_verifier=%s"
-      (Uri.pct_encode code)
-      (Uri.pct_encode redirect_uri)
-      (Uri.pct_encode client_id)
-      (Uri.pct_encode client_secret)
-      (Uri.pct_encode code_verifier)
-    in
+    let body = Social_core.form_urlencode_kvs [
+      ("grant_type", "authorization_code");
+      ("code", code);
+      ("redirect_uri", redirect_uri);
+      ("client_id", client_id);
+      ("client_secret", client_secret);
+      ("code_verifier", code_verifier);
+    ] in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
     ] in
@@ -93,12 +93,12 @@ module Make (Http : Social_core.HTTP_CLIENT) = struct
 
   (** If Google does not return a new refresh token, the original is preserved. *)
   let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-    let body = Printf.sprintf
-      "grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s"
-      (Uri.pct_encode refresh_token)
-      (Uri.pct_encode client_id)
-      (Uri.pct_encode client_secret)
-    in
+    let body = Social_core.form_urlencode_kvs [
+      ("grant_type", "refresh_token");
+      ("refresh_token", refresh_token);
+      ("client_id", client_id);
+      ("client_secret", client_secret);
+    ] in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
     ] in

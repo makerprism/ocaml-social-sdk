@@ -1114,17 +1114,17 @@ module Make (Config : CONFIG) = struct
           let json_tags = List.map (fun (username, x, y) ->
             Printf.sprintf {|{"username":"%s","x":%f,"y":%f}|} username x y
           ) tags in
-          [("user_tags", [Printf.sprintf "[%s]" (String.concat "," json_tags)])]
+          [("user_tags", Printf.sprintf "[%s]" (String.concat "," json_tags))]
     in
     let location_params = match location_id with
-      | Some loc -> [("location_id", [loc])]
+      | Some loc -> [("location_id", loc)]
       | None -> []
     in
     let collab_params = match collaborators with
       | [] -> []
       | collabs ->
           let json_collabs = List.map (fun c -> Printf.sprintf {|"%s"|} c) collabs in
-          [("collaborators", [Printf.sprintf "[%s]" (String.concat "," json_collabs)])]
+          [("collaborators", Printf.sprintf "[%s]" (String.concat "," json_collabs))]
     in
     user_tag_params @ location_params @ collab_params
 
@@ -1133,31 +1133,31 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let base_params = [
-      ("image_url", [image_url]);
+      ("image_url", image_url);
     ] in
 
     (* Add alt text if provided *)
     let base_with_alt = match alt_text with
       | Some alt when String.length alt > 0 ->
-          ("custom_accessibility_caption", [alt]) :: base_params
+          ("custom_accessibility_caption", alt) :: base_params
       | _ -> base_params
     in
 
     let params =
       (if is_carousel_item then
         (* Carousel items don't include caption, and mark as carousel item *)
-        ("is_carousel_item", ["true"]) :: base_with_alt
+        ("is_carousel_item", "true") :: base_with_alt
       else
         (* Regular posts include caption *)
-        ("caption", [caption]) :: base_with_alt) @
+        ("caption", caption) :: base_with_alt) @
       (tagging_params ~user_tags ?location_id ~collaborators ()) @
       (* Add app secret proof if available *)
       (match compute_app_secret_proof ~access_token with
-       | Some proof -> [("appsecret_proof", [proof])]
+       | Some proof -> [("appsecret_proof", proof)]
        | None -> [])
     in
 
-    let body = Uri.encoded_of_query params in
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -1183,50 +1183,50 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let base_params = [
-      ("media_type", [media_type]); (* "VIDEO" or "REELS" *)
-      ("video_url", [video_url]);
+      ("media_type", media_type); (* "VIDEO" or "REELS" *)
+      ("video_url", video_url);
     ] in
 
     (* Add alt text if provided *)
     let base_with_alt = match alt_text with
       | Some alt when String.length alt > 0 ->
-          ("custom_accessibility_caption", [alt]) :: base_params
+          ("custom_accessibility_caption", alt) :: base_params
       | _ -> base_params
     in
 
     (* Add reel-specific parameters *)
     let reel_params =
       (match share_to_feed with
-       | Some true -> [("share_to_feed", ["true"])]
-       | Some false -> [("share_to_feed", ["false"])]
+       | Some true -> [("share_to_feed", "true")]
+       | Some false -> [("share_to_feed", "false")]
        | None -> []) @
       (match cover_url with
-       | Some u -> [("cover_url", [u])]
+       | Some u -> [("cover_url", u)]
        | None -> []) @
       (match thumb_offset with
-       | Some ms -> [("thumb_offset", [string_of_int ms])]
+       | Some ms -> [("thumb_offset", string_of_int ms)]
        | None -> []) @
       (match audio_name with
-       | Some name -> [("audio_name", [name])]
+       | Some name -> [("audio_name", name)]
        | None -> [])
     in
 
     let params =
       (if is_carousel_item then
         (* Carousel items don't include caption, and mark as carousel item *)
-        ("is_carousel_item", ["true"]) :: base_with_alt
+        ("is_carousel_item", "true") :: base_with_alt
       else
         (* Regular posts include caption *)
-        ("caption", [caption]) :: base_with_alt) @
+        ("caption", caption) :: base_with_alt) @
       (tagging_params ~user_tags ?location_id ~collaborators ()) @
       reel_params @
       (* Add app secret proof if available *)
       (match compute_app_secret_proof ~access_token with
-       | Some proof -> [("appsecret_proof", [proof])]
+       | Some proof -> [("appsecret_proof", proof)]
        | None -> [])
     in
 
-    let body = Uri.encoded_of_query params in
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -1252,17 +1252,17 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
     
     let params = [
-      ("media_type", ["CAROUSEL"]);
-      ("children", [String.concat "," children_ids]);
-      ("caption", [caption]);
+      ("media_type", "CAROUSEL");
+      ("children", String.concat "," children_ids);
+      ("caption", caption);
     ] @
     (* Add app secret proof if available *)
     (match compute_app_secret_proof ~access_token with
-     | Some proof -> [("appsecret_proof", [proof])]
+     | Some proof -> [("appsecret_proof", proof)]
      | None -> [])
     in
-    
-    let body = Uri.encoded_of_query params in
+
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -1288,15 +1288,15 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/media_publish" graph_api_base ig_user_id in
     
     let params = [
-      ("creation_id", [container_id]);
+      ("creation_id", container_id);
     ] @
     (* Add app secret proof if available *)
     (match compute_app_secret_proof ~access_token with
-     | Some proof -> [("appsecret_proof", [proof])]
+     | Some proof -> [("appsecret_proof", proof)]
      | None -> [])
     in
-    
-    let body = Uri.encoded_of_query params in
+
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -1527,14 +1527,14 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/comments" graph_api_base media_id in
 
     let params = [
-      ("message", [message]);
+      ("message", message);
     ] @
     (match compute_app_secret_proof ~access_token with
-     | Some proof -> [("appsecret_proof", [proof])]
+     | Some proof -> [("appsecret_proof", proof)]
      | None -> [])
     in
 
-    let body = Uri.encoded_of_query params in
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -1753,16 +1753,16 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
     
     let params = [
-      ("media_type", ["STORIES"]);
-      ("image_url", [image_url]);
+      ("media_type", "STORIES");
+      ("image_url", image_url);
     ] @
     (* Add app secret proof if available *)
     (match compute_app_secret_proof ~access_token with
-     | Some proof -> [("appsecret_proof", [proof])]
+     | Some proof -> [("appsecret_proof", proof)]
      | None -> [])
     in
-    
-    let body = Uri.encoded_of_query params in
+
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
@@ -1799,16 +1799,16 @@ module Make (Config : CONFIG) = struct
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
     
     let params = [
-      ("media_type", ["STORIES"]);
-      ("video_url", [video_url]);
+      ("media_type", "STORIES");
+      ("video_url", video_url);
     ] @
     (* Add app secret proof if available *)
     (match compute_app_secret_proof ~access_token with
-     | Some proof -> [("appsecret_proof", [proof])]
+     | Some proof -> [("appsecret_proof", proof)]
      | None -> [])
     in
-    
-    let body = Uri.encoded_of_query params in
+
+    let body = Social_core.form_urlencode_kvs params in
     let headers = [
       ("Content-Type", "application/x-www-form-urlencoded");
       ("Authorization", Printf.sprintf "Bearer %s" access_token);

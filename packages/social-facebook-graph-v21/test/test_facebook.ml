@@ -556,7 +556,7 @@ let test_post_required_permissions_override () =
   Facebook.post
     ~path:"me/feed"
     ~access_token:"token"
-    ~params:[("message", ["hello"])]
+    ~params:[("message", "hello")]
     ~required_permissions:["custom_post_scope"]
     (function
       | Ok _ -> failwith "Should have failed with permission error"
@@ -2405,6 +2405,31 @@ let test_post_comment () =
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Post comment failed: " ^ Error_types.error_to_string e))
 
+(** Test: post_comment form-urlencodes special characters in the POST body *)
+let test_post_comment_form_urlencodes_special_chars () =
+  Mock_config.reset ();
+
+  let response_body = {|{"id": "12345_99999"}|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.post_comment
+    ~post_id:"12345"
+    ~access_token:"test_token"
+    ~message:"Hello & welcome = great + news!"
+    (function
+      | Ok comment_id ->
+          assert (comment_id = "12345_99999");
+          let requests = !Mock_http.requests in
+          (match requests with
+          | (method_, url, _, body) :: _ ->
+              assert (method_ = "POST");
+              assert (string_contains url "12345/comments");
+              (* Spaces should be encoded as + *)
+              assert (string_contains body "Hello+%26+welcome+%3D+great+%2B+news%21");
+              print_endline "✓ Post comment form-urlencodes special characters"
+          | [] -> failwith "No requests made")
+      | Error e -> failwith ("Post comment special chars failed: " ^ Error_types.error_to_string e))
+
 (** Test: Get comments *)
 let test_get_comments () =
   Mock_config.reset ();
@@ -2774,6 +2799,9 @@ let () =
   test_validate_story_invalid_url ();
   test_validate_story_invalid_format ();
   
+  print_endline "\n--- Form URL Encoding Tests ---";
+  test_post_comment_form_urlencodes_special_chars ();
+
   print_endline "\n--- Video Reel Tests ---";
   test_upload_video_reel ();
   test_post_reel ();
@@ -2801,4 +2829,4 @@ let () =
   test_get_page_info_partial ();
   test_get_page_info_error ();
 
-  print_endline "\n=== All 79 tests passed! ===\n"
+  print_endline "\n=== All 80 tests passed! ===\n"

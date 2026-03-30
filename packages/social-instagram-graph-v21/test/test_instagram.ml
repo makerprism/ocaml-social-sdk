@@ -2052,6 +2052,45 @@ let test_post_reel_e2e_with_params () =
         print_endline "✓ post_reel e2e with reel-specific params")
       (fun err -> failwith ("post_reel e2e with params failed: " ^ err)))
 
+(** Test: create_image_container form-urlencodes special characters in POST body *)
+let test_create_image_container_urlencodes_special_chars () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "container_enc"}|};
+    headers = [];
+  };
+
+  let caption_with_specials = "hello world & foo=bar + 100% café" in
+  Instagram.create_image_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~image_url:"https://example.com/image.jpg"
+    ~caption:caption_with_specials
+    ~alt_text:None
+    ~is_carousel_item:false
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "container_enc");
+        (* Inspect the captured POST body *)
+        let (_method_, _url, _headers, body) = List.hd !Mock_http.requests in
+        (* Spaces must be encoded (as + or %20), not left literal *)
+        assert (not (string_contains body " "));
+        (* Ampersands in values must be percent-encoded so they don't
+           look like param separators *)
+        assert (string_contains body "%26");
+        (* Equals signs in values must be percent-encoded *)
+        assert (string_contains body "%3D");
+        (* Plus signs must be percent-encoded (not left as literal '+') *)
+        assert (string_contains body "%2B");
+        (* Percent sign in '100%' must be encoded as %25 *)
+        assert (string_contains body "%25");
+        (* The encoded body should still be parseable: caption key present *)
+        assert (string_contains body "caption=");
+        print_endline "✓ create_image_container form-urlencodes special characters")
+      (fun err -> failwith ("create_image_container urlencoding failed: " ^ err)))
+
 (** Run all tests *)
 let () =
   print_endline "\n=== Instagram Provider Tests (Facebook Login) ===\n";
@@ -2072,6 +2111,7 @@ let () =
   test_content_validation ();
   test_post_single ();
   test_post_requires_media ();
+  test_create_image_container_urlencodes_special_chars ();
   test_post_single_rejects_unsupported_media ();
   test_validate_post_media_required ();
 

@@ -254,11 +254,11 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", redirect_uri);
+      ] in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
@@ -311,10 +311,10 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
-      let body = Printf.sprintf
-        "grant_type=refresh_token&refresh_token=%s"
-        (Uri.pct_encode refresh_token)
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
+      ] in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
@@ -399,11 +399,10 @@ module OAuth = struct
     *)
     let revoke_token ~client_id ~client_secret ~token ?(token_type_hint="access_token") on_success on_error =
       let url = "https://www.reddit.com/api/v1/revoke_token" in
-      let body = Printf.sprintf
-        "token=%s&token_type_hint=%s"
-        (Uri.pct_encode token)
-        token_type_hint
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("token", token);
+        ("token_type_hint", token_type_hint);
+      ] in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
@@ -843,9 +842,7 @@ module Make (Config : CONFIG) = struct
               | None -> form_params
             in
             
-            let body = List.map (fun (k, v) ->
-              Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-            ) form_params |> String.concat "&" in
+            let body = Social_core.form_urlencode_kvs form_params in
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
@@ -917,9 +914,7 @@ module Make (Config : CONFIG) = struct
               | None -> form_params
             in
             
-            let body = List.map (fun (k, v) ->
-              Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-            ) form_params |> String.concat "&" in
+            let body = Social_core.form_urlencode_kvs form_params in
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
@@ -968,10 +963,8 @@ module Make (Config : CONFIG) = struct
           ("mimetype", mimetype);
         ] in
         
-        let body = List.map (fun (k, v) ->
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-        ) form_params |> String.concat "&" in
-        
+        let body = Social_core.form_urlencode_kvs form_params in
+
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
           ("User-Agent", user_agent);
@@ -1134,9 +1127,7 @@ module Make (Config : CONFIG) = struct
         | Some text -> ("flair_text", text) :: form_params
         | None -> form_params
       in
-      let body = List.map (fun (k, v) ->
-        Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-      ) form_params |> String.concat "&" in
+      let body = Social_core.form_urlencode_kvs form_params in
       let headers = [
         ("Authorization", "Bearer " ^ access_token);
         ("User-Agent", user_agent);
@@ -1300,9 +1291,7 @@ module Make (Config : CONFIG) = struct
               | None -> form_params
             in
             
-            let body = List.map (fun (k, v) ->
-              Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-            ) form_params |> String.concat "&" in
+            let body = Social_core.form_urlencode_kvs form_params in
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
@@ -1375,9 +1364,7 @@ module Make (Config : CONFIG) = struct
               | None -> form_params
             in
             
-            let body = List.map (fun (k, v) ->
-              Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-            ) form_params |> String.concat "&" in
+            let body = Social_core.form_urlencode_kvs form_params in
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
@@ -1527,7 +1514,7 @@ module Make (Config : CONFIG) = struct
             "t3_" ^ post_id
         in
         
-        let body = Printf.sprintf "id=%s" (Uri.pct_encode full_id) in
+        let body = Social_core.form_urlencode_kvs [("id", full_id)] in
         
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
@@ -1825,11 +1812,11 @@ module Make (Config : CONFIG) = struct
       on_error "Reddit OAuth credentials not configured"
     else
       let expected_scopes = OAuth.Scopes.moderation in
-      let body = Printf.sprintf
-        "grant_type=authorization_code&code=%s&redirect_uri=%s"
-        (Uri.pct_encode code)
-        (Uri.pct_encode redirect_uri)
-      in
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", redirect_uri);
+      ] in
       let auth_string = String.trim client_id ^ ":" ^ String.trim client_secret in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");

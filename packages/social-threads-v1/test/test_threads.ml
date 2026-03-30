@@ -723,6 +723,31 @@ let test_exchange_code_fractional_expires_in_rounded_up () =
       | None -> failwith "expected expires_at for fractional expires_in")
     (fun err -> failwith ("unexpected oauth exchange error: " ^ err))
 
+let test_exchange_code_form_urlencodes_special_chars () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          {|{"access_token":"tok","token_type":"bearer"}|};
+      };
+    ];
+  OAuth_http.exchange_code
+    ~client_id:"client-123"
+    ~client_secret:"sec/ret=with+special@chars"
+    ~redirect_uri:"https://example.com/callback"
+    ~code:"auth-code"
+    (fun _creds ->
+      let requests = List.rev !Mock_http.requests in
+      (match requests with
+       | [ (_, _, _, body) ] ->
+           assert (string_contains body "client_secret=sec%2Fret%3Dwith%2Bspecial%40chars")
+       | _ -> failwith "unexpected request count for exchange code urlencoding");
+      print_endline "ok: exchange code form-urlencodes special chars in client_secret")
+    (fun err -> failwith ("unexpected oauth exchange error: " ^ err))
+
 let test_exchange_long_lived_success () =
   Mock_http.reset ();
   Mock_http.set_responses
@@ -4133,6 +4158,7 @@ let () =
   test_exchange_code_huge_expires_in_clamped ();
   test_exchange_code_huge_float_expires_in_clamped ();
   test_exchange_code_fractional_expires_in_rounded_up ();
+  test_exchange_code_form_urlencodes_special_chars ();
   test_exchange_long_lived_success ();
   test_refresh_token_success ();
   test_get_me_success ();
