@@ -203,10 +203,7 @@ let test_token_exchange () =
           assert (find_header headers "Content-Type" = Some "application/x-www-form-urlencoded");
           assert (string_contains body "grant_type=authorization_code");
           assert (string_contains body "code=test_code");
-          assert (
-            string_contains body "redirect_uri=https%3A%2F%2Fexample.com%2Fcallback"
-            || string_contains body "redirect_uri=https://example.com/callback"
-          );
+          assert (string_contains body "redirect_uri=https%3A%2F%2Fexample.com%2Fcallback");
           assert (string_contains body "client_id=test_client");
           assert (string_contains body "client_secret=test_secret")
       | _ -> failwith "Expected OAuth token exchange POST request");
@@ -262,6 +259,32 @@ let test_oauth_url_rejects_redirect_mismatch () =
     (fun err ->
       assert (string_contains err "LINKEDIN_REDIRECT_URI");
       print_endline "✓ OAuth URL rejects configured redirect mismatch")
+
+(** Test: exchange_code properly form-urlencodes special characters in client_secret *)
+let test_exchange_code_encodes_special_chars () =
+  Mock_config.reset ();
+  Mock_config.set_env "LINKEDIN_CLIENT_ID" "test_client";
+  Mock_config.set_env "LINKEDIN_CLIENT_SECRET" "sec/ret=with+special@chars";
+
+  let response_body = {|{
+    "access_token": "token123",
+    "expires_in": 5184000,
+    "scope": "openid profile email w_member_social"
+  }|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  LinkedIn.exchange_code
+    ~code:"test_code"
+    ~redirect_uri:"https://example.com/callback"
+    (fun (_creds, _scope) ->
+      let requests = !Mock_http.requests in
+      (match requests with
+      | ("POST", _url, _headers, body) :: _ ->
+          assert (string_contains body "client_secret=sec%2Fret%3Dwith%2Bspecial%40chars");
+          assert (string_contains body "client_id=test_client")
+      | _ -> failwith "Expected POST request");
+      print_endline "✓ Token exchange properly form-urlencodes special chars in client_secret")
+    (fun err -> failwith ("Token exchange failed: " ^ err))
 
 (** Test: exchange_code rejects whitespace in authorization code *)
 let test_exchange_code_rejects_whitespace_code () =
@@ -5779,6 +5802,7 @@ let () =
   test_exchange_code_and_get_preferred_organization_none ();
   test_exchange_code_and_get_preferred_organization_acl_403 ();
   test_exchange_code_and_get_preferred_organization_acl_429 ();
+  test_exchange_code_encodes_special_chars ();
   test_exchange_code_rejects_whitespace_code ();
   test_token_exchange_invalid ();
   test_token_exchange_missing_fields ();

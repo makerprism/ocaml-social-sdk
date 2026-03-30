@@ -236,6 +236,35 @@ type ('ok, 'err) result =
 
 (** {1 Utility Functions} *)
 
+(** Percent-encode a string for application/x-www-form-urlencoded.
+
+    Unlike [Uri.encoded_of_query] which uses URI query-string encoding
+    (leaving [/], [=], [@], [:], [?], [!], [*], [(], [)] unencoded),
+    this function uses the stricter encoding required by
+    application/x-www-form-urlencoded POST bodies where only unreserved
+    characters are left raw and spaces become [+]. *)
+let form_urlencode_value s =
+  let buf = Buffer.create (String.length s) in
+  String.iter (fun c ->
+    match c with
+    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '_' | '.' | '~' ->
+        Buffer.add_char buf c
+    | ' ' ->
+        Buffer.add_char buf '+'
+    | _ ->
+        Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c))
+  ) s;
+  Buffer.contents buf
+
+(** Encode a list of key-value pairs as an application/x-www-form-urlencoded
+    string.  Each key and value is percent-encoded with {!form_urlencode_value}
+    and pairs are joined with [&]. *)
+let form_urlencode_kvs (pairs : (string * string) list) =
+  pairs
+  |> List.map (fun (k, v) ->
+       form_urlencode_value k ^ "=" ^ form_urlencode_value v)
+  |> String.concat "&"
+
 (** Parse JSON credentials blob *)
 let parse_credentials_json json_str =
   try

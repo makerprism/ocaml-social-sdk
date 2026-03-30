@@ -196,14 +196,13 @@ module OAuth = struct
       else if is_blank code then
         on_error "LinkedIn authorization code is required"
       else
-      let params = [
-        ("grant_type", ["authorization_code"]);
-        ("code", [code]);
-        ("redirect_uri", [redirect_uri]);
-        ("client_id", [client_id]);
-        ("client_secret", [client_secret]);
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", redirect_uri);
+        ("client_id", client_id);
+        ("client_secret", client_secret);
       ] in
-      let body = Uri.encoded_of_query params in
       let url = Metadata.token_endpoint in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
@@ -292,17 +291,17 @@ module OAuth = struct
       else if is_blank refresh_token then
         on_error "LinkedIn refresh token is required"
       else
-      let body = Uri.encoded_of_query [
-        ("grant_type", ["refresh_token"]);
-        ("refresh_token", [refresh_token]);
-        ("client_id", [client_id]);
-        ("client_secret", [client_secret]);
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
+        ("client_id", client_id);
+        ("client_secret", client_secret);
       ] in
-      
+
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
-      
+
       Http.post ~headers ~body Metadata.token_endpoint
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -905,17 +904,17 @@ module Make (Config : CONFIG) = struct
     else (
       let url = Printf.sprintf "%s/accessToken" linkedin_auth_url in
       
-      let body = Uri.encoded_of_query [
-        ("grant_type", ["refresh_token"]);
-        ("refresh_token", [refresh_token]);
-        ("client_id", [String.trim client_id]);
-        ("client_secret", [String.trim client_secret]);
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "refresh_token");
+        ("refresh_token", refresh_token);
+        ("client_id", String.trim client_id);
+        ("client_secret", String.trim client_secret);
       ] in
-      
+
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded")
       ] in
-      
+
       Config.Http.post ~headers ~body url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -1523,15 +1522,13 @@ module Make (Config : CONFIG) = struct
     else if configured_redirect_uri <> "" && redirect_uri <> configured_redirect_uri then
       on_error "LinkedIn redirect URI does not match configured LINKEDIN_REDIRECT_URI"
     else (
-      let params = [
-        ("grant_type", ["authorization_code"]);
-        ("code", [code]);
-        ("redirect_uri", [String.trim redirect_uri]);
-        ("client_id", [client_id]);
-        ("client_secret", [client_secret]);
+      let body = Social_core.form_urlencode_kvs [
+        ("grant_type", "authorization_code");
+        ("code", code);
+        ("redirect_uri", String.trim redirect_uri);
+        ("client_id", client_id);
+        ("client_secret", client_secret);
       ] in
-
-      let body = Uri.encoded_of_query params in
       let url = Printf.sprintf "%s/accessToken" linkedin_auth_url in
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
