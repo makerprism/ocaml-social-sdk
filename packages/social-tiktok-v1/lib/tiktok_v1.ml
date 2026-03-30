@@ -698,7 +698,10 @@ let parse_publish_status json =
     | "PUBLISH_COMPLETE" ->
         (match get_first_published_id data with
          | Some video_id -> Published video_id
-         | None -> Failed { error_code = "PARSE_ERROR"; error_message = "PUBLISH_COMPLETE without post ID" })
+         | None ->
+             let data_str = Yojson.Basic.to_string data in
+             Failed { error_code = "PARSE_ERROR";
+                      error_message = Printf.sprintf "PUBLISH_COMPLETE without post ID. data: %s" data_str })
     | "FAILED" ->
         let fail_reason = get_failure_message data in
         Failed { error_code = "UPLOAD_FAILED"; error_message = fail_reason }
