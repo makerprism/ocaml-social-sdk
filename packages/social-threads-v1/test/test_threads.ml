@@ -503,7 +503,7 @@ let test_exchange_code_success () =
       let requests = List.rev !Mock_http.requests in
       (match requests with
        | [ (_, url, _, body) ] ->
-           assert (string_contains url "/v1.0/oauth/access_token");
+           assert (string_contains url "graph.threads.net/oauth/access_token");
            assert (string_contains body "grant_type=authorization_code")
        | _ -> failwith "unexpected request count for exchange code");
       print_endline "ok: exchange code")
@@ -768,7 +768,7 @@ let test_exchange_long_lived_success () =
       let requests = List.rev !Mock_http.requests in
       (match requests with
        | [ (_, url, _, _) ] ->
-           assert (string_contains url "/v1.0/access_token");
+           assert (string_contains url "graph.threads.net/access_token");
            assert (string_contains url "grant_type=th_exchange_token")
        | _ -> failwith "unexpected request count for long-lived exchange");
       print_endline "ok: exchange long-lived")
@@ -792,7 +792,7 @@ let test_refresh_token_success () =
       let requests = List.rev !Mock_http.requests in
       (match requests with
        | [ (_, url, _, _) ] ->
-           assert (string_contains url "/v1.0/refresh_access_token");
+           assert (string_contains url "graph.threads.net/refresh_access_token");
            assert (string_contains url "grant_type=th_refresh_token")
        | _ -> failwith "unexpected request count for refresh token");
       print_endline "ok: refresh token")

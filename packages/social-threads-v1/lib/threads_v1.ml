@@ -1,8 +1,8 @@
 open Social_core
 
 let threads_api_base = "https://graph.threads.net/v1.0"
-let threads_token_exchange_endpoint = "https://graph.threads.net/v1.0/access_token"
-let threads_token_refresh_endpoint = "https://graph.threads.net/v1.0/refresh_access_token"
+let threads_token_exchange_endpoint = "https://graph.threads.net/access_token"
+let threads_token_refresh_endpoint = "https://graph.threads.net/refresh_access_token"
 
 let parse_expires_in json =
   let normalize_expires_in seconds =
@@ -258,7 +258,7 @@ module OAuth = struct
   end
 
   let authorization_endpoint = "https://www.threads.com/oauth/authorize"
-  let token_endpoint = "https://graph.threads.net/v1.0/oauth/access_token"
+  let token_endpoint = "https://graph.threads.net/oauth/access_token"
 
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
     let scope = String.concat "," scopes in
