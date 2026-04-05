@@ -273,18 +273,21 @@ module OAuth = struct
     *)
     let exchange_for_long_lived_token ~client_secret ~short_lived_token ?app_secret ?on_response on_result =
       let params = [
-        ("grant_type", ["ig_exchange_token"]);
-        ("client_secret", [client_secret]);
-        ("access_token", [short_lived_token]);
+        ("grant_type", "ig_exchange_token");
+        ("client_secret", client_secret);
+        ("access_token", short_lived_token);
       ] @
       (match app_secret with
-       | Some secret -> [("appsecret_proof", [compute_app_secret_proof ~app_secret:secret ~access_token:short_lived_token])]
+       | Some secret -> [("appsecret_proof", compute_app_secret_proof ~app_secret:secret ~access_token:short_lived_token)]
        | None -> [])
       in
-      let query = Uri.encoded_of_query params in
-      let url = Printf.sprintf "%s?%s" Metadata.long_lived_token_endpoint query in
+      let body = Social_core.form_urlencode_kvs params in
+      let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded");
+      ] in
+      let url = Metadata.long_lived_token_endpoint in
 
-      Http.get url
+      Http.post ~headers ~body url
         (fun response ->
           (match on_response with Some f -> f response | None -> ());
           if response.status >= 200 && response.status < 300 then
