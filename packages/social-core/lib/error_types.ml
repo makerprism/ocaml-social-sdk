@@ -14,7 +14,10 @@ type validation_error =
   | Media_dimensions_invalid of { width: int; height: int; reason: string }
   | Video_too_long of { duration_seconds: float; max_seconds: int }
   | Too_many_media of { count: int; max: int }
+  | Too_few_items of { count: int; min: int; item_kind: string }
   | Invalid_url of string
+  | Option_conflict of string  (** Incompatible option combination *)
+  | Topic_tag_invalid of string  (** Topic tag content constraint violation *)
   | Thread_empty
   | Thread_post_invalid of { index: int; errors: validation_error list }
 
@@ -126,9 +129,15 @@ let rec validation_error_to_string = function
       Printf.sprintf "Video too long: %.1fs (max %ds)" duration_seconds max_seconds
   | Too_many_media { count; max } ->
       Printf.sprintf "Too many media items: %d (max %d)" count max
+  | Too_few_items { count; min; item_kind } ->
+      Printf.sprintf "Too few %s: %d (min %d)" item_kind count min
   | Invalid_url url ->
       Printf.sprintf "Invalid URL: %s" url
-  | Thread_empty -> 
+  | Option_conflict reason ->
+      Printf.sprintf "Incompatible options: %s" reason
+  | Topic_tag_invalid reason ->
+      Printf.sprintf "Invalid topic tag: %s" reason
+  | Thread_empty ->
       "Thread cannot be empty"
   | Thread_post_invalid { index; errors } ->
       Printf.sprintf "Thread post %d invalid: %s" index 

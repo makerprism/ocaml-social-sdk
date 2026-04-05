@@ -1267,7 +1267,6 @@ let test_post_single_success () =
         body =
           "{\"id\":\"user-1\",\"username\":\"alice\",\"name\":\"Alice\"}";
       };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single ~account_id:"acct-1" ~text:"hello threads" ~media_urls:[]
@@ -1294,7 +1293,6 @@ let test_post_single_text_trimmed_before_send () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single ~account_id:"acct-1" ~text:"  hello threads  " ~media_urls:[]
@@ -1302,11 +1300,12 @@ let test_post_single_text_trimmed_before_send () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ (_, _, _, _); (_, _, _, create_body); (_, _, _, _) ] ->
+           | [ (_, _, _, _); (_, _, _, create_body) ] ->
                assert (string_contains create_body "text=");
                assert (string_contains create_body "hello");
                assert (string_contains create_body "threads");
                assert (not (string_contains create_body "text=++"));
+               assert (string_contains create_body "auto_publish_text=true");
                print_endline "ok: text trimmed"
            | _ -> failwith "unexpected request count for trimmed text")
       | Error_types.Failure err ->
@@ -1336,7 +1335,8 @@ let test_post_single_no_retry_on_publish_500 () =
         body = "{\"error\":{\"message\":\"temporary\",\"code\":1}}";
       };
     ];
-  Threads.post_single ~account_id:"acct-1" ~text:"hello threads" ~media_urls:[]
+  Threads.post_single ~account_id:"acct-1" ~text:"hello threads"
+    ~media_urls:["https://example.com/photo.jpg"]
     (function
       | Error_types.Failure (Error_types.Api_error api_err) ->
           assert (api_err.request_id = Some "trace-publish");
@@ -1606,7 +1606,7 @@ let test_get_account_insights_contract () =
            | [ (_, me_url, _, _); (_, insights_url, _, _) ] ->
                assert (string_contains me_url "/v1.0/me?");
                assert (string_contains insights_url "/v1.0/user-1/threads_insights?");
-               assert (query_param insights_url "metric" = Some "views,likes,replies,reposts,quotes");
+               assert (query_param insights_url "metric" = Some "views,likes,replies,reposts,quotes,shares");
                assert (query_param insights_url "period" = Some "day");
                assert (query_param insights_url "since" = Some "2025-01-01");
                assert (query_param insights_url "until" = Some "2025-01-02");
@@ -1687,7 +1687,7 @@ let test_get_post_insights_contract () =
           (match requests with
            | [ (_, insights_url, _, _) ] ->
                assert (string_contains insights_url "/v1.0/post-1/insights?");
-               assert (query_param insights_url "metric" = Some "views,likes,replies,reposts,quotes");
+               assert (query_param insights_url "metric" = Some "views,likes,replies,reposts,quotes,shares");
                assert (query_param insights_url "access_token" = Some "access-xyz")
            | _ -> failwith "unexpected request count for post insights");
           print_endline "ok: post insights contract"
@@ -1834,7 +1834,6 @@ let test_post_single_with_idempotency_key () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single
@@ -1846,8 +1845,9 @@ let test_post_single_with_idempotency_key () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ (_, _, _, _); (_, _, _, create_body); (_, _, _, _) ] ->
-               assert (string_contains create_body "client_request_id=req-123")
+           | [ (_, _, _, _); (_, _, _, create_body) ] ->
+               assert (string_contains create_body "client_request_id=req-123");
+               assert (string_contains create_body "auto_publish_text=true")
            | _ -> failwith "unexpected request count for idempotency test");
           print_endline "ok: idempotency key"
       | _ -> failwith "expected success with idempotency key")
@@ -1867,7 +1867,6 @@ let test_post_single_idempotency_key_trimmed () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single
@@ -1879,7 +1878,7 @@ let test_post_single_idempotency_key_trimmed () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ (_, _, _, _); (_, _, _, create_body); (_, _, _, _) ] ->
+           | [ (_, _, _, _); (_, _, _, create_body) ] ->
                assert (string_contains create_body "client_request_id=req-trim");
                assert (not (string_contains create_body "client_request_id=++req-trim++"))
            | _ -> failwith "unexpected request count for idempotency trim test");
@@ -1901,7 +1900,6 @@ let test_post_single_reply_control_forwarded () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single
@@ -1913,7 +1911,7 @@ let test_post_single_reply_control_forwarded () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ (_, _, _, _); (_, _, _, create_body); (_, _, _, _) ] ->
+           | [ (_, _, _, _); (_, _, _, create_body) ] ->
                assert (string_contains create_body "reply_control=EVERYONE")
            | _ -> failwith "unexpected request count for reply_control test");
           print_endline "ok: reply control forwarded"
@@ -3304,7 +3302,6 @@ let test_post_single_with_topic_tag () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single
@@ -3317,7 +3314,7 @@ let test_post_single_with_topic_tag () =
           assert (post_id = "post-1");
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ _; (_, _, _, create_body); _ ] ->
+           | [ _; (_, _, _, create_body) ] ->
                assert (string_contains create_body "text_post_app_tags=technology")
            | _ -> failwith "unexpected request sequence for topic tag");
           print_endline "ok: post single with topic tag"
@@ -3338,7 +3335,6 @@ let test_post_single_topic_tag_trimmed () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single
@@ -3350,7 +3346,7 @@ let test_post_single_topic_tag_trimmed () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ _; (_, _, _, create_body); _ ] ->
+           | [ _; (_, _, _, create_body) ] ->
                assert (string_contains create_body "text_post_app_tags=science");
                assert (not (string_contains create_body "text_post_app_tags=+"))
            | _ -> failwith "unexpected request sequence for topic tag trim");
@@ -3372,7 +3368,6 @@ let test_post_single_empty_topic_tag_omitted () =
   Mock_http.set_responses
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
-      { status = 200; headers = []; body = "{\"id\":\"container-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
     ];
   Threads.post_single
@@ -3384,7 +3379,7 @@ let test_post_single_empty_topic_tag_omitted () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ _; (_, _, _, create_body); _ ] ->
+           | [ _; (_, _, _, create_body) ] ->
                assert (not (string_contains create_body "text_post_app_tags"))
            | _ -> failwith "unexpected request sequence for empty topic tag");
           print_endline "ok: post single empty topic tag omitted"
@@ -4116,6 +4111,223 @@ let test_poll_container_status_checks_before_sleeping () =
           print_endline "ok: poll checks before sleeping"
       | Error _ -> failwith "expected successful poll without sleep")
 
+let test_delete_post_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"success\":true}" };
+    ];
+  Threads.delete_post ~account_id:"acct-1" ~post_id:"post-123"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("DELETE", url, _, _) ] ->
+               assert (string_contains url "/v1.0/post-123?");
+               assert (string_contains url "access_token=access-xyz")
+           | _ -> failwith "unexpected request for delete_post");
+          print_endline "ok: delete post"
+      | Error _ -> failwith "expected successful delete_post")
+
+let test_delete_post_rejects_empty_id () =
+  Mock_config.reset ();
+  Threads.delete_post ~account_id:"acct-1" ~post_id:"   "
+    (function
+      | Error (Error_types.Validation_error _) ->
+          print_endline "ok: delete post rejects empty id"
+      | _ -> failwith "expected validation error for empty post_id in delete_post")
+
+let test_delete_post_api_error () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 403;
+        headers = [];
+        body = "{\"error\":{\"message\":\"not authorized\",\"code\":200}}";
+      };
+    ];
+  Threads.delete_post ~account_id:"acct-1" ~post_id:"post-123"
+    (function
+      | Error (Error_types.Auth_error _) ->
+          print_endline "ok: delete post api error"
+      | _ -> failwith "expected auth error for delete_post 403")
+
+let test_approve_reply_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"success\":true}" };
+    ];
+  Threads.approve_reply ~account_id:"acct-1" ~reply_id:"reply-456"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("POST", url, _, body) ] ->
+               assert (string_contains url "/v1.0/reply-456/approve");
+               assert (string_contains body "access_token=access-xyz")
+           | _ -> failwith "unexpected request for approve_reply");
+          print_endline "ok: approve reply"
+      | Error _ -> failwith "expected successful approve_reply")
+
+let test_ignore_reply_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"success\":true}" };
+    ];
+  Threads.ignore_reply ~account_id:"acct-1" ~reply_id:"reply-789"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("POST", url, _, _) ] ->
+               assert (string_contains url "/v1.0/reply-789/ignore")
+           | _ -> failwith "unexpected request for ignore_reply");
+          print_endline "ok: ignore reply"
+      | Error _ -> failwith "expected successful ignore_reply")
+
+let test_hide_reply_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"success\":true}" };
+    ];
+  Threads.hide_reply ~account_id:"acct-1" ~reply_id:"reply-abc"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("POST", url, _, body) ] ->
+               assert (string_contains url "/v1.0/reply-abc");
+               assert (not (string_contains url "/approve"));
+               assert (not (string_contains url "/ignore"));
+               assert (string_contains body "hide=true")
+           | _ -> failwith "unexpected request for hide_reply");
+          print_endline "ok: hide reply"
+      | Error _ -> failwith "expected successful hide_reply")
+
+let test_unhide_reply_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = "{\"success\":true}" };
+    ];
+  Threads.unhide_reply ~account_id:"acct-1" ~reply_id:"reply-def"
+    (function
+      | Ok () ->
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ ("POST", url, _, body) ] ->
+               assert (string_contains url "/v1.0/reply-def");
+               assert (string_contains body "hide=false")
+           | _ -> failwith "unexpected request for unhide_reply");
+          print_endline "ok: unhide reply"
+      | Error _ -> failwith "expected successful unhide_reply")
+
+let test_reply_action_rejects_empty_id () =
+  Mock_config.reset ();
+  Threads.approve_reply ~account_id:"acct-1" ~reply_id:"   "
+    (function
+      | Error (Error_types.Validation_error _) ->
+          print_endline "ok: reply action rejects empty id"
+      | _ -> failwith "expected validation error for empty reply_id")
+
+let test_get_pending_replies_success () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"data\":[{\"id\":\"pending-1\",\"text\":\"please approve\"}]}";
+      };
+    ];
+  Threads.get_pending_replies ~account_id:"acct-1" ~media_id:"post-123"
+    (function
+      | Ok (posts, _next_after) ->
+          assert (List.length posts = 1);
+          assert ((List.hd posts).id = "pending-1");
+          let requests = List.rev !Mock_http.requests in
+          (match requests with
+           | [ (_, url, _, _) ] ->
+               assert (string_contains url "/v1.0/post-123/pending_replies?")
+           | _ -> failwith "unexpected request for get_pending_replies");
+          print_endline "ok: get pending replies"
+      | Error _ -> failwith "expected successful get_pending_replies")
+
 let () =
   test_oauth_url ();
   test_oauth_url_encodes_special_characters ();
@@ -4272,4 +4484,13 @@ let () =
   test_get_replies_api_error ();
   test_get_conversation_api_error ();
   test_poll_container_status_checks_before_sleeping ();
+  test_delete_post_success ();
+  test_delete_post_rejects_empty_id ();
+  test_delete_post_api_error ();
+  test_approve_reply_success ();
+  test_ignore_reply_success ();
+  test_hide_reply_success ();
+  test_unhide_reply_success ();
+  test_reply_action_rejects_empty_id ();
+  test_get_pending_replies_success ();
   print_endline "Threads tests passed"

@@ -66,7 +66,8 @@ let threads_metrics =
     ("likes", Likes);
     ("replies", Replies);
     ("reposts", Reposts);
-    ("quotes", Quotes) ]
+    ("quotes", Quotes);
+    ("shares", Shares) ]
 
 let pinterest_metrics =
   [ ("impression", Impressions);

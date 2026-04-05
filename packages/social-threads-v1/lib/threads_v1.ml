@@ -257,7 +257,7 @@ module OAuth = struct
     let read = ["threads_basic"]
   end
 
-  let authorization_endpoint = "https://threads.net/oauth/authorize"
+  let authorization_endpoint = "https://www.threads.com/oauth/authorize"
   let token_endpoint = "https://graph.threads.net/oauth/access_token"
 
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
@@ -370,6 +370,14 @@ type thread_post = {
   text : string option;
   timestamp : string option;
   permalink : string option;
+  media_type : string option;
+  media_url : string option;
+  thumbnail_url : string option;
+  shortcode : string option;
+  is_quote_post : bool;
+  has_replies : bool;
+  reply_audience : string option;
+  owner_id : string option;
 }
 
 type insight_metric =
@@ -378,6 +386,7 @@ type insight_metric =
   | Replies
   | Reposts
   | Quotes
+  | Shares
 
 type account_insight_value = {
   value : int;
@@ -396,7 +405,7 @@ type post_insight = {
   value : int;
 }
 
-let insight_metric_names = [ "views"; "likes"; "replies"; "reposts"; "quotes" ]
+let insight_metric_names = [ "views"; "likes"; "replies"; "reposts"; "quotes"; "shares" ]
 
 let string_of_insight_metric = function
   | Views -> "views"
@@ -404,6 +413,7 @@ let string_of_insight_metric = function
   | Replies -> "replies"
   | Reposts -> "reposts"
   | Quotes -> "quotes"
+  | Shares -> "shares"
 
 let insight_canonical_metric_keys =
   Analytics_normalization.canonical_metric_keys_of_provider_metrics
@@ -487,6 +497,48 @@ type publishing_limit = {
   reply_quota_total : int;
 }
 
+let post_fields =
+  "id,text,timestamp,permalink,media_type,media_url,thumbnail_url,shortcode,is_quote_post,has_replies,reply_audience,owner"
+
+let parse_thread_post json =
+  let open Yojson.Basic.Util in
+  {
+    id = json |> member "id" |> to_string;
+    text =
+      (try Some (json |> member "text" |> to_string)
+       with _ -> None);
+    timestamp =
+      (try Some (json |> member "timestamp" |> to_string)
+       with _ -> None);
+    permalink =
+      (try Some (json |> member "permalink" |> to_string)
+       with _ -> None);
+    media_type =
+      (try Some (json |> member "media_type" |> to_string)
+       with _ -> None);
+    media_url =
+      (try Some (json |> member "media_url" |> to_string)
+       with _ -> None);
+    thumbnail_url =
+      (try Some (json |> member "thumbnail_url" |> to_string)
+       with _ -> None);
+    shortcode =
+      (try Some (json |> member "shortcode" |> to_string)
+       with _ -> None);
+    is_quote_post =
+      (try json |> member "is_quote_post" |> to_bool
+       with _ -> false);
+    has_replies =
+      (try json |> member "has_replies" |> to_bool
+       with _ -> false);
+    reply_audience =
+      (try Some (json |> member "reply_audience" |> to_string)
+       with _ -> None);
+    owner_id =
+      (try Some (json |> member "owner" |> member "id" |> to_string)
+       with _ -> None);
+  }
+
 module type CONFIG = sig
   include Social_core.CONFIG
   module Http : Social_core.HTTP_CLIENT
@@ -497,6 +549,12 @@ module Make (Config : CONFIG) = struct
   module OAuth_http = OAuth.Make (Config.Http)
 
   let max_text_length = 500
+  let max_alt_text_length = 1000
+  let min_carousel_items = 2
+  let max_carousel_items = 20
+  let min_poll_options = 2
+  let max_poll_options = 4
+  let max_poll_option_length = 25
 
   let is_blank value = String.trim value = ""
 
@@ -609,6 +667,9 @@ module Make (Config : CONFIG) = struct
   let http_post_no_retry ?(headers = []) ?(body = "") url on_success on_error =
     Config.Http.post ~headers ~body url on_success on_error
 
+  let http_delete url on_success on_error =
+    Config.Http.delete url on_success on_error
+
   let is_token_expired = function
     | None -> false
     | Some expires_at ->
@@ -682,6 +743,47 @@ module Make (Config : CONFIG) = struct
     else
       validate_text_length text
 
+  let validate_alt_text alt_text =
+    match alt_text with
+    | None -> None
+    | Some txt ->
+        let length = String.length (String.trim txt) in
+        if length > max_alt_text_length then
+          Some (Error_types.Text_too_long { length; max = max_alt_text_length })
+        else
+          None
+
+  let validate_topic_tag topic_tag =
+    match topic_tag with
+    | None -> None
+    | Some tag ->
+        let trimmed = String.trim tag in
+        if trimmed = "" then None
+        else if String.contains trimmed '.' || String.contains trimmed '&' then
+          Some (Error_types.Topic_tag_invalid
+            (Printf.sprintf "must not contain periods or ampersands: %s" trimmed))
+        else
+          None
+
+  let validate_poll_options options =
+    let count = List.length options in
+    if count < min_poll_options then
+      [ Error_types.Too_few_items { count; min = min_poll_options; item_kind = "poll options" } ]
+    else if count > max_poll_options then
+      [ Error_types.Too_many_media { count; max = max_poll_options } ]
+    else
+      List.filter_map
+        (fun option_text ->
+          let trimmed = String.trim option_text in
+          let length = String.length trimmed in
+          if length = 0 then
+            Some Error_types.Text_empty
+          else if length > max_poll_option_length then
+            Some (Error_types.Text_too_long { length; max = max_poll_option_length })
+          else
+            None)
+        options
+
   let is_http_url url =
     let lower = String.lowercase_ascii (String.trim url) in
     String.length lower > 8
@@ -752,6 +854,7 @@ module Make (Config : CONFIG) = struct
     | "replies" -> Some Replies
     | "reposts" -> Some Reposts
     | "quotes" -> Some Quotes
+    | "shares" -> Some Shares
     | _ -> None
 
   let parse_int_value json =
@@ -883,6 +986,12 @@ module Make (Config : CONFIG) = struct
         | Ok me -> on_result (Ok me.id)
         | Error err -> on_result (Error err))
 
+  let encode_poll_options options =
+    List.mapi (fun i option_text ->
+      let key = Printf.sprintf "poll_attachment[options][%d][text]" i in
+      (key, String.trim option_text)
+    ) options
+
   let create_text_container
       ~access_token
       ~user_id
@@ -891,7 +1000,11 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?quoted_post_id
       ?location_id
+      ?(is_ghost_post = false)
+      ?(auto_publish = false)
+      ?poll_options
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -917,8 +1030,20 @@ module Make (Config : CONFIG) = struct
           | Some key -> [ ("client_request_id", key) ]
           | None -> [])
          @
+         (match quoted_post_id with
+          | Some id when String.trim id <> "" -> [ ("quoted_post_id", String.trim id) ]
+          | _ -> [])
+         @
          (match location_id with
-          | Some loc_id -> [ ("location_id", loc_id) ]
+          | Some id when String.trim id <> "" -> [ ("location_id", String.trim id) ]
+          | _ -> [])
+         @
+         (if is_ghost_post then [ ("is_ghost_post", "true") ] else [])
+         @
+         (if auto_publish then [ ("auto_publish_text", "true") ] else [])
+         @
+         (match poll_options with
+          | Some options -> encode_poll_options options
           | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -954,6 +1079,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?quoted_post_id
       ?location_id
       on_result =
     let normalized_text = String.trim text in
@@ -994,8 +1120,12 @@ module Make (Config : CONFIG) = struct
           | Some key -> [ ("client_request_id", key) ]
           | None -> [])
          @
+         (match quoted_post_id with
+          | Some id when String.trim id <> "" -> [ ("quoted_post_id", String.trim id) ]
+          | _ -> [])
+         @
          (match location_id with
-          | Some loc_id when not is_carousel_item -> [ ("location_id", loc_id) ]
+          | Some id when String.trim id <> "" -> [ ("location_id", String.trim id) ]
           | _ -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -1029,7 +1159,11 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?quoted_post_id
       ?location_id
+      ?(is_ghost_post = false)
+      ?(auto_publish = false)
+      ?poll_options
       on_result =
     match media_urls with
     | [] ->
@@ -1041,7 +1175,11 @@ module Make (Config : CONFIG) = struct
           ?idempotency_key
           ?reply_control
           ?topic_tag
+          ?quoted_post_id
           ?location_id
+          ~is_ghost_post
+          ~auto_publish
+          ?poll_options
           on_result
     | [ media_url ] ->
         let normalized = normalize_media_url media_url in
@@ -1058,6 +1196,7 @@ module Make (Config : CONFIG) = struct
                ?idempotency_key
                ?reply_control
                ?topic_tag
+               ?quoted_post_id
                ?location_id
                on_result
          | None ->
@@ -1224,6 +1363,7 @@ module Make (Config : CONFIG) = struct
       ~text
       ?topic_tag
       ?reply_control
+      ?quoted_post_id
       ?location_id
       on_result =
     let normalized_text = String.trim text in
@@ -1243,9 +1383,13 @@ module Make (Config : CONFIG) = struct
           | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
           | _ -> [])
          @
+         (match quoted_post_id with
+          | Some id when String.trim id <> "" -> [ ("quoted_post_id", String.trim id) ]
+          | _ -> [])
+         @
          (match location_id with
-          | Some loc_id -> [ ("location_id", loc_id) ]
-          | None -> []))
+          | Some id when String.trim id <> "" -> [ ("location_id", String.trim id) ]
+          | _ -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
     let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
@@ -1268,15 +1412,16 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
 
-  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control ?location_id on_result =
+  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control ?quoted_post_id ?location_id on_result =
     let validation_errors =
-      [ validate_media_urls ~max_items:20 media_urls ]
+      [ validate_media_urls ~max_items:max_carousel_items media_urls;
+        validate_topic_tag topic_tag ]
       |> List.filter_map (fun x -> x)
     in
     let count = List.length media_urls in
     let validation_errors =
-      if count < 2 then
-        (Error_types.Too_many_media { count; max = 2 }) :: validation_errors
+      if count < min_carousel_items then
+        (Error_types.Too_many_media { count; max = min_carousel_items }) :: validation_errors
       else
         validation_errors
     in
@@ -1310,6 +1455,7 @@ module Make (Config : CONFIG) = struct
                             ~text
                             ?topic_tag
                             ?reply_control
+                            ?quoted_post_id
                             ?location_id
                             (function
                               | Error err -> on_result (Error_types.Failure err)
@@ -1329,6 +1475,25 @@ module Make (Config : CONFIG) = struct
                                               | Error err -> on_result (Error_types.Failure err)))))))
         (fun err -> on_result (Error_types.Failure err))
 
+  let parse_posts_response response_body =
+    let json = Yojson.Basic.from_string response_body in
+    let open Yojson.Basic.Util in
+    let posts =
+      json |> member "data" |> to_list
+      |> List.map parse_thread_post
+    in
+    let next_after =
+      try
+        Some
+          (json
+           |> member "paging"
+           |> member "cursors"
+           |> member "after"
+           |> to_string)
+      with _ -> None
+    in
+    (posts, next_after)
+
   let get_replies ~account_id ~media_id ?after ?(limit = 20) on_result =
     if String.trim media_id = "" then
       on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
@@ -1338,7 +1503,7 @@ module Make (Config : CONFIG) = struct
         let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
         let params =
           let normalized_after = normalize_optional_non_empty after in
-          [ ("fields", ["id,text,timestamp,permalink"]);
+          [ ("fields", [post_fields]);
             ("limit", [string_of_int limit]);
             ("access_token", [creds.access_token]) ]
           @
@@ -1351,41 +1516,14 @@ module Make (Config : CONFIG) = struct
         http_get_with_retry url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
-              try
-                let json = Yojson.Basic.from_string response.body in
-                let open Yojson.Basic.Util in
-                let posts =
-                  json |> member "data" |> to_list
-                  |> List.map (fun item ->
-                         {
-                           id = item |> member "id" |> to_string;
-                           text =
-                             (try Some (item |> member "text" |> to_string)
-                              with _ -> None);
-                           timestamp =
-                             (try Some (item |> member "timestamp" |> to_string)
-                              with _ -> None);
-                           permalink =
-                             (try Some (item |> member "permalink" |> to_string)
-                              with _ -> None);
-                         })
-                in
-                let next_after =
-                  try
-                    Some
-                      (json
-                       |> member "paging"
-                       |> member "cursors"
-                       |> member "after"
-                       |> to_string)
-                  with _ -> None
-                in
+              (try
+                let posts, next_after = parse_posts_response response.body in
                 on_result (Ok (posts, next_after))
               with exn ->
                 on_result
                   (Error
                      (Error_types.Internal_error
-                        (Printf.sprintf "Failed to parse replies response: %s" (Printexc.to_string exn))))
+                        (Printf.sprintf "Failed to parse replies response: %s" (Printexc.to_string exn)))))
             else
               on_result
                 (Error
@@ -1405,7 +1543,7 @@ module Make (Config : CONFIG) = struct
         let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
         let params =
           let normalized_after = normalize_optional_non_empty after in
-          [ ("fields", ["id,text,timestamp,permalink"]);
+          [ ("fields", [post_fields]);
             ("limit", [string_of_int limit]);
             ("access_token", [creds.access_token]) ]
           @
@@ -1418,41 +1556,54 @@ module Make (Config : CONFIG) = struct
         http_get_with_retry url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
-              try
-                let json = Yojson.Basic.from_string response.body in
-                let open Yojson.Basic.Util in
-                let posts =
-                  json |> member "data" |> to_list
-                  |> List.map (fun item ->
-                         {
-                           id = item |> member "id" |> to_string;
-                           text =
-                             (try Some (item |> member "text" |> to_string)
-                              with _ -> None);
-                           timestamp =
-                             (try Some (item |> member "timestamp" |> to_string)
-                              with _ -> None);
-                           permalink =
-                             (try Some (item |> member "permalink" |> to_string)
-                              with _ -> None);
-                         })
-                in
-                let next_after =
-                  try
-                    Some
-                      (json
-                       |> member "paging"
-                       |> member "cursors"
-                       |> member "after"
-                       |> to_string)
-                  with _ -> None
-                in
+              (try
+                let posts, next_after = parse_posts_response response.body in
                 on_result (Ok (posts, next_after))
               with exn ->
                 on_result
                   (Error
                      (Error_types.Internal_error
-                        (Printf.sprintf "Failed to parse conversation response: %s" (Printexc.to_string exn))))
+                        (Printf.sprintf "Failed to parse conversation response: %s" (Printexc.to_string exn)))))
+            else
+              on_result
+                (Error
+                   (parse_api_error
+                      ~status_code:response.status
+                      ~headers:response.headers
+                      ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err))))
+      (fun err -> on_result (Error err))
+
+  let get_pending_replies ~account_id ~media_id ?after ?(limit = 20) on_result =
+    if String.trim media_id = "" then
+      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
+    else
+    with_valid_credentials ~account_id
+      (fun creds ->
+        let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
+        let params =
+          let normalized_after = normalize_optional_non_empty after in
+          [ ("fields", [post_fields]);
+            ("limit", [string_of_int limit]);
+            ("access_token", [creds.access_token]) ]
+          @
+          (match normalized_after with
+           | Some cursor -> [ ("after", [cursor]) ]
+           | None -> [])
+        in
+        let query = Uri.encoded_of_query params in
+        let url = Printf.sprintf "%s/%s/pending_replies?%s" threads_api_base (String.trim media_id) query in
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (try
+                let posts, next_after = parse_posts_response response.body in
+                on_result (Ok (posts, next_after))
+              with exn ->
+                on_result
+                  (Error
+                     (Error_types.Internal_error
+                        (Printf.sprintf "Failed to parse pending replies response: %s" (Printexc.to_string exn)))))
             else
               on_result
                 (Error
@@ -1536,6 +1687,69 @@ module Make (Config : CONFIG) = struct
                               ~response_body:response.body)))
                   (fun err -> on_result (Error (network_error err)))))
       (fun err -> on_result (Error err))
+
+  let delete_post ~account_id ~post_id on_result =
+    if String.trim post_id = "" then
+      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "post_id must not be empty" ]))
+    else
+    with_valid_credentials ~account_id
+      (fun creds ->
+        let query =
+          Uri.encoded_of_query
+            [ ("access_token", [creds.access_token]) ]
+        in
+        let url = Printf.sprintf "%s/%s?%s" threads_api_base (String.trim post_id) query in
+        http_delete url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              on_result (Ok ())
+            else
+              on_result
+                (Error
+                   (parse_api_error
+                      ~status_code:response.status
+                      ~headers:response.headers
+                      ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err))))
+      (fun err -> on_result (Error err))
+
+  let reply_action ~account_id ~reply_id ~endpoint ?(extra_params = []) on_result =
+    if String.trim reply_id = "" then
+      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "reply_id must not be empty" ]))
+    else
+    with_valid_credentials ~account_id
+      (fun creds ->
+        let body =
+          Social_core.form_urlencode_kvs
+            (extra_params @ [ ("access_token", creds.access_token) ])
+        in
+        let url = Printf.sprintf "%s/%s%s" threads_api_base (String.trim reply_id) endpoint in
+        let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+        http_post_no_retry ~headers ~body url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              on_result (Ok ())
+            else
+              on_result
+                (Error
+                   (parse_api_error
+                      ~status_code:response.status
+                      ~headers:response.headers
+                      ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err))))
+      (fun err -> on_result (Error err))
+
+  let approve_reply ~account_id ~reply_id on_result =
+    reply_action ~account_id ~reply_id ~endpoint:"/approve" on_result
+
+  let ignore_reply ~account_id ~reply_id on_result =
+    reply_action ~account_id ~reply_id ~endpoint:"/ignore" on_result
+
+  let hide_reply ~account_id ~reply_id on_result =
+    reply_action ~account_id ~reply_id ~endpoint:"" ~extra_params:[("hide", "true")] on_result
+
+  let unhide_reply ~account_id ~reply_id on_result =
+    reply_action ~account_id ~reply_id ~endpoint:"" ~extra_params:[("hide", "false")] on_result
 
   let get_oauth_url ~redirect_uri ~state on_success on_error =
     let raw_client_id = Config.get_env "THREADS_CLIENT_ID" |> Option.value ~default:"" in
@@ -1700,7 +1914,7 @@ module Make (Config : CONFIG) = struct
                 let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
                 let params =
                   let normalized_after = normalize_optional_non_empty after in
-                  [ ("fields", ["id,text,timestamp,permalink"]);
+                  [ ("fields", [post_fields]);
                     ("limit", [string_of_int limit]);
                     ("access_token", [creds.access_token]) ]
                   @
@@ -1713,41 +1927,14 @@ module Make (Config : CONFIG) = struct
                 http_get_with_retry url
                   (fun response ->
                     if response.status >= 200 && response.status < 300 then
-                      try
-                        let json = Yojson.Basic.from_string response.body in
-                        let open Yojson.Basic.Util in
-                        let posts =
-                          json |> member "data" |> to_list
-                          |> List.map (fun item ->
-                                 {
-                                   id = item |> member "id" |> to_string;
-                                   text =
-                                     (try Some (item |> member "text" |> to_string)
-                                      with _ -> None);
-                                   timestamp =
-                                     (try Some (item |> member "timestamp" |> to_string)
-                                      with _ -> None);
-                                   permalink =
-                                     (try Some (item |> member "permalink" |> to_string)
-                                      with _ -> None);
-                                 })
-                        in
-                        let next_after =
-                          try
-                            Some
-                              (json
-                               |> member "paging"
-                               |> member "cursors"
-                               |> member "after"
-                               |> to_string)
-                          with _ -> None
-                        in
+                      (try
+                        let posts, next_after = parse_posts_response response.body in
                         on_result (Ok (posts, next_after))
                       with exn ->
                         on_result
                           (Error
                              (Error_types.Internal_error
-                                (Printf.sprintf "Failed to parse posts response: %s" (Printexc.to_string exn))))
+                                (Printf.sprintf "Failed to parse posts response: %s" (Printexc.to_string exn)))))
                     else
                       on_result
                         (Error
@@ -1849,19 +2036,76 @@ module Make (Config : CONFIG) = struct
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
 
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
+  let post_single
+      ~account_id
+      ~text
+      ~media_urls
+      ?(alt_texts=[])
+      ?idempotency_key
+      ?reply_control
+      ?topic_tag
+      ?quoted_post_id
+      ?location_id
+      ?(is_ghost_post = false)
+      ?poll_options
+      on_result =
     let validation_errors =
-      [ validate_post_content ~text ~media_urls; validate_media_urls media_urls ]
+      [ validate_post_content ~text ~media_urls;
+        validate_media_urls media_urls;
+        validate_topic_tag topic_tag ]
       |> List.filter_map (fun x -> x)
+    in
+    let validation_errors =
+      match alt_texts with
+      | [] -> validation_errors
+      | first :: _ ->
+          (match validate_alt_text first with
+           | Some err -> err :: validation_errors
+           | None -> validation_errors)
+    in
+    let validation_errors =
+      match poll_options with
+      | None -> validation_errors
+      | Some options ->
+          let poll_errors = validate_poll_options options in
+          let media_conflict =
+            if media_urls <> [] then
+              [ Error_types.Option_conflict "polls cannot be combined with media" ]
+            else
+              []
+          in
+          media_conflict @ poll_errors @ validation_errors
+    in
+    let validation_errors =
+      if is_ghost_post && media_urls <> [] then
+        (Error_types.Option_conflict "ghost posts must be text-only") :: validation_errors
+      else
+        validation_errors
     in
     if validation_errors <> [] then
       on_result (Error_types.Failure (Error_types.Validation_error validation_errors))
     else
-        with_valid_credentials ~account_id
-          (fun creds ->
-            let on_user_id = function
-              | Error err -> on_result (Error_types.Failure err)
-              | Ok user_id ->
+      let use_auto_publish = media_urls = [] && poll_options = None in
+      with_valid_credentials ~account_id
+        (fun creds ->
+          let on_user_id = function
+            | Error err -> on_result (Error_types.Failure err)
+            | Ok user_id ->
+              if use_auto_publish then
+                create_text_container
+                  ~access_token:creds.access_token
+                  ~user_id
+                  ~text
+                  ?idempotency_key
+                  ?reply_control
+                  ?topic_tag
+                  ?quoted_post_id
+                  ?location_id
+                  ~auto_publish:true
+                  (function
+                    | Ok post_id -> on_result (Error_types.Success post_id)
+                    | Error err -> on_result (Error_types.Failure err))
+              else
                 let on_container = function
                   | Error err -> on_result (Error_types.Failure err)
                   | Ok creation_id ->
@@ -1880,13 +2124,26 @@ module Make (Config : CONFIG) = struct
                     ?idempotency_key
                     ?reply_control
                     ?topic_tag
+                    ?quoted_post_id
                     ?location_id
+                    ~is_ghost_post
+                    ?poll_options
                     on_container
-            in
-            get_user_id ~access_token:creds.access_token on_user_id)
-          (fun err -> on_result (Error_types.Failure err))
+          in
+          get_user_id ~access_token:creds.access_token on_user_id)
+        (fun err -> on_result (Error_types.Failure err))
 
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
+  let post_thread
+      ~account_id
+      ~texts
+      ~media_urls_per_post
+      ?(alt_texts_per_post=[])
+      ?idempotency_key
+      ?reply_control
+      ?topic_tag
+      ?quoted_post_id
+      ?location_id
+      on_result =
     if texts = [] then
       on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
     else
@@ -1925,16 +2182,24 @@ module Make (Config : CONFIG) = struct
         with _ -> None
       in
       let thread_validation_errors =
-        texts
-        |> List.mapi (fun index text ->
-               let post_errors =
-                 [ validate_post_content ~text ~media_urls:(media_urls_for_index index);
-                   validate_media_urls (media_urls_for_index index) ]
-                 |> List.filter_map (fun x -> x)
-               in
-               if post_errors = [] then None
-               else Some (Error_types.Thread_post_invalid { index; errors = post_errors }))
-        |> List.filter_map (fun x -> x)
+        let base_errors =
+          texts
+          |> List.mapi (fun index text ->
+                 let post_errors =
+                   [ validate_post_content ~text ~media_urls:(media_urls_for_index index);
+                     validate_media_urls (media_urls_for_index index) ]
+                   |> List.filter_map (fun x -> x)
+                 in
+                 if post_errors = [] then None
+                 else Some (Error_types.Thread_post_invalid { index; errors = post_errors }))
+          |> List.filter_map (fun x -> x)
+        in
+        let topic_tag_error =
+          match validate_topic_tag topic_tag with
+          | Some err -> [err]
+          | None -> []
+        in
+        base_errors @ topic_tag_error
       in
       if thread_validation_errors <> [] then
         on_result (Error_types.Failure (Error_types.Validation_error thread_validation_errors))
@@ -1980,8 +2245,6 @@ module Make (Config : CONFIG) = struct
                              })
                     | text :: rest ->
                         let alt_text = alt_text_for_index index in
-                        (* Location tagging only applies to the root post of a thread *)
-                        let item_location_id = if index = 0 then location_id else None in
                         create_container_for_post
                           ~access_token:creds.access_token
                           ~user_id
@@ -1994,7 +2257,8 @@ module Make (Config : CONFIG) = struct
                             | _ -> None)
                           ?reply_control
                           ?topic_tag
-                          ?location_id:item_location_id
+                          ?quoted_post_id:(if index = 0 then quoted_post_id else None)
+                          ?location_id:(if index = 0 then location_id else None)
                           (function
                             | Error err ->
                                 on_result
