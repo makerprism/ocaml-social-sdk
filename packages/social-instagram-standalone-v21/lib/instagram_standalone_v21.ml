@@ -265,7 +265,7 @@ module OAuth = struct
 
         Uses the ig_exchange_token grant type on the Instagram Graph API endpoint.
         This is specific to the Instagram Standalone (Business Login) flow.
-        Uses POST with form-urlencoded body as required by Meta API.
+        Uses GET with query parameters as per Instagram Basic Display API specification.
 
         @param client_secret Instagram App Secret
         @param short_lived_token The short-lived token from exchange_code
@@ -274,21 +274,18 @@ module OAuth = struct
     *)
     let exchange_for_long_lived_token ~client_secret ~short_lived_token ?app_secret ?on_response on_result =
       let params = [
-        ("grant_type", "ig_exchange_token");
-        ("client_secret", client_secret);
-        ("access_token", short_lived_token);
+        ("grant_type", ["ig_exchange_token"]);
+        ("client_secret", [client_secret]);
+        ("access_token", [short_lived_token]);
       ] @
       (match app_secret with
-       | Some secret -> [("appsecret_proof", compute_app_secret_proof ~app_secret:secret ~access_token:short_lived_token)]
+       | Some secret -> [("appsecret_proof", [compute_app_secret_proof ~app_secret:secret ~access_token:short_lived_token])]
        | None -> [])
       in
-      let body = Social_core.form_urlencode_kvs params in
-      let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded");
-      ] in
-      let url = Metadata.long_lived_token_endpoint in
+      let query = Uri.encoded_of_query params in
+      let url = Printf.sprintf "%s?%s" Metadata.long_lived_token_endpoint query in
 
-      Http.post ~headers ~body url
+      Http.get url
         (fun response ->
           (match on_response with Some f -> f response | None -> ());
           if response.status >= 200 && response.status < 300 then
