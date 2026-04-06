@@ -265,6 +265,7 @@ module OAuth = struct
 
         Uses the ig_exchange_token grant type on the Instagram Graph API endpoint.
         This is specific to the Instagram Standalone (Business Login) flow.
+        Uses POST with form-urlencoded body as required by Meta API.
 
         @param client_secret Instagram App Secret
         @param short_lived_token The short-lived token from exchange_code
