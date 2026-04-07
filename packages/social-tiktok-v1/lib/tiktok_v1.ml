@@ -303,16 +303,19 @@ end
 type privacy_level =
   | PublicToEveryone
   | MutualFollowFriends
+  | FollowerOfCreator
   | SelfOnly
 
 let string_of_privacy_level = function
   | PublicToEveryone -> "PUBLIC_TO_EVERYONE"
   | MutualFollowFriends -> "MUTUAL_FOLLOW_FRIENDS"
+  | FollowerOfCreator -> "FOLLOWER_OF_CREATOR"
   | SelfOnly -> "SELF_ONLY"
 
 let privacy_level_of_string = function
   | "PUBLIC_TO_EVERYONE" -> PublicToEveryone
   | "MUTUAL_FOLLOW_FRIENDS" -> MutualFollowFriends
+  | "FOLLOWER_OF_CREATOR" -> FollowerOfCreator
   | "SELF_ONLY" -> SelfOnly
   | _ -> SelfOnly
 
@@ -613,6 +616,7 @@ let parse_creator_info json =
     let privacy_level_of_string_opt = function
       | "PUBLIC_TO_EVERYONE" -> Some PublicToEveryone
       | "MUTUAL_FOLLOW_FRIENDS" -> Some MutualFollowFriends
+      | "FOLLOWER_OF_CREATOR" -> Some FollowerOfCreator
       | "SELF_ONLY" -> Some SelfOnly
       | _ -> None
     in
