@@ -2320,18 +2320,22 @@ let test_make_post_info_defaults () =
   assert (info.disable_comment = false);
   assert (info.disable_stitch = false);
   assert (info.video_cover_timestamp_ms = None);
+  assert (info.brand_content_toggle = false);
+  assert (info.brand_organic_toggle = false);
   print_endline "PASSED"
 
 (** Test: Post info creation with all options *)
 let test_make_post_info_all_options () =
   print_string "Test: make_post_info with all options... ";
-  let info = Social_tiktok_v1.make_post_info 
+  let info = Social_tiktok_v1.make_post_info
     ~title:"My viral video"
     ~privacy_level:Social_tiktok_v1.PublicToEveryone
     ~disable_duet:true
     ~disable_comment:true
     ~disable_stitch:true
     ~video_cover_timestamp_ms:5000
+    ~brand_content_toggle:true
+    ~brand_organic_toggle:true
     () in
   assert (info.title = "My viral video");
   assert (info.privacy_level = Social_tiktok_v1.PublicToEveryone);
@@ -2339,6 +2343,8 @@ let test_make_post_info_all_options () =
   assert (info.disable_comment = true);
   assert (info.disable_stitch = true);
   assert (info.video_cover_timestamp_ms = Some 5000);
+  assert (info.brand_content_toggle = true);
+  assert (info.brand_organic_toggle = true);
   print_endline "PASSED"
 
 (** Test: Post info to JSON serialization *)
@@ -2490,6 +2496,8 @@ let test_make_photo_post_info_defaults () =
   assert (info.privacy_level = Social_tiktok_v1.SelfOnly);
   assert (info.disable_comment = false);
   assert (info.is_aigc = false);
+  assert (info.brand_content_toggle = false);
+  assert (info.brand_organic_toggle = false);
   assert (info.photo_images = ["https://example.com/photo1.jpg"]);
   assert (info.photo_cover_index = 0);
   assert (info.post_mode = Social_tiktok_v1.Direct_post);
@@ -2503,6 +2511,8 @@ let test_make_photo_post_info_all_options () =
     ~privacy_level:Social_tiktok_v1.PublicToEveryone
     ~disable_comment:true
     ~is_aigc:true
+    ~brand_content_toggle:true
+    ~brand_organic_toggle:true
     ~photo_cover_index:1
     ~post_mode:Social_tiktok_v1.Media_upload
     () in
@@ -2510,6 +2520,8 @@ let test_make_photo_post_info_all_options () =
   assert (info.privacy_level = Social_tiktok_v1.PublicToEveryone);
   assert (info.disable_comment = true);
   assert (info.is_aigc = true);
+  assert (info.brand_content_toggle = true);
+  assert (info.brand_organic_toggle = true);
   assert (List.length info.photo_images = 2);
   assert (info.photo_cover_index = 1);
   assert (info.post_mode = Social_tiktok_v1.Media_upload);

@@ -352,6 +352,8 @@ type post_info = {
   disable_stitch : bool;
   video_cover_timestamp_ms : int option;
   is_aigc : bool;  (** Whether the video is AI-generated content *)
+  brand_content_toggle : bool;  (** Whether the video is branded/sponsored content *)
+  brand_organic_toggle : bool;  (** Whether the video is organic brand content *)
 }
 
 (** Creator information returned by TikTok *)
@@ -540,8 +542,10 @@ let validate_caption text =
 
 (** Create post_info with defaults *)
 let make_post_info ~title ?(privacy_level=SelfOnly) ?(disable_duet=false)
-    ?(disable_comment=false) ?(disable_stitch=false) ?video_cover_timestamp_ms ?(is_aigc=false) () =
-  { title; privacy_level; disable_duet; disable_comment; disable_stitch; video_cover_timestamp_ms; is_aigc }
+    ?(disable_comment=false) ?(disable_stitch=false) ?video_cover_timestamp_ms ?(is_aigc=false)
+    ?(brand_content_toggle=false) ?(brand_organic_toggle=false) () =
+  { title; privacy_level; disable_duet; disable_comment; disable_stitch;
+    video_cover_timestamp_ms; is_aigc; brand_content_toggle; brand_organic_toggle }
 
 (** {1 JSON Serialization} *)
 
@@ -553,6 +557,8 @@ let post_info_to_json info =
     ("disable_comment", `Bool info.disable_comment);
     ("disable_stitch", `Bool info.disable_stitch);
     ("is_aigc", `Bool info.is_aigc);
+    ("brand_content_toggle", `Bool info.brand_content_toggle);
+    ("brand_organic_toggle", `Bool info.brand_organic_toggle);
   ] in
   let with_cover = match info.video_cover_timestamp_ms with
     | Some ms -> ("video_cover_timestamp_ms", `Int ms) :: base
@@ -566,6 +572,8 @@ type photo_post_info = {
   privacy_level : privacy_level;
   disable_comment : bool;
   is_aigc : bool;  (** Whether the content is AI-generated *)
+  brand_content_toggle : bool;  (** Whether the photo is branded/sponsored content *)
+  brand_organic_toggle : bool;  (** Whether the photo is organic brand content *)
   photo_images : string list;  (** List of photo image URLs *)
   photo_cover_index : int;  (** Index of the cover photo in photo_images *)
   post_mode : post_mode;  (** DIRECT_POST or MEDIA_UPLOAD *)
@@ -573,10 +581,11 @@ type photo_post_info = {
 
 (** Create photo_post_info with defaults *)
 let make_photo_post_info ~title ~photo_images ?(privacy_level=SelfOnly)
-    ?(disable_comment=false) ?(is_aigc=false) ?(photo_cover_index=0)
+    ?(disable_comment=false) ?(is_aigc=false) ?(brand_content_toggle=false)
+    ?(brand_organic_toggle=false) ?(photo_cover_index=0)
     ?(post_mode=Direct_post) () =
-  { title; privacy_level; disable_comment; is_aigc; photo_images;
-    photo_cover_index; post_mode }
+  { title; privacy_level; disable_comment; is_aigc; brand_content_toggle;
+    brand_organic_toggle; photo_images; photo_cover_index; post_mode }
 
 let photo_post_info_to_json info =
   `Assoc [
@@ -585,6 +594,8 @@ let photo_post_info_to_json info =
       ("privacy_level", `String (string_of_privacy_level info.privacy_level));
       ("disable_comment", `Bool info.disable_comment);
       ("is_aigc", `Bool info.is_aigc);
+      ("brand_content_toggle", `Bool info.brand_content_toggle);
+      ("brand_organic_toggle", `Bool info.brand_organic_toggle);
     ]);
     ("source_info", `Assoc [
       ("source", `String "PULL_FROM_URL");
@@ -1698,6 +1709,8 @@ module Make (Config : CONFIG) = struct
       ?(disable_stitch=false)
       ?video_cover_timestamp_ms
       ?(is_aigc=false)
+      ?(brand_content_toggle=false)
+      ?(brand_organic_toggle=false)
       on_result =
     let caption_len = String.length caption in
     if caption_len > max_caption_length then
@@ -1711,6 +1724,8 @@ module Make (Config : CONFIG) = struct
           ~disable_stitch
           ?video_cover_timestamp_ms
           ~is_aigc
+          ~brand_content_toggle
+          ~brand_organic_toggle
           ()
         in
         let video_size = String.length video_content in
@@ -1772,6 +1787,8 @@ module Make (Config : CONFIG) = struct
       ?(disable_stitch=false)
       ?video_cover_timestamp_ms
       ?(is_aigc=false)
+      ?(brand_content_toggle=false)
+      ?(brand_organic_toggle=false)
       ?(upload_chunk_size_bytes=default_upload_chunk_size_bytes)
       ?(validate_before_upload=false)
       on_result =
@@ -1829,6 +1846,7 @@ module Make (Config : CONFIG) = struct
                 ~upload_chunk_size_bytes
                 ~privacy_level ~disable_duet ~disable_comment ~disable_stitch
                 ?video_cover_timestamp_ms ~is_aigc
+                ~brand_content_toggle ~brand_organic_toggle
                 on_result)
         else
           if response.status = 404 then
@@ -1852,6 +1870,8 @@ module Make (Config : CONFIG) = struct
       ?(disable_stitch=false)
       ?video_cover_timestamp_ms
       ?(is_aigc=false)
+      ?(brand_content_toggle=false)
+      ?(brand_organic_toggle=false)
       on_result =
     let caption_len = String.length caption in
     if caption_len > max_caption_length then
@@ -1867,6 +1887,8 @@ module Make (Config : CONFIG) = struct
         ~disable_stitch
         ?video_cover_timestamp_ms
         ~is_aigc
+        ~brand_content_toggle
+        ~brand_organic_toggle
         ()
       in
       get_creator_info ~account_id
@@ -1885,6 +1907,7 @@ module Make (Config : CONFIG) = struct
   let post_single ~account_id ~text ~media_urls ?(alt_texts=[])
       ?(privacy_level=SelfOnly) ?(disable_duet=false) ?(disable_comment=false)
       ?(disable_stitch=false) ?video_cover_timestamp_ms ?(is_aigc=false)
+      ?(brand_content_toggle=false) ?(brand_organic_toggle=false)
       ?(validate_media_before_upload=false) on_result =
     let _ = alt_texts in (* TikTok doesn't support alt text *)
     let _ = validate_media_before_upload in
@@ -1903,12 +1926,14 @@ module Make (Config : CONFIG) = struct
           post_video_from_url ~account_id ~caption:text ~video_url
             ~privacy_level ~disable_duet ~disable_comment ~disable_stitch
             ?video_cover_timestamp_ms ~is_aigc
+            ~brand_content_toggle ~brand_organic_toggle
             (function
               | Ok publish_id -> on_result (Error_types.Success publish_id)
               | Error err -> on_result (Error_types.Failure err))
   
   (** Post thread (TikTok doesn't support threads, posts videos separately) *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(is_aigc=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(is_aigc=false)
+      ?(brand_content_toggle=false) ?(brand_organic_toggle=false) on_result =
     let _ = alt_texts_per_post in
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
@@ -1942,6 +1967,7 @@ module Make (Config : CONFIG) = struct
               (* Validation ensures urls is non-empty *)
               let video_url = List.hd urls in
               post_video_from_url ~account_id ~caption:text ~video_url ~is_aigc
+                ~brand_content_toggle ~brand_organic_toggle
                 (function
                   | Ok post_id -> post_all (post_id :: acc) (post_index + 1) rest_texts rest_media
                   | Error err ->
