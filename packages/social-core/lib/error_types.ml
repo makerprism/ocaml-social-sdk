@@ -17,6 +17,10 @@ type validation_error =
   | Invalid_url of string
   | Thread_empty
   | Thread_post_invalid of { index: int; errors: validation_error list }
+  | Invalid_location_id of string
+  | Location_not_supported_with_media of string
+  | Location_not_supported_for_carousel of string
+  | Location_not_supported_for_threads of string
 
 (** {1 Rate Limiting} *)
 
@@ -110,9 +114,9 @@ type thread_result = {
 
 (** Convert a validation error to human-readable string *)
 let rec validation_error_to_string = function
-  | Text_too_long { length; max } -> 
+  | Text_too_long { length; max } ->
       Printf.sprintf "Text too long: %d characters (max %d)" length max
-  | Text_empty -> 
+  | Text_empty ->
       "Text cannot be empty"
   | Media_required ->
       "Media is required for this platform"
@@ -128,11 +132,19 @@ let rec validation_error_to_string = function
       Printf.sprintf "Too many media items: %d (max %d)" count max
   | Invalid_url url ->
       Printf.sprintf "Invalid URL: %s" url
-  | Thread_empty -> 
+  | Thread_empty ->
       "Thread cannot be empty"
   | Thread_post_invalid { index; errors } ->
-      Printf.sprintf "Thread post %d invalid: %s" index 
+      Printf.sprintf "Thread post %d invalid: %s" index
         (String.concat "; " (List.map validation_error_to_string errors))
+  | Invalid_location_id reason ->
+      Printf.sprintf "Invalid location ID: %s" reason
+  | Location_not_supported_with_media reason ->
+      reason
+  | Location_not_supported_for_carousel reason ->
+      reason
+  | Location_not_supported_for_threads reason ->
+      reason
 
 (** Convert an auth error to human-readable string *)
 let auth_error_to_string = function

@@ -745,6 +745,16 @@ module Make (Config : CONFIG) = struct
       | [] -> None
       | first :: _ -> Some first
 
+  let validate_location_id ~location_id ~has_media =
+    match location_id with
+    | None -> None
+    | Some loc_id ->
+        if String.trim loc_id = "" then
+          Some (Error_types.Invalid_location_id "Location ID cannot be empty")
+        else if has_media then
+          Some (Error_types.Location_not_supported_with_media "Threads location tagging only supports text-only posts")
+        else None
+
   let insight_metric_of_string raw_metric =
     match String.lowercase_ascii (String.trim raw_metric) with
     | "views" -> Some Views
@@ -891,6 +901,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?location_id
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -914,6 +925,10 @@ module Make (Config : CONFIG) = struct
          @
          (match normalized_idempotency_key with
           | Some key -> [ ("client_request_id", key) ]
+          | None -> [])
+         @
+         (match location_id with
+          | Some loc_id -> [ ("location_id", loc_id) ]
           | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -1019,6 +1034,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?location_id
       on_result =
     match media_urls with
     | [] ->
@@ -1030,6 +1046,7 @@ module Make (Config : CONFIG) = struct
           ?idempotency_key
           ?reply_control
           ?topic_tag
+          ?location_id
           on_result
     | [ media_url ] ->
         let normalized = normalize_media_url media_url in
@@ -1250,59 +1267,67 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
 
-  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control on_result =
-    let validation_errors =
-      [ validate_media_urls ~max_items:20 media_urls ]
-      |> List.filter_map (fun x -> x)
+  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control ?location_id on_result =
+    let location_validation =
+      match location_id with
+      | Some _ -> Some (Error_types.Location_not_supported_for_carousel "Threads location tagging is not supported for carousel posts")
+      | None -> None
     in
-    let count = List.length media_urls in
-    let validation_errors =
-      if count < 2 then
-        (Error_types.Too_many_media { count; max = 2 }) :: validation_errors
-      else
-        validation_errors
-    in
-    if validation_errors <> [] then
-      on_result (Error_types.Failure (Error_types.Validation_error validation_errors))
-    else
-      let media_urls_with_alt =
-        List.mapi (fun i url ->
-          let alt_text = try List.nth alt_texts i with _ -> None in
-          (url, alt_text)
-        ) media_urls
-      in
-      with_valid_credentials ~account_id
-        (fun creds ->
-          get_user_id ~access_token:creds.access_token
-            (function
-              | Error err -> on_result (Error_types.Failure err)
-              | Ok user_id ->
-                  create_carousel_children
-                    ~access_token:creds.access_token
-                    ~user_id
-                    ~media_urls_with_alt
-                    ~acc:[]
-                    (function
-                      | Error err -> on_result (Error_types.Failure err)
-                      | Ok children_ids ->
-                          create_carousel_container
-                            ~access_token:creds.access_token
-                            ~user_id
-                            ~children_ids
-                            ~text
-                            ?topic_tag
-                            ?reply_control
-                            (function
-                              | Error err -> on_result (Error_types.Failure err)
-                              | Ok carousel_id ->
-                                  poll_container_status
-                                    ~access_token:creds.access_token
-                                    ~container_id:carousel_id
-                                    (function
-                                      | Error err -> on_result (Error_types.Failure err)
-                                      | Ok _container_id ->
-                                          publish_container
-                                            ~access_token:creds.access_token
+    match location_validation with
+    | Some err -> on_result (Error_types.Failure (Error_types.Validation_error [err]))
+    | None ->
+        let validation_errors =
+          [ validate_media_urls ~max_items:20 media_urls ]
+          |> List.filter_map (fun x -> x)
+        in
+        let count = List.length media_urls in
+        let validation_errors =
+          if count < 2 then
+            (Error_types.Too_many_media { count; max = 2 }) :: validation_errors
+          else
+            validation_errors
+        in
+        if validation_errors <> [] then
+          on_result (Error_types.Failure (Error_types.Validation_error validation_errors))
+        else
+          let media_urls_with_alt =
+            List.mapi (fun i url ->
+              let alt_text = try List.nth alt_texts i with _ -> None in
+              (url, alt_text)
+            ) media_urls
+          in
+          with_valid_credentials ~account_id
+            (fun creds ->
+              get_user_id ~access_token:creds.access_token
+                (function
+                  | Error err -> on_result (Error_types.Failure err)
+                  | Ok user_id ->
+                      create_carousel_children
+                        ~access_token:creds.access_token
+                        ~user_id
+                        ~media_urls_with_alt
+                        ~acc:[]
+                        (function
+                          | Error err -> on_result (Error_types.Failure err)
+                          | Ok children_ids ->
+                              create_carousel_container
+                                ~access_token:creds.access_token
+                                ~user_id
+                                ~children_ids
+                                ~text
+                                ?topic_tag
+                                ?reply_control
+                                (function
+                                  | Error err -> on_result (Error_types.Failure err)
+                                  | Ok carousel_id ->
+                                      poll_container_status
+                                        ~access_token:creds.access_token
+                                        ~container_id:carousel_id
+                                        (function
+                                          | Error err -> on_result (Error_types.Failure err)
+                                          | Ok _container_id ->
+                                              publish_container
+                                                ~access_token:creds.access_token
                                             ~user_id
                                             ~creation_id:carousel_id
                                             (function
@@ -1830,9 +1855,11 @@ module Make (Config : CONFIG) = struct
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
 
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?idempotency_key ?reply_control ?topic_tag on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
     let validation_errors =
-      [ validate_post_content ~text ~media_urls; validate_media_urls media_urls ]
+      [ validate_post_content ~text ~media_urls;
+        validate_media_urls media_urls;
+        validate_location_id ~location_id ~has_media:(media_urls <> []) ]
       |> List.filter_map (fun x -> x)
     in
     if validation_errors <> [] then
@@ -1861,15 +1888,24 @@ module Make (Config : CONFIG) = struct
                     ?idempotency_key
                     ?reply_control
                     ?topic_tag
+                    ?location_id
                     on_container
             in
             get_user_id ~access_token:creds.access_token on_user_id)
           (fun err -> on_result (Error_types.Failure err))
 
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag on_result =
-    if texts = [] then
-      on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
-    else
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
+    let location_validation =
+      match location_id with
+      | Some _ -> Some (Error_types.Location_not_supported_for_threads "Threads location tagging is only supported for single text posts")
+      | None -> None
+    in
+    match location_validation with
+    | Some err -> on_result (Error_types.Failure (Error_types.Validation_error [err]))
+    | None ->
+        if texts = [] then
+          on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
+        else
       let rec drop n xs =
         if n <= 0 then xs
         else
