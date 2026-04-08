@@ -745,14 +745,12 @@ module Make (Config : CONFIG) = struct
       | [] -> None
       | first :: _ -> Some first
 
-  let validate_location_id ~location_id ~has_media =
+  let validate_location_id ~location_id ~has_media:_ =
     match location_id with
     | None -> None
     | Some loc_id ->
         if String.trim loc_id = "" then
           Some (Error_types.Invalid_location_id "Location ID cannot be empty")
-        else if has_media then
-          Some (Error_types.Location_not_supported_with_media "Threads location tagging only supports text-only posts")
         else None
 
   let insight_metric_of_string raw_metric =
@@ -964,6 +962,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?location_id
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -1001,6 +1000,10 @@ module Make (Config : CONFIG) = struct
          @
          (match normalized_idempotency_key with
           | Some key -> [ ("client_request_id", key) ]
+          | None -> [])
+         @
+         (match location_id with
+          | Some loc_id -> [ ("location_id", loc_id) ]
           | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -1063,6 +1066,7 @@ module Make (Config : CONFIG) = struct
                ?idempotency_key
                ?reply_control
                ?topic_tag
+               ?location_id
                on_result
          | None ->
              on_result
@@ -1228,6 +1232,7 @@ module Make (Config : CONFIG) = struct
       ~text
       ?topic_tag
       ?reply_control
+      ?location_id
       on_result =
     let normalized_text = String.trim text in
     let body =
@@ -1244,7 +1249,11 @@ module Make (Config : CONFIG) = struct
          @
          (match topic_tag with
           | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
-          | _ -> []))
+          | _ -> [])
+         @
+         (match location_id with
+          | Some loc_id -> [ ("location_id", loc_id) ]
+          | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
     let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
@@ -1268,18 +1277,10 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error err)))
 
   let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control ?location_id on_result =
-    let location_validation =
-      match location_id with
-      | Some _ -> Some (Error_types.Location_not_supported_for_carousel "Threads location tagging is not supported for carousel posts")
-      | None -> None
+    let validation_errors =
+      [ validate_media_urls ~max_items:20 media_urls ]
+      |> List.filter_map (fun x -> x)
     in
-    match location_validation with
-    | Some err -> on_result (Error_types.Failure (Error_types.Validation_error [err]))
-    | None ->
-        let validation_errors =
-          [ validate_media_urls ~max_items:20 media_urls ]
-          |> List.filter_map (fun x -> x)
-        in
         let count = List.length media_urls in
         let validation_errors =
           if count < 2 then
@@ -1317,6 +1318,7 @@ module Make (Config : CONFIG) = struct
                                 ~text
                                 ?topic_tag
                                 ?reply_control
+                                ?location_id
                                 (function
                                   | Error err -> on_result (Error_types.Failure err)
                                   | Ok carousel_id ->
@@ -1895,17 +1897,9 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error_types.Failure err))
 
   let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
-    let location_validation =
-      match location_id with
-      | Some _ -> Some (Error_types.Location_not_supported_for_threads "Threads location tagging is only supported for single text posts")
-      | None -> None
-    in
-    match location_validation with
-    | Some err -> on_result (Error_types.Failure (Error_types.Validation_error [err]))
-    | None ->
-        if texts = [] then
-          on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
-        else
+    if texts = [] then
+      on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
+    else
       let rec drop n xs =
         if n <= 0 then xs
         else
