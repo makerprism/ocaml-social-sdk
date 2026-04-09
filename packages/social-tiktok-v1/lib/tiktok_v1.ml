@@ -1263,6 +1263,40 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
+  (** Initialize inbox video upload via PULL_FROM_URL - TikTok downloads the video from the given URL.
+      Unlike FILE_UPLOAD, this does not require downloading and re-uploading the video in chunks.
+      Uses the /v2/post/publish/inbox/video/init/ endpoint. *)
+  let init_inbox_video_pull_from_url ~account_id ~post_info ~video_url on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let headers = [
+          ("Authorization", "Bearer " ^ access_token);
+          ("Content-Type", "application/json; charset=UTF-8");
+        ] in
+        let body = `Assoc [
+          ("post_info", post_info_to_json post_info);
+          ("source_info", `Assoc [
+            ("source", `String "PULL_FROM_URL");
+            ("video_url", `String video_url);
+          ]);
+        ] |> Yojson.Basic.to_string in
+
+        Config.Http.post ~headers ~body inbox_video_init_url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              try
+                let json = Yojson.Basic.from_string response.body in
+                let open Yojson.Basic.Util in
+                let data = json |> member "data" in
+                let publish_id = data |> member "publish_id" |> to_string in
+                on_result (Ok publish_id)
+              with e ->
+                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse inbox pull-from-url init response: %s" (Printexc.to_string e))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
   (** Initialize a photo post via content/init endpoint *)
   let init_photo_post ~account_id ~photo_post_info on_result =
     let image_count = List.length photo_post_info.photo_images in
