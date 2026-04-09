@@ -374,6 +374,7 @@ type creator_info = {
 (** Publish status for tracking upload progress *)
 type publish_status =
   | Processing
+  | SentToUserInbox  (** Inbox upload: notification sent to creator to complete posting *)
   | Published of string  (** TikTok video ID *)
   | Failed of { error_code : string; error_message : string }
 
@@ -710,6 +711,7 @@ let parse_publish_status json =
     let status = data |> member "status" |> to_string in
     match status with
     | "PROCESSING_DOWNLOAD" | "PROCESSING_UPLOAD" -> Processing
+    | "SEND_TO_USER_INBOX" -> SentToUserInbox
     | "PUBLISH_COMPLETE" ->
         (match get_first_published_id data with
          | Some video_id -> Published video_id
@@ -1689,6 +1691,7 @@ module Make (Config : CONFIG) = struct
                   on_result (Error (Error_types.Internal_error "Publish status polling timed out"))
                 else
                   loop (attempt + 1)
+            | Ok (SentToUserInbox as status) -> on_result (Ok status)
             | Ok (Published _ as status) -> on_result (Ok status)
             | Ok (Failed _ as status) -> on_result (Ok status))
       in
