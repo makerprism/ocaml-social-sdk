@@ -891,6 +891,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?location_id
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -914,6 +915,10 @@ module Make (Config : CONFIG) = struct
          @
          (match normalized_idempotency_key with
           | Some key -> [ ("client_request_id", key) ]
+          | None -> [])
+         @
+         (match location_id with
+          | Some loc_id -> [ ("location_id", loc_id) ]
           | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
@@ -949,6 +954,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?location_id
       on_result =
     let normalized_text = String.trim text in
     let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
@@ -986,7 +992,11 @@ module Make (Config : CONFIG) = struct
          @
          (match normalized_idempotency_key with
           | Some key -> [ ("client_request_id", key) ]
-          | None -> []))
+          | None -> [])
+         @
+         (match location_id with
+          | Some loc_id when not is_carousel_item -> [ ("location_id", loc_id) ]
+          | _ -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
     let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
@@ -1019,6 +1029,7 @@ module Make (Config : CONFIG) = struct
       ?idempotency_key
       ?reply_control
       ?topic_tag
+      ?location_id
       on_result =
     match media_urls with
     | [] ->
@@ -1030,6 +1041,7 @@ module Make (Config : CONFIG) = struct
           ?idempotency_key
           ?reply_control
           ?topic_tag
+          ?location_id
           on_result
     | [ media_url ] ->
         let normalized = normalize_media_url media_url in
@@ -1046,6 +1058,7 @@ module Make (Config : CONFIG) = struct
                ?idempotency_key
                ?reply_control
                ?topic_tag
+               ?location_id
                on_result
          | None ->
              on_result
@@ -1211,6 +1224,7 @@ module Make (Config : CONFIG) = struct
       ~text
       ?topic_tag
       ?reply_control
+      ?location_id
       on_result =
     let normalized_text = String.trim text in
     let body =
@@ -1227,7 +1241,11 @@ module Make (Config : CONFIG) = struct
          @
          (match topic_tag with
           | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
-          | _ -> []))
+          | _ -> [])
+         @
+         (match location_id with
+          | Some loc_id -> [ ("location_id", loc_id) ]
+          | None -> []))
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
     let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
@@ -1250,7 +1268,7 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
 
-  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control on_result =
+  let post_carousel ~account_id ~text ~media_urls ?(alt_texts=[]) ?topic_tag ?reply_control ?location_id on_result =
     let validation_errors =
       [ validate_media_urls ~max_items:20 media_urls ]
       |> List.filter_map (fun x -> x)
@@ -1292,6 +1310,7 @@ module Make (Config : CONFIG) = struct
                             ~text
                             ?topic_tag
                             ?reply_control
+                            ?location_id
                             (function
                               | Error err -> on_result (Error_types.Failure err)
                               | Ok carousel_id ->
@@ -1830,7 +1849,7 @@ module Make (Config : CONFIG) = struct
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
 
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?idempotency_key ?reply_control ?topic_tag on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
     let validation_errors =
       [ validate_post_content ~text ~media_urls; validate_media_urls media_urls ]
       |> List.filter_map (fun x -> x)
@@ -1861,12 +1880,13 @@ module Make (Config : CONFIG) = struct
                     ?idempotency_key
                     ?reply_control
                     ?topic_tag
+                    ?location_id
                     on_container
             in
             get_user_id ~access_token:creds.access_token on_user_id)
           (fun err -> on_result (Error_types.Failure err))
 
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?idempotency_key ?reply_control ?topic_tag ?location_id on_result =
     if texts = [] then
       on_result (Error_types.Failure (Error_types.Validation_error [ Error_types.Thread_empty ]))
     else
@@ -1960,6 +1980,8 @@ module Make (Config : CONFIG) = struct
                              })
                     | text :: rest ->
                         let alt_text = alt_text_for_index index in
+                        (* Location tagging only applies to the root post of a thread *)
+                        let item_location_id = if index = 0 then location_id else None in
                         create_container_for_post
                           ~access_token:creds.access_token
                           ~user_id
@@ -1972,6 +1994,7 @@ module Make (Config : CONFIG) = struct
                             | _ -> None)
                           ?reply_control
                           ?topic_tag
+                          ?location_id:item_location_id
                           (function
                             | Error err ->
                                 on_result
