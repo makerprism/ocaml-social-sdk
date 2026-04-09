@@ -42,7 +42,7 @@ val get_authorization_url :
     Functor parameterized over the HTTP client. Each operation uses CPS:
     success and error continuations. *)
 
-module Make (Http : Social_core.HTTP_CLIENT) : sig
+module Make (_ : Social_core.HTTP_CLIENT) : sig
   (** Exchange an authorization code for credentials (PKCE flow) *)
   val exchange_code :
     client_id:string ->

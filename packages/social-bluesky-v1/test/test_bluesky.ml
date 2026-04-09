@@ -710,6 +710,9 @@ module Mock_config = struct
   
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
     on_success ()
+
+  let resize_image ~data:_ ~mime_type:_ ~max_bytes:_ on_result =
+    on_result None
 end
 
 (** Create Bluesky provider instance *)

@@ -68,9 +68,12 @@ module Demo_config = struct
     on_success {|{"access_token":"test.handle","refresh_token":"password"}|}
   
   let update_health_status ~account_id:_ ~status ~error_message on_success _on_error =
-    Printf.printf "Health: %s%s\n%!" status 
+    Printf.printf "Health: %s%s\n%!" status
       (match error_message with Some m -> " - " ^ m | None -> "");
     on_success ()
+
+  let resize_image ~data:_ ~mime_type:_ ~max_bytes:_ on_result =
+    on_result None
 end
 
 (** Create provider *)

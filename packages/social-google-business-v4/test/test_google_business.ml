@@ -174,11 +174,26 @@ let test_token_exchange () =
       print_endline "PASS Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
 
-(** Test: Token refresh *)
+(** Test: Token refresh via ensure_valid_token *)
 let test_token_refresh () =
   Mock_config.reset ();
   Mock_config.set_env "GOOGLE_BUSINESS_CLIENT_ID" "test_client";
   Mock_config.set_env "GOOGLE_BUSINESS_CLIENT_SECRET" "test_secret";
+
+  (* Set up expired credentials so ensure_valid_token triggers a refresh *)
+  let past_time =
+    let now = Ptime_clock.now () in
+    match Ptime.sub_span now (Ptime.Span.of_int_s 3600) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate past time"
+  in
+  let expired_creds = {
+    Social_core.access_token = "expired_token";
+    refresh_token = Some "old_refresh";
+    expires_at = Some past_time;
+    auth_type = Social_core.Bearer;
+  } in
+  Mock_config.set_credentials ~account_id:"test" ~credentials:expired_creds;
 
   let response_body = {|{
     "access_token": "refreshed_token",
@@ -187,15 +202,12 @@ let test_token_refresh () =
 
   Mock_http.set_responses [{ status = 200; body = response_body; headers = [] }];
 
-  GoogleBusiness.refresh_access_token
-    ~client_id:"test_client"
-    ~client_secret:"test_secret"
-    ~refresh_token:"old_refresh"
-    (fun (access, refresh, _expires) ->
-      assert (access = "refreshed_token");
-      assert (refresh = "old_refresh");
+  GoogleBusiness.ensure_valid_token
+    ~account_id:"test"
+    (fun access_token ->
+      assert (access_token = "refreshed_token");
       print_endline "PASS Token refresh")
-    (fun err -> failwith ("Token refresh failed: " ^ err))
+    (fun _err -> failwith "Token refresh failed")
 
 (** Test: Scope verification *)
 let test_scope_verification () =
@@ -246,6 +258,7 @@ let test_post_standard_text_only () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:"locations/12345"
     ~text:"Hello from our business!"
     ~media_urls:[]
     (fun outcome ->
@@ -281,6 +294,7 @@ let test_post_with_image () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:"locations/12345"
     ~text:"Check out our new dish!"
     ~media_urls:["https://example.com/photo.jpg"]
     (fun outcome ->
@@ -308,6 +322,7 @@ let test_error_401_auth () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:"locations/12345"
     ~text:"Test post"
     ~media_urls:[]
     (fun outcome ->
@@ -328,6 +343,7 @@ let test_error_429_rate_limit () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:"locations/12345"
     ~text:"Test post"
     ~media_urls:[]
     (fun outcome ->
@@ -346,6 +362,7 @@ let test_error_400_bad_request () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:"locations/12345"
     ~text:"Test post"
     ~media_urls:[]
     (fun outcome ->
@@ -364,6 +381,7 @@ let test_error_500_server () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:"locations/12345"
     ~text:"Test post"
     ~media_urls:[]
     (fun outcome ->
@@ -485,6 +503,7 @@ let test_missing_location_name () =
 
   GoogleBusiness.post_single
     ~account_id:"test_account"
+    ~location_name:""
     ~text:"Test post"
     ~media_urls:[]
     (fun outcome ->
@@ -496,7 +515,7 @@ let test_missing_location_name () =
 
 (** Test: Build post body with event *)
 let test_build_post_body_event () =
-  let content : Google_business_v4.post_content = {
+  let content : post_content = {
     summary = "Join us for our grand opening!";
     topic = Event;
     event = Some {
@@ -524,7 +543,7 @@ let test_build_post_body_event () =
 
 (** Test: Build post body with offer *)
 let test_build_post_body_offer () =
-  let content : Google_business_v4.post_content = {
+  let content : post_content = {
     summary = "20% off this weekend!";
     topic = Offer;
     event = None;

@@ -93,6 +93,7 @@ let () =
   Printf.printf "\n2. Posting a standard update...\n";
   GoogleBusiness.post_single
     ~account_id:"demo"
+    ~location_name:"locations/demo-location"
     ~text:"Check out our new spring menu! Fresh seasonal ingredients, locally sourced."
     ~media_urls:[]
     (function

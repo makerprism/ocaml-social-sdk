@@ -196,28 +196,40 @@ let test_token_exchange () =
       print_endline "✓ Token exchange")
     (fun err -> failwith ("Token exchange failed: " ^ err))
 
-(** Test: Token refresh *)
+(** Test: Token refresh via ensure_valid_token *)
 let test_token_refresh () =
   Mock_config.reset ();
   Mock_config.set_env "YOUTUBE_CLIENT_ID" "test_client";
   Mock_config.set_env "YOUTUBE_CLIENT_SECRET" "test_secret";
-  
+
+  (* Set up expired credentials so ensure_valid_token triggers a refresh *)
+  let past_time =
+    let now = Ptime_clock.now () in
+    match Ptime.sub_span now (Ptime.Span.of_int_s 3600) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate past time"
+  in
+  let expired_creds = {
+    Social_core.access_token = "expired_token";
+    refresh_token = Some "old_refresh";
+    expires_at = Some past_time;
+    auth_type = Social_core.Bearer;
+  } in
+  Mock_config.set_credentials ~account_id:"test" ~credentials:expired_creds;
+
   let response_body = {|{
     "access_token": "refreshed_token",
     "expires_in": 3600
   }|} in
-  
+
   Mock_http.set_responses [{ status = 200; body = response_body; headers = [] }];
-  
-  YouTube.refresh_access_token
-    ~client_id:"test_client"
-    ~client_secret:"test_secret"
-    ~refresh_token:"old_refresh"
-    (fun (access, refresh, _expires) ->
-      assert (access = "refreshed_token");
-      assert (refresh = "old_refresh");  (* Google doesn't return new refresh *)
+
+  YouTube.ensure_valid_token
+    ~account_id:"test"
+    (fun access_token ->
+      assert (access_token = "refreshed_token");
       print_endline "✓ Token refresh")
-    (fun err -> failwith ("Token refresh failed: " ^ err))
+    (fun _err -> failwith "Token refresh failed")
 
 (** Test: Content validation *)
 let test_content_validation () =
