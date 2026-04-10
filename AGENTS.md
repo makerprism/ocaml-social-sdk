@@ -4,7 +4,7 @@ These rules apply to all coding agents working in this repository.
 
 ## Purpose
 
-This is an OCaml SDK for social media platform APIs (Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, TikTok, Telegram). Runtime-agnostic design works with Lwt, Eio, or sync code.
+This is an OCaml SDK for social media platform APIs (Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, TikTok). Runtime-agnostic design works with Lwt, Eio, or sync code.
 
 **Scope:** Write-side (posting), OAuth flows, and limited read/analytics. See `README.md` for platform feature matrix.
 
@@ -49,6 +49,7 @@ dune build
 ## Upstream PR Workflow
 
 - Canonical upstream is `makerprism/ocaml-social-sdk`.
+- **Never force-push to `main`.** If your branch is behind, rebase onto `main` first.
 - Before opening/updating a PR to `upstream/main`, rebase your branch onto `upstream/main`.
 - If already pushed, update with `git push --force-with-lease`.
 

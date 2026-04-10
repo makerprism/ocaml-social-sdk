@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OCaml](https://img.shields.io/badge/OCaml-%3E%3D4.14-orange)](https://ocaml.org/)
 
-OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, TikTok, and Telegram. Runtime-agnostic design works with Lwt, Eio, or sync code.
+OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, and TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
 
 > **Warning: Experimental Software**
 >
@@ -14,7 +14,7 @@ OCaml SDK for social media APIs. Post content, manage media, handle threads acro
 > - OAuth 2.0 flows for Twitter, LinkedIn, Bluesky, and Mastodon
 > - Posting (write) functionality for Twitter, LinkedIn, Bluesky, and Mastodon
 >
-> Other functionality (Facebook, Instagram, YouTube, Pinterest, TikTok, Threads, Reddit, Telegram, and broader read/analytics flows) now has automated unit/contract coverage in this repository, but still has limited production validation. Use at your own risk and expect breaking changes.
+> Other functionality (Facebook, Instagram, YouTube, Pinterest, TikTok, Threads, Reddit, and broader read/analytics flows) now has automated unit/contract coverage in this repository, but still has limited production validation. Use at your own risk and expect breaking changes.
 
 ## Packages
 
@@ -33,7 +33,6 @@ OCaml SDK for social media APIs. Post content, manage media, handle threads acro
 | `social-pinterest-v5` | Pinterest API v5 |
 | `social-reddit-v1` | Reddit API v1 |
 | `social-tiktok-v1` | TikTok Content Posting API |
-| `social-telegram-bot-v1` | Telegram Bot API (channel/group broadcast posting) |
 
 ## Installation
 
@@ -170,7 +169,6 @@ The SDK follows a runtime-agnostic design:
 | Pinterest | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | ⚠️ |
 | Reddit | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | - |
 | TikTok | ⚠️ | ⚠️ | ⚠️ | - | - | ⚠️ | ⚠️ | ⚠️ |
-| Telegram Bot | ❌ | ⚠️ | ⚠️ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
 
 ✅ = Used successfully in production workflows, ⚠️ = Implemented with automated tests but limited production validation, ❌ = Not implemented (API available), - = Not applicable
 

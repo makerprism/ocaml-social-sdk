@@ -317,28 +317,6 @@ let google_business_profile = {
   posts_per_hour = None;
 }
 
-let telegram = {
-  platform = Telegram;
-  display_name = "Telegram";
-  max_text_length = 4096;
-  requires_title = false;
-  max_title_length = None;
-  supports_threads = false;
-  media_requirement = NoMedia;
-  image_max_width = None;
-  image_max_height = None;
-  image_formats = ["jpg"; "jpeg"; "png"; "gif"; "webp"];
-  image_max_size_mb = Some 10;
-  video_max_duration_seconds = None;
-  video_formats = ["mp4"; "mov"];
-  video_max_size_mb = Some 50;
-  video_aspect_ratios = [];
-  video_max_frame_rate = None;
-  max_carousel_items = Some 10;
-  posts_per_day = None;
-  posts_per_hour = None;
-}
-
 (* ------------------------------------------------------------------ *)
 (*  Lookup                                                             *)
 (* ------------------------------------------------------------------ *)
@@ -356,7 +334,6 @@ let get_capability = function
   | Threads -> threads
   | TikTok -> tiktok
   | Reddit -> reddit
-  | Telegram -> telegram
   | GoogleBusinessProfile -> google_business_profile
 
 (** Get capability with format-specific overrides applied.
@@ -391,7 +368,7 @@ let get_capability_with_format platform format =
 let all_capabilities = [
   twitter; linkedin; bluesky; pinterest; youtube_shorts;
   mastodon; facebook_page; instagram; tiktok; reddit;
-  threads; google_business_profile; telegram;
+  threads; google_business_profile;
 ]
 
 (* ------------------------------------------------------------------ *)

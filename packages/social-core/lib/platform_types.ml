@@ -13,7 +13,6 @@ type platform =
   | Threads
   | TikTok
   | Reddit
-  | Telegram
   | GoogleBusinessProfile
 
 (** Convert platform to string *)
@@ -29,7 +28,6 @@ let platform_to_string = function
   | Threads -> "threads"
   | TikTok -> "tiktok"
   | Reddit -> "reddit"
-  | Telegram -> "telegram"
   | GoogleBusinessProfile -> "google_business_profile"
 
 (** Parse platform from string *)
@@ -45,7 +43,6 @@ let platform_of_string = function
   | "threads" -> Some Threads
   | "tiktok" -> Some TikTok
   | "reddit" -> Some Reddit
-  | "telegram" -> Some Telegram
   | "google_business_profile" -> Some GoogleBusinessProfile
   | _ -> None
 

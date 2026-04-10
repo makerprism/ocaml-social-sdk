@@ -104,21 +104,6 @@ Known subtle bug traps:
 - Publish flow is async: init/upload success still requires explicit status polling.
 - Account analytics is a stitched 3-call flow; partial implementation of only one call yields misleading totals.
 
-## Telegram
-
-| Capability | Method | Path/query contract | Required headers | Payload shape | SDK function(s) | Contract test name(s) |
-| --- | --- | --- | --- | --- | --- | --- |
-| Token preflight check | GET | `https://api.telegram.org/bot{token}/getMe` | none | none | `Telegram.validate_access` | `test_validate_access_preflight_get_me` |
-| Publish text message | POST | `https://api.telegram.org/bot{token}/sendMessage` | `Content-Type: application/json` | JSON body: `chat_id`, `text` | `Telegram.post_single` | `test_post_single_send_message_contract` |
-| Publish photo | POST | `https://api.telegram.org/bot{token}/sendPhoto` | `Content-Type: application/json` | JSON body: `chat_id`, `photo`, optional `caption` | `Telegram.post_single` | `test_post_single_send_photo_contract` |
-| Publish video | POST | `https://api.telegram.org/bot{token}/sendVideo` | `Content-Type: application/json` | JSON body: `chat_id`, `video`, optional `caption` | `Telegram.post_single` | `test_post_single_send_video_contract` |
-| Sequential thread posting | POST (repeated) | repeated `sendMessage`/`sendPhoto`/`sendVideo` calls in order | `Content-Type: application/json` | per-item payload as above; stops on first hard failure and returns partial outcome if prior items succeeded | `Telegram.post_thread` | `test_post_thread_success`, `test_post_thread_partial_success_on_mid_failure`, `test_post_thread_first_failure_is_failure` |
-
-Known subtle bug traps:
-- Telegram can return HTTP 200 with `ok=false`; payload-level errors must be parsed and mapped.
-- Bot tokens are embedded in path URLs; error surfaces must redact token-like values.
-- Broadcast-only scope is enforced by rejecting likely DM targets (positive numeric chat IDs).
-
 ## Twitter v2 (X)
 
 | Capability | Method | Path/query contract | Required headers | Payload shape | SDK function(s) | Contract test name(s) |
