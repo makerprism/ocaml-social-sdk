@@ -1717,28 +1717,35 @@ module Make (Config : CONFIG) = struct
         for logging but cannot inject delay. Ignored if [sleep_then_continue]
         is provided.
   *)
-  let wait_for_publish ~account_id ~publish_id ?(max_attempts=15)
+  let wait_for_publish ~account_id ~publish_id ?(max_attempts=30)
       ?sleep_then_continue
       ?(on_processing=(fun ~attempt:_ ~max_attempts:_ -> ()))
       on_result =
     if max_attempts <= 0 then
       on_result (Error (Error_types.Internal_error "max_attempts must be > 0"))
     else
-      let rec loop attempt =
+      let rec continue_or_timeout attempt =
+        if attempt >= max_attempts then
+          on_result (Error (Error_types.Internal_error "Publish status polling timed out"))
+        else begin
+          match sleep_then_continue with
+          | Some sleep_fn ->
+              sleep_fn ~attempt ~max_attempts (fun () -> loop (attempt + 1))
+          | None ->
+              on_processing ~attempt ~max_attempts;
+              loop (attempt + 1)
+        end
+      and loop attempt =
         check_publish_status ~account_id ~publish_id
           (function
-            | Error e -> on_result (Error e)
+            | Error e ->
+                (* Retry on transient errors (network, rate limit, 5xx) *)
+                if Error_types.is_retryable e then
+                  continue_or_timeout attempt
+                else
+                  on_result (Error e)
             | Ok Processing ->
-                if attempt >= max_attempts then
-                  on_result (Error (Error_types.Internal_error "Publish status polling timed out"))
-                else begin
-                  match sleep_then_continue with
-                  | Some sleep_fn ->
-                      sleep_fn ~attempt ~max_attempts (fun () -> loop (attempt + 1))
-                  | None ->
-                      on_processing ~attempt ~max_attempts;
-                      loop (attempt + 1)
-                end
+                continue_or_timeout attempt
             | Ok (SentToUserInbox as status) -> on_result (Ok status)
             | Ok (Published _ as status) -> on_result (Ok status)
             | Ok (Failed _ as status) -> on_result (Ok status))

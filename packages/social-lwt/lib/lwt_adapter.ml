@@ -2,8 +2,10 @@
 
 open Lwt.Syntax
 
-(** Convert CPS function to Lwt promise *)
-let cps_to_lwt f =
+(** Create a safe single-wakeup promise. Returns [(promise, resolve_once)]
+    where [resolve_once] is idempotent — only the first call resolves the
+    promise; subsequent calls are silently ignored. *)
+let make_safe_promise () =
   let promise, resolver = Lwt.wait () in
   let resolved = ref false in
   let resolve_once value =
@@ -12,6 +14,12 @@ let cps_to_lwt f =
       Lwt.wakeup_later resolver value
     end
   in
+  (promise, resolve_once)
+
+(** Convert CPS function to Lwt promise.
+    Raises [Lwt.Failure] on error (legacy behavior). *)
+let cps_to_lwt f =
+  let promise, resolve_once = make_safe_promise () in
   let on_success result = resolve_once (Ok result) in
   let on_error error = resolve_once (Error error) in
   (try f on_success on_error
@@ -24,14 +32,7 @@ let cps_to_lwt f =
 (** Convert a CPS function where the error callback receives [Error_types.error]
     instead of a string. The error is converted to a string for the result. *)
 let cps_error_types_to_lwt f =
-  let promise, resolver = Lwt.wait () in
-  let resolved = ref false in
-  let resolve_once value =
-    if (not !resolved) && Lwt.is_sleeping promise then begin
-      resolved := true;
-      Lwt.wakeup_later resolver value
-    end
-  in
+  let promise, resolve_once = make_safe_promise () in
   (try f
     (fun result -> resolve_once (Ok result))
     (fun error -> resolve_once (Error (Error_types.error_to_string error)))
@@ -39,21 +40,16 @@ let cps_error_types_to_lwt f =
   promise
 
 (** Convert a single-callback result-style function to Lwt.
-    For SDK functions that call [on_result] with [(a, Error_types.error) result]. *)
+    For SDK functions that call [on_result] with [Social_core.result].
+    Note: SDK uses its own result type ([Social_core.Ok] / [Social_core.Error]),
+    not [Stdlib.result]. *)
 let result_callback_to_lwt f =
-  let promise, resolver = Lwt.wait () in
-  let resolved = ref false in
-  let resolve_once value =
-    if (not !resolved) && Lwt.is_sleeping promise then begin
-      resolved := true;
-      Lwt.wakeup_later resolver value
-    end
-  in
+  let promise, resolve_once = make_safe_promise () in
   (try f (fun result ->
     match result with
-    | Ok value -> resolve_once (Ok value)
-    | Error error -> resolve_once (Error (Error_types.error_to_string error)))
-   with e -> resolve_once (Error (Printexc.to_string e)));
+    | Social_core.Ok value -> resolve_once (Result.Ok value)
+    | Social_core.Error error -> resolve_once (Result.Error (Error_types.error_to_string error)))
+   with e -> resolve_once (Result.Error (Printexc.to_string e)));
   promise
 
 (** Convert a single-callback outcome-style function to Lwt.
@@ -61,14 +57,7 @@ let result_callback_to_lwt f =
     Warnings should be logged even on success as they indicate partial failures
     (e.g., alt text upload failed). *)
 let outcome_to_lwt f =
-  let promise, resolver = Lwt.wait () in
-  let resolved = ref false in
-  let resolve_once value =
-    if (not !resolved) && Lwt.is_sleeping promise then begin
-      resolved := true;
-      Lwt.wakeup_later resolver value
-    end
-  in
+  let promise, resolve_once = make_safe_promise () in
   (try f (fun outcome ->
     match outcome with
     | Error_types.Success result ->
@@ -84,14 +73,7 @@ let outcome_to_lwt f =
     instead of converting to string. This allows callers to classify the error
     (auth vs transient vs permanent) without keyword matching on strings. *)
 let outcome_to_lwt_typed f =
-  let promise, resolver = Lwt.wait () in
-  let resolved = ref false in
-  let resolve_once value =
-    if (not !resolved) && Lwt.is_sleeping promise then begin
-      resolved := true;
-      Lwt.wakeup_later resolver value
-    end
-  in
+  let promise, resolve_once = make_safe_promise () in
   (try f (fun outcome ->
     match outcome with
     | Error_types.Success result ->

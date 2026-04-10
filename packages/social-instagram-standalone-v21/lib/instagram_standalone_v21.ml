@@ -29,22 +29,6 @@ type standalone_profile = {
   profile_picture_url: string option;
 }
 
-(** Video format classification for Instagram.
-    Determines whether a video should be posted as a Reel or regular feed video
-    based on its aspect ratio and duration. *)
-type video_format = Reel | Regular
-
-(** Classify a video based on its dimensions and duration.
-    Returns [Reel] if the video is vertical (aspect ratio <= 0.6) and short
-    (under 90 seconds), which matches Instagram Reels constraints.
-    Returns [Regular] otherwise. *)
-let classify_video_format ~width ~height ~duration_seconds =
-  if width > 0 && height > 0 then
-    let aspect_ratio = float_of_int width /. float_of_int height in
-    if aspect_ratio <= 0.6 && duration_seconds <= 90.0 then Reel
-    else Regular
-  else Regular
-
 (** OAuth 2.0 module for Instagram Standalone (Business Login) flow
 
     This flow uses Instagram's own OAuth endpoints instead of Facebook Login.
