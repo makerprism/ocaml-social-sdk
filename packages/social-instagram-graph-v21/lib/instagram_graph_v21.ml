@@ -1092,17 +1092,26 @@ module Make (Config : CONFIG) = struct
       callers that already know the media type can proceed. *)
   let classify_media_url url =
     match Content_validator.url_file_extension url with
-    | ".mp4" | ".mov" | ".m4v" | ".webm" | ".mpeg" | ".avi" | ".mkv" -> `Video
+    | ".mp4" | ".mov" -> `Video
     | ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" -> `Image
+    | ext when ext <> "" -> `Unsupported ext
     | _ -> `Unknown
 
   let detect_media_type url =
     match classify_media_url url with
     | `Video | `Unknown -> "VIDEO"
-    | `Image -> "IMAGE"
+    | `Image | `Unsupported _ -> "IMAGE"
 
-  let validate_supported_media_urls ~media_urls:_ =
-    Ok ()
+  let validate_supported_media_urls ~media_urls =
+    let errors = List.filter_map (fun url ->
+      match classify_media_url url with
+      | `Image | `Video | `Unknown -> None
+      | `Unsupported ext ->
+          Some (Error_types.Media_unsupported_format (Printf.sprintf "Unsupported media format '%s': %s" ext url))
+    ) media_urls in
+    match errors with
+    | [] -> Ok ()
+    | errs -> Error errs
   
   (** {1 Tagging helper} *)
 
@@ -1714,6 +1723,8 @@ module Make (Config : CONFIG) = struct
              match classify_media_url video_url with
              | `Image ->
                  on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format "Instagram Reels require a video, not an image"]))
+             | `Unsupported ext ->
+                 on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format (Printf.sprintf "Unsupported media format '%s': %s" ext video_url)]))
              | `Video | `Unknown ->
                  ensure_valid_token ~account_id
                    (fun access_token ->
@@ -1901,11 +1912,19 @@ module Make (Config : CONFIG) = struct
             (Error_types.Internal_error err))))
       (fun err -> on_result (Error_types.Failure err))
   
+  (* Formats accepted for Instagram Stories: JPEG/PNG images and MP4/MOV videos *)
+  let classify_story_media_url url =
+    match Content_validator.url_file_extension url with
+    | ".mp4" | ".mov" -> `Video
+    | ".jpg" | ".jpeg" | ".png" -> `Image
+    | ext when ext <> "" -> `Unsupported ext
+    | _ -> `Unknown
+
   (** Post story to Instagram (auto-detect media type)
-      
+
       Automatically detects whether the media is an image or video based on
       the file extension and posts it as an Instagram Story.
-      
+
       @param account_id Internal account identifier
       @param media_url Publicly accessible URL of the image or video
       @param on_result Continuation receiving outcome with media ID
@@ -1915,9 +1934,11 @@ module Make (Config : CONFIG) = struct
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Invalid_url media_url]))
     else
-      match classify_media_url media_url with
+      match classify_story_media_url media_url with
       | `Video -> post_story_video ~account_id ~video_url:media_url on_result
       | `Image -> post_story_image ~account_id ~image_url:media_url on_result
+      | `Unsupported ext ->
+          on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format (Printf.sprintf "Unsupported media format '%s': %s" ext media_url)]))
       | `Unknown ->
           (* Unknown extension: default to video for stories since images
              always have recognizable extensions (.jpg/.png) *)
@@ -1935,8 +1956,9 @@ module Make (Config : CONFIG) = struct
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       Error "Story media URL must be a publicly accessible HTTP(S) URL"
     else
-      match classify_media_url media_url with
+      match classify_story_media_url media_url with
       | `Image | `Video | `Unknown -> Ok ()
+      | `Unsupported _ -> Error "Story media must be an image (JPEG, PNG) or video (MP4, MOV)"
 
   (** Post thread (Instagram doesn't support threads, posts only first item with warning) *)
   let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) on_result =
@@ -2072,6 +2094,8 @@ module Make (Config : CONFIG) = struct
     match classify_media_url video_url with
     | `Image ->
         Error "Expected a video URL, got an image"
+    | `Unsupported ext ->
+        Error (Printf.sprintf "Unsupported media format '%s'" ext)
     | `Video | `Unknown ->
         (match media_type with
          | "REELS" | "VIDEO" -> Ok ()

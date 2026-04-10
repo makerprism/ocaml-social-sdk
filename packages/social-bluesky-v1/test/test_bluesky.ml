@@ -564,6 +564,24 @@ module Mock_http : Social_core.HTTP_CLIENT = struct
         headers = [("content-type", "image/jpeg")];
         body = "mock_youtube_thumbnail_data";
       }
+    (* Mock media fetch for image/video URLs at example.com *)
+    else if String.length url >= 19 && String.sub url 0 19 = "https://example.com" &&
+            (string_contains_substr url ".jpg" || string_contains_substr url ".jpeg" ||
+             string_contains_substr url ".png" || string_contains_substr url ".gif" ||
+             string_contains_substr url ".webp") then
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "image/jpeg")];
+        body = "mock_image_binary_data";
+      }
+    else if String.length url >= 19 && String.sub url 0 19 = "https://example.com" &&
+            (string_contains_substr url ".mp4" || string_contains_substr url ".mov" ||
+             string_contains_substr url ".webm") then
+      on_success {
+        Social_core.status = 200;
+        headers = [("content-type", "video/mp4")];
+        body = "mock_video_binary_data";
+      }
     (* Mock generic webpage *)
     else if String.length url >= 19 && String.sub url 0 19 = "https://example.com" then
       (* HTML on single line to ensure regex matching works *)

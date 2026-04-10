@@ -2044,18 +2044,12 @@ let test_validate_story_invalid_format () =
 *)
 let test_upload_video_reel () =
   Mock_config.reset ();
-  
+
   Mock_http.set_responses [
-    (* GET video from URL *)
-    { status = 200; body = "fake_video_binary_data"; headers = [] };
-    (* POST init - returns video_id and upload_url *)
-    { status = 200; body = {|{"video_id": "reel_video_123", "upload_url": "https://rupload.facebook.com/video-upload/v123"}|}; headers = [] };
-    (* POST upload binary to upload_url *)
-    { status = 200; body = {|{"success": true}|}; headers = [] };
-    (* POST finish *)
-    { status = 200; body = {|{"success": true, "id": "reel_post_123"}|}; headers = [] };
+    (* POST to /{page_id}/videos with file_url - returns video ID *)
+    { status = 200; body = {|{"id": "reel_video_123"}|}; headers = [] };
   ];
-  
+
   Facebook.upload_video_reel
     ~page_id:"page_123"
     ~page_access_token:"test_token"
@@ -2063,13 +2057,13 @@ let test_upload_video_reel () =
     ~description:"My first Reel!"
     (fun video_id ->
       assert (video_id = "reel_video_123");
-      (* Verify the init request contained upload_phase=start *)
+      (* Verify the request was POST to /{page_id}/videos with file_url *)
       let requests = !Mock_http.requests in
-      let has_init = List.exists (fun (_, url, _, body) ->
-        string_contains url "video_reels" && string_contains body "upload_phase"
+      let has_video_post = List.exists (fun (_, url, _, body) ->
+        string_contains url "page_123/videos" && string_contains body "file_url"
       ) requests in
-      assert has_init;
-      print_endline "✓ Upload video reel (3-phase)")
+      assert has_video_post;
+      print_endline "✓ Upload video reel (file_url)")
     (fun err -> failwith ("Upload video reel failed: " ^ err))
 
 (** Test: Post reel (high-level) *)
@@ -2094,12 +2088,10 @@ let test_post_reel () =
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
   
   Mock_http.set_responses [
-    { status = 200; body = "video_data"; headers = [] };
-    { status = 200; body = {|{"video_id": "vid_456", "upload_url": "https://upload.facebook.com/v1"}|}; headers = [] };
-    { status = 200; body = {|{"success": true}|}; headers = [] };
-    { status = 200; body = {|{"success": true}|}; headers = [] };
+    (* Single POST to /{page_id}/videos with file_url *)
+    { status = 200; body = {|{"id": "vid_456"}|}; headers = [] };
   ];
-  
+
   Facebook.post_reel
     ~account_id:"test_account"
     ~text:"Check out my Reel! #facebook #reel"
@@ -2131,10 +2123,10 @@ let test_post_reel_no_recovery_on_non_auth_error () =
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
-  (* Only one response: video download succeeds, then init request fails due to missing mock response
-     and should NOT trigger token recovery (/me/accounts). *)
+  (* Single response: API returns a non-auth error (400 bad request).
+     Should NOT trigger token recovery (/me/accounts). *)
   Mock_http.set_responses [
-    { status = 200; body = "video_data"; headers = [] };
+    { status = 400; body = {|{"error":{"message":"Invalid video","type":"OAuthException","code":100}}|}; headers = [] };
   ];
 
   Facebook.post_reel
@@ -2184,13 +2176,12 @@ let test_post_reel_recovers_on_auth_error () =
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
   Mock_http.set_responses [
-    { status = 200; body = "video_data_attempt1"; headers = [] };
+    (* First attempt: auth error *)
     { status = 400; body = permission_error; headers = [] };
+    (* Token recovery: /me/accounts *)
     { status = 200; body = {|{"data":[{"id":"page_123","name":"My Page","access_token":"resolved_reel_page_token","category":"Brand"}]}|}; headers = [] };
-    { status = 200; body = "video_data_attempt2"; headers = [] };
-    { status = 200; body = {|{"video_id": "vid_recovered", "upload_url": "https://upload.facebook.com/v1"}|}; headers = [] };
-    { status = 200; body = {|{"success": true}|}; headers = [] };
-    { status = 200; body = {|{"success": true}|}; headers = [] };
+    (* Second attempt with recovered token: success *)
+    { status = 200; body = {|{"id": "vid_recovered"}|}; headers = [] };
   ];
 
   Facebook.post_reel
@@ -2242,14 +2233,12 @@ let test_post_reel_recovers_on_upload_auth_error () =
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
   Mock_http.set_responses [
-    { status = 200; body = "video_data_1"; headers = [] };
-    { status = 200; body = {|{"video_id": "vid_up_1", "upload_url": "https://upload.facebook.com/reel-up-1"}|}; headers = [] };
+    (* First attempt: auth error *)
     { status = 400; body = permission_error; headers = [] };
+    (* Token recovery: /me/accounts *)
     { status = 200; body = {|{"data":[{"id":"page_123","name":"My Page","access_token":"resolved_reel_upload_token","category":"Brand"}]}|}; headers = [] };
-    { status = 200; body = "video_data_2"; headers = [] };
-    { status = 200; body = {|{"video_id": "vid_up_2", "upload_url": "https://upload.facebook.com/reel-up-2"}|}; headers = [] };
-    { status = 200; body = {|{"success": true}|}; headers = [] };
-    { status = 200; body = {|{"success": true}|}; headers = [] };
+    (* Second attempt with recovered token: success *)
+    { status = 200; body = {|{"id": "vid_up_2"}|}; headers = [] };
   ];
 
   Facebook.post_reel
@@ -2304,8 +2293,7 @@ let test_post_reel_no_recovery_on_upload_rate_limit () =
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
   Mock_http.set_responses [
-    { status = 200; body = "video_data_1"; headers = [] };
-    { status = 200; body = {|{"video_id": "vid_up_1", "upload_url": "https://upload.facebook.com/reel-up-1"}|}; headers = [] };
+    (* Single POST to /{page_id}/videos: rate-limit error *)
     { status = 400; body = rate_limit_error; headers = [] };
   ];
 

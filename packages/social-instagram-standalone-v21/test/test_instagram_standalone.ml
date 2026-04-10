@@ -378,19 +378,14 @@ let test_standalone_exchange_long_lived_happy_path () =
         assert (creds.access_token = "long_lived_tok_abc");
         assert (creds.auth_type = Bearer);
         assert (creds.expires_at <> None);
-        (* Verify it was a POST request to the correct endpoint *)
+        (* Verify it was a GET request to the correct endpoint with query params *)
         let requests = !Mock_http.requests in
-        let has_correct_request = List.exists (fun (meth, url, _, body) ->
-          meth = "POST"
+        let has_correct_request = List.exists (fun (meth, url, _, _) ->
+          meth = "GET"
           && string_contains url "graph.instagram.com/access_token"
-          && string_contains body "grant_type=ig_exchange_token"
+          && string_contains url "grant_type=ig_exchange_token"
         ) requests in
         assert has_correct_request;
-        (* Verify Content-Type header *)
-        let has_form_header = List.exists (fun (_, _, headers, _) ->
-          List.exists (fun (k, v) -> k = "Content-Type" && v = "application/x-www-form-urlencoded") headers
-        ) requests in
-        assert has_form_header;
         print_endline "PASS Standalone exchange_for_long_lived_token happy path")
       (fun err -> failwith ("Standalone exchange_for_long_lived_token failed: " ^ err)))
 
@@ -428,8 +423,8 @@ let test_standalone_exchange_long_lived_appsecret_proof () =
     (handle_result
       (fun _creds ->
         let requests = !Mock_http.requests in
-        let has_proof = List.exists (fun (_, _, _, body) ->
-          string_contains body "appsecret_proof="
+        let has_proof = List.exists (fun (_, url, _, _) ->
+          string_contains url "appsecret_proof="
         ) requests in
         assert has_proof;
         print_endline "PASS Standalone exchange_for_long_lived_token with appsecret_proof")
