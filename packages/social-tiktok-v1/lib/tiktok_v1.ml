@@ -1709,10 +1709,18 @@ module Make (Config : CONFIG) = struct
 
   (** Poll publish status until terminal state or timeout.
 
-      Note: this helper retries immediately without sleeping. Callers that need
-      timed backoff should orchestrate delays externally between attempts.
+      @param sleep_then_continue Optional callback invoked when status is
+        [Processing]. It receives [~attempt], [~max_attempts], and a
+        [continue] thunk. Call [continue ()] after your delay to resume
+        polling. If omitted, the next poll fires immediately (no delay).
+      @param on_processing Deprecated; fires on each [Processing] status
+        for logging but cannot inject delay. Ignored if [sleep_then_continue]
+        is provided.
   *)
-  let wait_for_publish ~account_id ~publish_id ?(max_attempts=30) ?(on_processing=(fun ~attempt:_ ~max_attempts:_ -> ())) on_result =
+  let wait_for_publish ~account_id ~publish_id ?(max_attempts=15)
+      ?sleep_then_continue
+      ?(on_processing=(fun ~attempt:_ ~max_attempts:_ -> ()))
+      on_result =
     if max_attempts <= 0 then
       on_result (Error (Error_types.Internal_error "max_attempts must be > 0"))
     else
@@ -1721,11 +1729,16 @@ module Make (Config : CONFIG) = struct
           (function
             | Error e -> on_result (Error e)
             | Ok Processing ->
-                on_processing ~attempt ~max_attempts;
                 if attempt >= max_attempts then
                   on_result (Error (Error_types.Internal_error "Publish status polling timed out"))
-                else
-                  loop (attempt + 1)
+                else begin
+                  match sleep_then_continue with
+                  | Some sleep_fn ->
+                      sleep_fn ~attempt ~max_attempts (fun () -> loop (attempt + 1))
+                  | None ->
+                      on_processing ~attempt ~max_attempts;
+                      loop (attempt + 1)
+                end
             | Ok (SentToUserInbox as status) -> on_result (Ok status)
             | Ok (Published _ as status) -> on_result (Ok status)
             | Ok (Failed _ as status) -> on_result (Ok status))

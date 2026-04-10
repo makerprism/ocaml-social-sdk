@@ -7,6 +7,7 @@
   analytics_types
   analytics_normalization
   platform_types
+  social_capabilities
   content_validator
   url_extractor
   error_types)

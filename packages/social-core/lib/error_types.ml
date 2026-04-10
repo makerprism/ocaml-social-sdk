@@ -202,6 +202,21 @@ let warning_to_string = function
 
 (** {1 Error Classification} *)
 
+(** Three-way error classification for queue/scheduler consumers.
+    Distinguishes "re-authenticate" from "retry later" from "give up". *)
+type error_kind =
+  | Auth_failure       (** Account needs reconnection — token revoked/expired/invalid *)
+  | Transient_failure  (** Worth retrying — network, rate limit, server 5xx *)
+  | Permanent_failure  (** Non-recoverable — validation, duplicate, policy violation *)
+
+(** Classify an error into auth/transient/permanent *)
+let classify_error = function
+  | Auth_error _ -> Auth_failure
+  | Rate_limited _ -> Transient_failure
+  | Network_error _ -> Transient_failure
+  | Api_error { status_code; _ } when status_code >= 500 -> Transient_failure
+  | _ -> Permanent_failure
+
 (** Check if an error is retryable *)
 let is_retryable = function
   | Rate_limited _ -> true
