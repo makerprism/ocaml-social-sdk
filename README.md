@@ -152,7 +152,7 @@ The SDK follows a runtime-agnostic design:
 - **Content Validation**: Platform-specific validation (character limits, media types)
 - **URL Extraction**: Parse and handle URLs in content
 - **Media Upload**: Support for images, videos, and GIFs
-- **Thread Posting**: Post threads/reply chains on supported platforms (Twitter, Bluesky, Mastodon)
+- **Thread Posting**: Post threads/reply chains on supported platforms (Twitter, Bluesky, Mastodon, Threads)
 
 ## Supported Platforms
 
@@ -162,13 +162,13 @@ The SDK follows a runtime-agnostic design:
 | Bluesky | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
 | LinkedIn | ✅ | ✅ | ✅ | - | - | - | ⚠️ | ⚠️ |
 | Mastodon | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
-| Facebook | ✅ | ✅ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| Instagram | ✅ | ✅ | ⚠️ | - | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| Threads | ✅ | ✅ | ⚠️ | ⚠️ | - | - | ⚠️ | ⚠️ |
-| YouTube | ⚠️ | ⚠️ | ⚠️ | - | - | ⚠️ | ⚠️ | ⚠️ |
+| Facebook | ✅ | ✅ | ✅ | - | ⚠️ | ✅ | ⚠️ | ⚠️ |
+| Instagram | ✅ | ✅ | ✅ | - | ⚠️ | ✅ | ⚠️ | ⚠️ |
+| Threads | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
+| YouTube | ✅ | ✅ | ✅ | - | - | ✅ | ⚠️ | ⚠️ |
 | Pinterest | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | ⚠️ |
 | Reddit | ⚠️ | ⚠️ | ⚠️ | - | - | - | ⚠️ | - |
-| TikTok | ⚠️ | ⚠️ | ⚠️ | - | - | ⚠️ | ⚠️ | ⚠️ |
+| TikTok | ✅ | ✅ | ✅ | - | - | ✅ | ⚠️ | ⚠️ |
 
 ✅ = Used successfully in production workflows, ⚠️ = Implemented with automated tests but limited production validation, ❌ = Not implemented (API available), - = Not applicable
 
