@@ -1045,15 +1045,15 @@ module Make (Config : CONFIG) = struct
       callers that already know the media type can proceed. *)
   let classify_media_url url =
     match Content_validator.url_file_extension url with
-    | ".mp4" | ".mov" -> `Video
+    | ".mp4" | ".mov" | ".m4v" | ".webm" | ".mpeg" | ".mkv" -> `Video
     | ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" -> `Image
-    | ext when ext <> "" -> `Unsupported ext
+    | ".avi" -> `Unsupported ".avi"
     | _ -> `Unknown
 
   let detect_media_type url =
     match classify_media_url url with
-    | `Video | `Unknown -> "VIDEO"
-    | `Image | `Unsupported _ -> "IMAGE"
+    | `Video | `Unknown | `Unsupported _ -> "VIDEO"
+    | `Image -> "IMAGE"
 
   let validate_supported_media_urls ~media_urls =
     let errors = List.filter_map (fun url ->

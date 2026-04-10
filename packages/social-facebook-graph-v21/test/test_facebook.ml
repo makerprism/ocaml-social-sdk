@@ -2202,7 +2202,7 @@ let test_post_reel_recovers_on_auth_error () =
         print_endline "✓ Post reel recovers on auth errors")
       (fun err -> failwith ("Expected reel recovery success, got: " ^ err)))
 
-(** Test: Post reel recovers on auth error during upload phase *)
+(** Test: Post reel recovers on auth error and persists updated credentials *)
 let test_post_reel_recovers_on_upload_auth_error () =
   Mock_config.reset ();
 
