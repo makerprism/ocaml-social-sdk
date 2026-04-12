@@ -1554,39 +1554,48 @@ module Make (Config : CONFIG) = struct
       Error (Error_types.Internal_error
         (Printf.sprintf "Failed to parse playlistItems response: %s" (Printexc.to_string e)))
 
-  (** List the authenticated channel's uploaded videos using [playlistItems]
-      (1 quota unit per page, vs 100 for the search endpoint).
+  (** Fetch a page of videos from a known playlist ID.
+      Use [get_uploads_playlist_id] once, then call this for each page.
 
       @param account_id Account to authenticate as
+      @param playlist_id The uploads playlist ID (from [get_uploads_playlist_id])
       @param max_results Number of items per page (1-50, default 50)
       @param page_token Cursor for pagination (empty string for first page)
       @param on_result Continuation receiving [video_list_page]
+  *)
+  let list_playlist_videos ~account_id ~playlist_id ?(max_results=50) ~page_token on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let query = Uri.encoded_of_query (
+          [("part", ["snippet,contentDetails"]);
+           ("playlistId", [playlist_id]);
+           ("maxResults", [string_of_int (max 1 (min 50 max_results))])]
+          @ (if page_token <> "" then [("pageToken", [page_token])] else [])
+        ) in
+        let url = Printf.sprintf "%s/playlistItems?%s" youtube_api_base query in
+        let headers = [("Authorization", "Bearer " ^ access_token)] in
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (match parse_playlist_items_page response.body with
+               | Ok page -> on_result (Ok page)
+               | Error err -> on_result (Error err))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Convenience wrapper: resolves the uploads playlist ID, then fetches one page.
+      For paginated imports, prefer calling [get_uploads_playlist_id] once and then
+      [list_playlist_videos] for each page to avoid redundant API calls.
   *)
   let list_channel_videos ~account_id ?(max_results=50) ~page_token on_result =
     get_uploads_playlist_id ~account_id
       (function
         | Error err -> on_result (Error err)
         | Ok uploads_playlist_id ->
-            ensure_valid_token ~account_id
-              (fun access_token ->
-                let query = Uri.encoded_of_query (
-                  [("part", ["snippet,contentDetails"]);
-                   ("playlistId", [uploads_playlist_id]);
-                   ("maxResults", [string_of_int (max 1 (min 50 max_results))])]
-                  @ (if page_token <> "" then [("pageToken", [page_token])] else [])
-                ) in
-                let url = Printf.sprintf "%s/playlistItems?%s" youtube_api_base query in
-                let headers = [("Authorization", "Bearer " ^ access_token)] in
-                Config.Http.get ~headers url
-                  (fun response ->
-                    if response.status >= 200 && response.status < 300 then
-                      (match parse_playlist_items_page response.body with
-                       | Ok page -> on_result (Ok page)
-                       | Error err -> on_result (Error err))
-                    else
-                      on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
-                  (fun err -> on_result (Error (Error_types.Internal_error err))))
-              (fun err -> on_result (Error err)))
+            list_playlist_videos ~account_id ~playlist_id:uploads_playlist_id
+              ~max_results ~page_token on_result)
 
   (** Validate content length *)
   let validate_content ~text =
