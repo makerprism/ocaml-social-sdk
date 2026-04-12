@@ -1270,7 +1270,7 @@ module Make (Config : CONFIG) = struct
     else
       let url = Social_google_oauth.get_authorization_url
         ~client_id ~redirect_uri ~state ~code_verifier
-        ~scopes:OAuth.Scopes.write in
+        ~scopes:(OAuth.Scopes.write @ OAuth.Scopes.read) in
       on_success url
   
   (** Exchange OAuth code for access token with PKCE *)
@@ -1478,6 +1478,115 @@ module Make (Config : CONFIG) = struct
                 on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
             (fun err -> on_result (Error (Error_types.Internal_error err))))
         (fun err -> on_result (Error err))
+
+  (** {1 Channel Video Listing (playlistItems approach)} *)
+
+  (** A single video item returned by [list_channel_videos]. *)
+  type video_list_item = {
+    vli_id : string;
+    vli_title : string;
+    vli_description : string;
+    vli_published_at : string;
+    vli_thumbnail_url : string;
+  }
+
+  (** A page of video results with optional cursor for the next page. *)
+  type video_list_page = {
+    videos : video_list_item list;
+    next_page_token : string;
+    has_more : bool;
+  }
+
+  (** Get the uploads playlist ID for the authenticated channel.
+      Uses [channels?part=contentDetails&mine=true] (1 quota unit). *)
+  let get_uploads_playlist_id ~account_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let url = Printf.sprintf "%s/channels?part=contentDetails&mine=true" youtube_api_base in
+        let headers = [("Authorization", "Bearer " ^ access_token)] in
+        Config.Http.get ~headers url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              (try
+                let open Yojson.Basic.Util in
+                let json = Yojson.Basic.from_string response.body in
+                let items = json |> member "items" |> to_list in
+                match items with
+                | [] -> on_result (Error (Error_types.Resource_not_found "channel"))
+                | first :: _ ->
+                    let uploads = first |> member "contentDetails"
+                      |> member "relatedPlaylists" |> member "uploads" |> to_string in
+                    on_result (Ok uploads)
+              with e ->
+                on_result (Error (Error_types.Internal_error
+                  (Printf.sprintf "Failed to parse channel contentDetails: %s" (Printexc.to_string e)))))
+            else
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
+      (fun err -> on_result (Error err))
+
+  (** Parse a playlistItems response page into [video_list_page]. *)
+  let parse_playlist_items_page response_body =
+    let open Yojson.Basic.Util in
+    try
+      let json = Yojson.Basic.from_string response_body in
+      let next_page_token = match json |> member "nextPageToken" with
+        | `String s -> s
+        | _ -> "" in
+      let items = json |> member "items" |> to_list in
+      let videos = List.filter_map (fun item ->
+        try
+          let snippet = item |> member "snippet" in
+          let content_details = item |> member "contentDetails" in
+          let video_id = content_details |> member "videoId" |> to_string in
+          let title = (try snippet |> member "title" |> to_string with _ -> "") in
+          let description = (try snippet |> member "description" |> to_string with _ -> "") in
+          let published_at = (try snippet |> member "publishedAt" |> to_string with _ -> "") in
+          let thumbnail_url =
+            try snippet |> member "thumbnails" |> member "default" |> member "url" |> to_string
+            with _ -> "" in
+          Some { vli_id = video_id; vli_title = title; vli_description = description;
+                 vli_published_at = published_at; vli_thumbnail_url = thumbnail_url }
+        with _ -> None
+      ) items in
+      Ok { videos; next_page_token; has_more = next_page_token <> "" }
+    with e ->
+      Error (Error_types.Internal_error
+        (Printf.sprintf "Failed to parse playlistItems response: %s" (Printexc.to_string e)))
+
+  (** List the authenticated channel's uploaded videos using [playlistItems]
+      (1 quota unit per page, vs 100 for the search endpoint).
+
+      @param account_id Account to authenticate as
+      @param max_results Number of items per page (1-50, default 50)
+      @param page_token Cursor for pagination (empty string for first page)
+      @param on_result Continuation receiving [video_list_page]
+  *)
+  let list_channel_videos ~account_id ?(max_results=50) ~page_token on_result =
+    get_uploads_playlist_id ~account_id
+      (function
+        | Error err -> on_result (Error err)
+        | Ok uploads_playlist_id ->
+            ensure_valid_token ~account_id
+              (fun access_token ->
+                let query = Uri.encoded_of_query (
+                  [("part", ["snippet,contentDetails"]);
+                   ("playlistId", [uploads_playlist_id]);
+                   ("maxResults", [string_of_int (max 1 (min 50 max_results))])]
+                  @ (if page_token <> "" then [("pageToken", [page_token])] else [])
+                ) in
+                let url = Printf.sprintf "%s/playlistItems?%s" youtube_api_base query in
+                let headers = [("Authorization", "Bearer " ^ access_token)] in
+                Config.Http.get ~headers url
+                  (fun response ->
+                    if response.status >= 200 && response.status < 300 then
+                      (match parse_playlist_items_page response.body with
+                       | Ok page -> on_result (Ok page)
+                       | Error err -> on_result (Error err))
+                    else
+                      on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+                  (fun err -> on_result (Error (Error_types.Internal_error err))))
+              (fun err -> on_result (Error err)))
 
   (** Validate content length *)
   let validate_content ~text =
