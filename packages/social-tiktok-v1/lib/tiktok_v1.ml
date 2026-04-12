@@ -393,7 +393,6 @@ type video_analytics = {
   comment_count : int;
   share_count : int;
   view_count : int;
-  collect_count : int;
 }
 
 (** Aggregated account analytics payload *)
@@ -424,7 +423,7 @@ let account_metric_names =
   [ "follower_count"; "following_count"; "likes_count"; "video_count" ]
 
 let video_metric_names =
-  [ "view_count"; "like_count"; "comment_count"; "share_count"; "collect_count" ]
+  [ "view_count"; "like_count"; "comment_count"; "share_count" ]
 
 let account_canonical_metric_keys =
   Analytics_normalization.canonical_metric_keys_of_provider_metrics
@@ -473,8 +472,7 @@ let to_canonical_video_analytics_series (video_analytics : video_analytics) =
   [ ("view_count", to_canonical_optional_point (Some video_analytics.view_count));
     ("like_count", to_canonical_optional_point (Some video_analytics.like_count));
     ("comment_count", to_canonical_optional_point (Some video_analytics.comment_count));
-    ("share_count", to_canonical_optional_point (Some video_analytics.share_count));
-    ("collect_count", to_canonical_optional_point (Some video_analytics.collect_count)) ]
+    ("share_count", to_canonical_optional_point (Some video_analytics.share_count)) ]
   |> List.filter_map (fun (provider_metric, points) ->
          to_canonical_tiktok_series
            ~scope:Analytics_types.Video
@@ -492,8 +490,7 @@ let to_canonical_recent_video_totals_series recent_video_analytics =
   [ ("view_count", points (total (fun video -> video.view_count)));
     ("like_count", points (total (fun video -> video.like_count)));
     ("comment_count", points (total (fun video -> video.comment_count)));
-    ("share_count", points (total (fun video -> video.share_count)));
-    ("collect_count", points (total (fun video -> video.collect_count))) ]
+    ("share_count", points (total (fun video -> video.share_count))) ]
   |> List.filter_map (fun (provider_metric, value_points) ->
          to_canonical_tiktok_series
            ~scope:Analytics_types.Video
@@ -836,7 +833,6 @@ let parse_video_analytics_response json =
                  comment_count = read_json_int_field ~obj:video ~field:"comment_count" ~default:0;
                  share_count = read_json_int_field ~obj:video ~field:"share_count" ~default:0;
                  view_count = read_json_int_field ~obj:video ~field:"view_count" ~default:0;
-                 collect_count = read_json_int_field ~obj:video ~field:"collect_count" ~default:0;
                }
            with _ -> None)
     in
@@ -887,7 +883,7 @@ module Make (Config : CONFIG) = struct
   let user_info_analytics_url = api_base_url ^ "/user/info/?fields=follower_count,following_count,likes_count,video_count"
   let video_list_url = api_base_url ^ "/video/list/?fields=id"
   let video_list_import_url = api_base_url ^ "/video/list/?fields=id,title,video_description,create_time,share_url,cover_image_url,duration"
-  let video_query_url = api_base_url ^ "/video/query/?fields=id,like_count,comment_count,share_count,view_count,collect_count"
+  let video_query_url = api_base_url ^ "/video/query/?fields=id,like_count,comment_count,share_count,view_count"
   
   (** {1 Validation Functions} *)
   

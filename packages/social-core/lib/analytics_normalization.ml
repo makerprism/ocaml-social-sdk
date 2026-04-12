@@ -84,8 +84,7 @@ let tiktok_metrics =
     ("comment_count", Comments);
     ("share_count", Shares);
     ("view_count", Views);
-    ("video_count", Videos);
-    ("collect_count", Saves) ]
+    ("video_count", Videos) ]
 
 let x_metrics =
   [ ("impression_count", Impressions);
