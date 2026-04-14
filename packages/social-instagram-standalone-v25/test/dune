@@ -1,0 +1,9 @@
+(test
+ (name test_instagram_standalone)
+ (modules test_instagram_standalone)
+ (libraries
+  social-instagram-standalone-v25
+  social-core
+  ptime
+  ptime.clock.os
+  str))

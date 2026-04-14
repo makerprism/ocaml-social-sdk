@@ -131,6 +131,31 @@
   digestif))
 
 (package
+ (name social-facebook-graph-v25)
+ (synopsis "Facebook Graph API v25 client")
+ (description "Facebook Graph API v25 client. Supports posting to pages, media upload, stories, and reels.")
+ (depends
+  (ocaml (>= 4.14))
+  (social-core (= :version))
+  yojson
+  uri
+  ptime
+  digestif))
+
+(package
+ (name social-instagram-standalone-v25)
+ (synopsis "Instagram Standalone (Business Login) API v25 client")
+ (description "Instagram API v25 client for accounts using Instagram's own Business Login flow. Fully independent from the Facebook-based Instagram SDK. Uses graph.instagram.com as the API base.")
+ (depends
+  (ocaml (>= 4.14))
+  (social-core (= :version))
+  (social-refresh (= :version))
+  yojson
+  uri
+  ptime
+  digestif))
+
+(package
  (name social-google-oauth)
  (synopsis "Shared Google OAuth 2.0 infrastructure")
  (description "PKCE, token exchange, refresh, revocation, and user info retrieval shared across Google-based providers (YouTube, Google Business Profile).")

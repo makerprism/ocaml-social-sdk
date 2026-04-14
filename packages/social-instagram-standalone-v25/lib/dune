@@ -1,0 +1,13 @@
+(library
+ (name social_instagram_standalone_v25)
+ (public_name social-instagram-standalone-v25)
+ (modules social_instagram_standalone_v25 instagram_standalone_v25)
+ (libraries
+  social-core
+  social-refresh
+  yojson
+  uri
+  ptime
+  ptime.clock.os
+  str
+  digestif))
