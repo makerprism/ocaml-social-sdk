@@ -362,6 +362,14 @@ let get_capability_with_format platform format =
         video_max_duration_seconds = Some 90;
         max_carousel_items = None;
         video_aspect_ratios = ["9:16"] }
+  | FacebookPage, Some StoryFormat ->
+      { facebook_page with
+        display_name = "Facebook Stories";
+        max_text_length = 0;
+        media_requirement = MediaRequired;
+        video_max_duration_seconds = Some 90;
+        max_carousel_items = None;
+        video_aspect_ratios = ["9:16"] }
   | TikTok, Some PostFormat ->
       { tiktok with
         display_name = "TikTok Photo";
@@ -523,4 +531,5 @@ let is_vertical_video_platform ?format platform =
   | Instagram, Some ReelFormat -> true
   | Instagram, Some StoryFormat -> true
   | FacebookPage, Some ReelFormat -> true
+  | FacebookPage, Some StoryFormat -> true
   | _ -> false
