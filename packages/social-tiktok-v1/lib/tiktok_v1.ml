@@ -514,6 +514,8 @@ let max_video_size_bytes = 4_294_967_296  (* 4GB - TikTok's actual limit *)
 let default_upload_chunk_size_bytes = 10 * 1024 * 1024  (* 10MB *)
 let min_upload_chunk_size_bytes = 5 * 1024 * 1024  (* 5MB - TikTok minimum *)
 let max_caption_length = 2200
+let max_photo_title_length = 90
+let max_photo_description_length = 4000
 let supported_formats = ["mp4"; "webm"; "mov"]
 let min_resolution = 360
 let max_resolution = 4096
@@ -572,7 +574,8 @@ let post_info_to_json info =
 
 (** Photo post information *)
 type photo_post_info = {
-  title : string;  (** Caption with hashtags and mentions *)
+  title : string;  (** Title, max 90 UTF-16 characters *)
+  description : string option;  (** Caption/description, max 4000 UTF-16 characters *)
   privacy_level : privacy_level;
   disable_comment : bool;
   is_aigc : bool;  (** Whether the content is AI-generated *)
@@ -584,23 +587,28 @@ type photo_post_info = {
 }
 
 (** Create photo_post_info with defaults *)
-let make_photo_post_info ~title ~photo_images ?(privacy_level=SelfOnly)
+let make_photo_post_info ~title ?description ~photo_images ?(privacy_level=SelfOnly)
     ?(disable_comment=false) ?(is_aigc=false) ?(brand_content_toggle=false)
     ?(brand_organic_toggle=false) ?(photo_cover_index=0)
     ?(post_mode=Direct_post) () =
-  { title; privacy_level; disable_comment; is_aigc; brand_content_toggle;
+  { title; description; privacy_level; disable_comment; is_aigc; brand_content_toggle;
     brand_organic_toggle; photo_images; photo_cover_index; post_mode }
 
 let photo_post_info_to_json info =
+  let post_info_fields = [
+    ("title", `String info.title);
+    ("privacy_level", `String (string_of_privacy_level info.privacy_level));
+    ("disable_comment", `Bool info.disable_comment);
+    ("is_aigc", `Bool info.is_aigc);
+    ("brand_content_toggle", `Bool info.brand_content_toggle);
+    ("brand_organic_toggle", `Bool info.brand_organic_toggle);
+  ] in
+  let post_info_fields = match info.description with
+    | Some d -> post_info_fields @ [("description", `String d)]
+    | None -> post_info_fields
+  in
   `Assoc [
-    ("post_info", `Assoc [
-      ("title", `String info.title);
-      ("privacy_level", `String (string_of_privacy_level info.privacy_level));
-      ("disable_comment", `Bool info.disable_comment);
-      ("is_aigc", `Bool info.is_aigc);
-      ("brand_content_toggle", `Bool info.brand_content_toggle);
-      ("brand_organic_toggle", `Bool info.brand_organic_toggle);
-    ]);
+    ("post_info", `Assoc post_info_fields);
     ("source_info", `Assoc [
       ("source", `String "PULL_FROM_URL");
       ("photo_images", `List (List.map (fun url -> `String url) info.photo_images));
@@ -1751,7 +1759,33 @@ module Make (Config : CONFIG) = struct
             | Ok (Failed _ as status) -> on_result (Ok status))
       in
       loop 1
-  
+
+  (** Post a photo carousel. Initializes the photo post then polls for publish status.
+
+      Uses the /v2/post/publish/content/init/ endpoint with media_type PHOTO.
+      Photo images must be publicly accessible HTTPS URLs on a TikTok-verified domain.
+      Supports 1-35 images per post. Images must be JPEG or WebP, max 20MB each. *)
+  let post_photo ~account_id ~title ?description ~photo_images
+      ?(privacy_level=SelfOnly) ?(disable_comment=false) ?(is_aigc=false)
+      ?(brand_content_toggle=false) ?(brand_organic_toggle=false)
+      ?(photo_cover_index=0) ?(post_mode=Direct_post) on_result =
+    let title_len = String.length title in
+    if title_len > max_photo_title_length then
+      on_result (Error (Error_types.Validation_error
+        [Error_types.Text_too_long { length = title_len; max = max_photo_title_length }]))
+    else
+      let photo_post_info = make_photo_post_info ~title ?description ~photo_images
+        ~privacy_level ~disable_comment ~is_aigc ~brand_content_toggle
+        ~brand_organic_toggle ~photo_cover_index ~post_mode () in
+      init_photo_post ~account_id ~photo_post_info
+        (function
+          | Error e -> on_result (Error e)
+          | Ok publish_id ->
+              wait_for_publish ~account_id ~publish_id
+                (function
+                  | Error e -> on_result (Error e)
+                  | Ok _status -> on_result (Ok publish_id)))
+
   (** Post a video to TikTok (high-level function)
       
       This handles the full upload flow:

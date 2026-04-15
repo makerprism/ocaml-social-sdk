@@ -362,6 +362,23 @@ let get_capability_with_format platform format =
         video_max_duration_seconds = Some 90;
         max_carousel_items = None;
         video_aspect_ratios = ["9:16"] }
+  | TikTok, Some PostFormat ->
+      { tiktok with
+        display_name = "TikTok Photo";
+        max_text_length = 4000;
+        requires_title = true;
+        max_title_length = Some 90;
+        media_requirement = ImageRequired;
+        max_carousel_items = Some 35;
+        image_max_width = Some 1080;
+        image_max_height = Some 1920;
+        video_formats = [];
+        video_max_duration_seconds = None;
+        video_max_size_mb = None;
+        video_aspect_ratios = [] }
+  | TikTok, Some ReelFormat ->
+      { tiktok with
+        display_name = "TikTok Video" }
   | _ -> get_capability platform
 
 (** All platform capabilities *)
