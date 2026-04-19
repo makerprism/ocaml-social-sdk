@@ -52,6 +52,18 @@ let result_callback_to_lwt f =
    with e -> resolve_once (Result.Error (Printexc.to_string e)));
   promise
 
+(** Like [result_callback_to_lwt] but preserves the SDK's typed [Error_types.error]
+    instead of converting to string. This allows callers to classify the error
+    (auth vs transient vs permanent) without keyword matching on strings. *)
+let result_callback_to_lwt_typed f =
+  let promise, resolve_once = make_safe_promise () in
+  (try f (fun result ->
+    match result with
+    | Social_core.Ok value -> resolve_once (Result.Ok value)
+    | Social_core.Error error -> resolve_once (Result.Error error))
+   with e -> resolve_once (Result.Error (Error_types.Internal_error (Printexc.to_string e))));
+  promise
+
 (** Convert a single-callback outcome-style function to Lwt.
     Returns [(result * warnings)] on success, or a string error.
     Warnings should be logged even on success as they indicate partial failures
