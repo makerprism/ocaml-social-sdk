@@ -1171,17 +1171,31 @@ module Make (Config : CONFIG) = struct
       Some (Re.Group.get group 0)
     with Not_found -> None
   
+  (** Truncate a byte string to at most [max_bytes], but never in the middle
+      of a UTF-8 multi-byte sequence. Walks back over any continuation bytes
+      (0b10xxxxxx) at the cut point so non-ASCII text (umlauts, emoji, CJK,
+      etc.) is never corrupted at the truncation boundary. *)
+  let truncate_utf8_safe s max_bytes =
+    if String.length s <= max_bytes then s
+    else begin
+      let cut = ref max_bytes in
+      while !cut > 0 && (Char.code s.[!cut] land 0xc0) = 0x80 do
+        decr cut
+      done;
+      String.sub s 0 !cut
+    end
+
   (** Derive a fallback article title from post text.
       LinkedIn rejects article payloads without a title (HTTP 422,
       "/content/article/title :: field is required but not found").
       When the caller does not supply an explicit title, use the first
-      non-empty line of the post text, truncated to 200 chars. As a last
-      resort, fall back to a generic label so publishing never fails on
-      this field alone. *)
+      non-empty line of the post text, truncated to 200 bytes on a UTF-8
+      boundary. As a last resort, fall back to a generic label so
+      publishing never fails on this field alone. *)
   let derive_article_title ?title text =
     let trimmed_non_empty s = String.length (String.trim s) > 0 in
     match title with
-    | Some t when trimmed_non_empty t -> String.trim t
+    | Some t when trimmed_non_empty t -> truncate_utf8_safe (String.trim t) 200
     | _ ->
         let first_line =
           match String.split_on_char '\n' text with
@@ -1189,8 +1203,7 @@ module Make (Config : CONFIG) = struct
           | _ -> String.trim text
         in
         if String.length first_line = 0 then "Link preview"
-        else if String.length first_line <= 200 then first_line
-        else String.sub first_line 0 200
+        else truncate_utf8_safe first_line 200
 
   (** Post to LinkedIn
 

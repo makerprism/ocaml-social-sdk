@@ -3456,6 +3456,58 @@ let test_post_with_url_preview_explicit_title () =
         print_endline "✓ Post with URL preview (explicit title)")
       (fun err -> failwith ("Post with explicit title failed: " ^ err)))
 
+(** Test: Long UTF-8 text is truncated at a codepoint boundary in the article title *)
+let test_post_with_url_preview_utf8_truncation () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    auth_type = Bearer;
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  let person_response = {|{"sub": "user123"}|} in
+  let post_response = {|{"id": "urn:li:share:791"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = post_response; headers = [] };
+  ];
+
+  (* German umlauts ä/ö/ü/ß are each 2 bytes in UTF-8. Build a first line
+     well over 200 bytes so the truncator fires. If truncation cut mid-char,
+     the JSON body would contain a stray 0xC3 byte and subsequent parsing
+     would be suspect. *)
+  let umlaut_word = "schöne Grüße äöü ß " in
+  let rec repeat s n = if n = 0 then "" else s ^ repeat s (n - 1) in
+  let long_line = repeat umlaut_word 20 in
+  let text = long_line ^ " https://example.com/some-article" in
+
+  LinkedIn.post_single ~account_id:"test_account" ~text ~media_urls:[]
+    (handle_outcome
+      (fun _ ->
+        let requests = List.rev !Mock_http.requests in
+        let post_request = List.find (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        let (_, _, _, body) = post_request in
+        assert (string_contains body "\"title\"");
+        (* Confirm the truncated title parses as valid UTF-8 by round-tripping
+           through Yojson. If truncation split a multi-byte character the body
+           would contain invalid UTF-8 and parsing would fail. *)
+        let _ = Yojson.Safe.from_string body in
+        print_endline "✓ Post with URL preview (UTF-8 safe truncation)")
+      (fun err -> failwith ("Post with long UTF-8 text failed: " ^ err)))
+
 (** Test: post_single maps 403 to write scope *)
 let test_post_single_insufficient_permissions_error () =
   Mock_config.reset ();
@@ -5960,6 +6012,7 @@ let () =
   test_get_account_analytics_rejects_invalid_entity_urn ();
   test_post_with_url_preview ();
   test_post_with_url_preview_explicit_title ();
+  test_post_with_url_preview_utf8_truncation ();
   test_post_single_insufficient_permissions_error ();
   test_post_single_with_organization_author ();
   test_post_single_org_insufficient_permissions_error ();
