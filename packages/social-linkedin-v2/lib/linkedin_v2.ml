@@ -1171,20 +1171,44 @@ module Make (Config : CONFIG) = struct
       Some (Re.Group.get group 0)
     with Not_found -> None
   
+  (** Derive a fallback article title from post text.
+      LinkedIn rejects article payloads without a title (HTTP 422,
+      "/content/article/title :: field is required but not found").
+      When the caller does not supply an explicit title, use the first
+      non-empty line of the post text, truncated to 200 chars. As a last
+      resort, fall back to a generic label so publishing never fails on
+      this field alone. *)
+  let derive_article_title ?title text =
+    let trimmed_non_empty s = String.length (String.trim s) > 0 in
+    match title with
+    | Some t when trimmed_non_empty t -> String.trim t
+    | _ ->
+        let first_line =
+          match String.split_on_char '\n' text with
+          | line :: _ when trimmed_non_empty line -> String.trim line
+          | _ -> String.trim text
+        in
+        if String.length first_line = 0 then "Link preview"
+        else if String.length first_line <= 200 then first_line
+        else String.sub first_line 0 200
+
   (** Post to LinkedIn
-      
+
       @param account_id The account identifier
       @param text The post text (max 3000 characters)
       @param media_urls List of media URLs to attach (max 9)
       @param author_urn Optional explicit author URN. When omitted, uses current person URN.
              Supported formats: urn:li:person:*, urn:li:organization:*, urn:li:organizationBrand:*
       @param alt_texts Optional alt text for each media item
+      @param title Optional article title. Only used when text contains a URL and no media
+             is attached (LinkedIn article payload). Falls back to the first line of text
+             truncated to 200 chars when omitted.
       @param validate_media_before_upload When true, validates media size after download
              but before upload. LinkedIn limits: 200MB video, 10min duration, 8MB images.
              Default: false
       @param on_result Callback receiving the outcome with post ID
   *)
-  let post_single ~account_id ~text ~media_urls ?author_urn ?(alt_texts=[]) ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?author_urn ?(alt_texts=[]) ?title ?(validate_media_before_upload=false) on_result =
     (* Validate before making any API calls *)
     let media_count = List.length media_urls in
     let author_validation =
@@ -1268,10 +1292,13 @@ module Make (Config : CONFIG) = struct
                     let content_fields =
                       match uploaded_media, text_url with
                       | [], Some url ->
-                          (* URL found, no uploaded media - article for link preview *)
+                          (* URL found, no uploaded media - article for link preview.
+                             LinkedIn requires `title` on article payloads. *)
+                          let article_title = derive_article_title ?title text in
                           [("content", `Assoc [
                             ("article", `Assoc [
                               ("source", `String url);
+                              ("title", `String article_title);
                             ]);
                           ])]
                       | [], None ->
@@ -1380,16 +1407,18 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error_types.Failure err))
   
   (** Post thread (LinkedIn doesn't support threads, posts only first item)
-      
+
       @param account_id The account identifier
       @param texts List of post texts (only first is used)
       @param media_urls_per_post Media URLs for each post
       @param author_urn Optional explicit author URN forwarded to post_single
       @param alt_texts_per_post Alt texts for each post's media
+      @param title Optional article title forwarded to post_single (used only when the
+             first post is a link-preview article with no media).
       @param validate_media_before_upload When true, validates media after download. Default: false
       @param on_result Callback receiving the outcome with thread_result
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?author_urn ?(alt_texts_per_post=[]) ?(validate_media_before_upload=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?author_urn ?(alt_texts_per_post=[]) ?title ?(validate_media_before_upload=false) on_result =
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
     | Error errs ->
@@ -1398,7 +1427,7 @@ module Make (Config : CONFIG) = struct
         let first_text = List.hd texts in
         let first_media = if List.length media_urls_per_post > 0 then List.hd media_urls_per_post else [] in
         let first_alt_texts = if List.length alt_texts_per_post > 0 then List.hd alt_texts_per_post else [] in
-        post_single ~account_id ~text:first_text ~media_urls:first_media ?author_urn ~alt_texts:first_alt_texts ~validate_media_before_upload
+        post_single ~account_id ~text:first_text ~media_urls:first_media ?author_urn ~alt_texts:first_alt_texts ?title ~validate_media_before_upload
           (fun outcome ->
             match outcome with
             | Error_types.Success post_id ->

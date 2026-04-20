@@ -3406,9 +3406,55 @@ let test_post_with_url_preview () =
         assert (string_contains body "article");
         assert (string_contains body "source");
         assert (string_contains body "https://example.com/ocaml-article");
+        (* LinkedIn rejects article payloads without a title. Verify a
+           title is always present, derived from post text when absent. *)
+        assert (string_contains body "\"title\"");
+        assert (string_contains body "Great article about OCaml!");
 
         print_endline "✓ Post with URL preview (article)")
       (fun err -> failwith ("Post with URL failed: " ^ err)))
+
+(** Test: Explicit title is forwarded to article payload *)
+let test_post_with_url_preview_explicit_title () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    auth_type = Bearer;
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+
+  let person_response = {|{"sub": "user123"}|} in
+  let post_response = {|{"id": "urn:li:share:790"}|} in
+  Mock_http.set_responses [
+    { status = 200; body = person_response; headers = [] };
+    { status = 201; body = post_response; headers = [] };
+  ];
+
+  let text = "Check this out https://example.com/post" in
+  let title = "A deliberate title that is not the first line" in
+
+  LinkedIn.post_single ~account_id:"test_account" ~text ~media_urls:[] ~title
+    (handle_outcome
+      (fun _ ->
+        let requests = List.rev !Mock_http.requests in
+        let post_request = List.find (fun (method_, url, _, _) ->
+          method_ = "POST" && string_contains url "/rest/posts"
+        ) requests in
+        let (_, _, _, body) = post_request in
+        assert (string_contains body "A deliberate title that is not the first line");
+        print_endline "✓ Post with URL preview (explicit title)")
+      (fun err -> failwith ("Post with explicit title failed: " ^ err)))
 
 (** Test: post_single maps 403 to write scope *)
 let test_post_single_insufficient_permissions_error () =
@@ -5913,6 +5959,7 @@ let () =
   test_get_account_analytics ();
   test_get_account_analytics_rejects_invalid_entity_urn ();
   test_post_with_url_preview ();
+  test_post_with_url_preview_explicit_title ();
   test_post_single_insufficient_permissions_error ();
   test_post_single_with_organization_author ();
   test_post_single_org_insufficient_permissions_error ();

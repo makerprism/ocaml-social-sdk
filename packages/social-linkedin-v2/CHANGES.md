@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- Article payloads (`content.article`) now include the required `title` field.
+  LinkedIn's `/rest/posts` endpoint rejects articles without a title (HTTP 422,
+  `/content/article/title :: field is required but not found`). `post_single` and
+  `post_thread` now accept an optional `?title` argument, and fall back to the
+  first line of the post text (truncated to 200 chars) when no explicit title
+  is provided so publishing never fails on this field alone.
+
 ### Changed
 
 - OAuth hardening:
