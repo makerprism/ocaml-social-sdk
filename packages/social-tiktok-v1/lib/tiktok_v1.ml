@@ -11,6 +11,32 @@
 
 open Social_core
 
+(** Detect a TikTok OAuth error response delivered with HTTP 200.
+
+    TikTok's OAuth token endpoints return HTTP 200 with a body like
+    [{"error":"invalid_grant","error_description":"...","log_id":"..."}]
+    when the refresh token is revoked/expired, the client credentials are
+    wrong, etc. Without this check, downstream parsing of [access_token]
+    raises [Yojson.Basic.Util.Type_error] because the field is missing,
+    which obscures the real error. Returns [Some msg] when the JSON looks
+    like an error response, [None] otherwise. *)
+let tiktok_oauth_error_of_json json =
+  let open Yojson.Basic.Util in
+  match json |> member "error" with
+  | `String err when err <> "" ->
+      let desc =
+        match json |> member "error_description" with
+        | `String d when d <> "" -> ": " ^ d
+        | _ -> ""
+      in
+      let log_id =
+        match json |> member "log_id" with
+        | `String l when l <> "" -> Printf.sprintf " (log_id: %s)" l
+        | _ -> ""
+      in
+      Some (err ^ desc ^ log_id)
+  | _ -> None
+
 (** OAuth 2.0 module for TikTok Content Posting API
     
     TikTok uses a standard OAuth 2.0 flow with some unique characteristics:
@@ -162,12 +188,15 @@ module OAuth = struct
           if response.status >= 200 && response.status < 300 then
             try
               let json = Yojson.Basic.from_string response.body in
+              (match tiktok_oauth_error_of_json json with
+              | Some err -> on_error (Printf.sprintf "Token exchange failed: %s" err)
+              | None ->
               let open Yojson.Basic.Util in
               let access_token = json |> member "access_token" |> to_string in
-              let refresh_token = 
+              let refresh_token =
                 try Some (json |> member "refresh_token" |> to_string)
                 with _ -> None in
-              let expires_in = 
+              let expires_in =
                 try json |> member "expires_in" |> to_int
                 with _ -> 86400 (* Default to 24 hours *)
               in
@@ -185,13 +214,13 @@ module OAuth = struct
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
               } in
-              on_success creds
+              on_success creds)
             with e ->
               on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
           else
             on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
         on_error
-    
+
     (** Refresh access token
         
         TikTok access tokens expire after 24 hours. Use this to get a new
@@ -219,16 +248,19 @@ module OAuth = struct
           if response.status >= 200 && response.status < 300 then
             try
               let json = Yojson.Basic.from_string response.body in
+              (match tiktok_oauth_error_of_json json with
+              | Some err -> on_error (Printf.sprintf "Token refresh failed: %s" err)
+              | None ->
               let open Yojson.Basic.Util in
               let access_token = json |> member "access_token" |> to_string in
-              let new_refresh_token = 
+              let new_refresh_token =
                 try Some (json |> member "refresh_token" |> to_string)
                 with _ -> Some refresh_token in  (* Keep old if not returned *)
-              let expires_in = 
+              let expires_in =
                 try json |> member "expires_in" |> to_int
                 with _ -> 86400
               in
-              let expires_at = 
+              let expires_at =
                 let now = Ptime_clock.now () in
                 match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
                 | Some exp -> Some (Ptime.to_rfc3339 exp)
@@ -242,7 +274,7 @@ module OAuth = struct
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
               } in
-              on_success creds
+              on_success creds)
             with e ->
               on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
           else
@@ -1106,6 +1138,9 @@ module Make (Config : CONFIG) = struct
           if response.status >= 200 && response.status < 300 then
             try
               let json = Yojson.Basic.from_string response.body in
+              (match tiktok_oauth_error_of_json json with
+              | Some err -> on_error (Printf.sprintf "Token refresh failed: %s" err)
+              | None ->
               let open Yojson.Basic.Util in
               let new_access = json |> member "access_token" |> to_string in
               let new_refresh =
@@ -1116,13 +1151,13 @@ module Make (Config : CONFIG) = struct
                 try json |> member "expires_in" |> to_int
                 with _ -> 86400
               in
-              let expires_at = 
+              let expires_at =
                 let now = Ptime_clock.now () in
                 match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
                 | Some exp -> Ptime.to_rfc3339 exp
                 | None -> Ptime.to_rfc3339 now
               in
-              on_success (new_access, new_refresh, expires_at)
+              on_success (new_access, new_refresh, expires_at))
             with e ->
               on_error (Printf.sprintf "Failed to parse refresh response: %s" (Printexc.to_string e))
           else
@@ -2112,6 +2147,10 @@ module Make (Config : CONFIG) = struct
           if response.status >= 200 && response.status < 300 then
             try
               let json = Yojson.Basic.from_string response.body in
+              (match tiktok_oauth_error_of_json json with
+              | Some err ->
+                  on_result (Error (Error_types.Internal_error (Printf.sprintf "Token exchange failed: %s" err)))
+              | None ->
               let open Yojson.Basic.Util in
               let access_token = json |> member "access_token" |> to_string in
               let refresh_token =
@@ -2122,7 +2161,7 @@ module Make (Config : CONFIG) = struct
                 try json |> member "expires_in" |> to_int
                 with _ -> 86400
               in
-              let expires_at = 
+              let expires_at =
                 let now = Ptime_clock.now () in
                 match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
                 | Some exp -> Ptime.to_rfc3339 exp
@@ -2134,7 +2173,7 @@ module Make (Config : CONFIG) = struct
                 expires_at = Some expires_at;
                 auth_type = Bearer;
               } in
-              on_result (Ok credentials)
+              on_result (Ok credentials))
             with e ->
               on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))))
           else

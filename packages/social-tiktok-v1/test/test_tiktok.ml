@@ -2230,6 +2230,56 @@ let test_refresh_without_expires_in_uses_default () =
       (fun err -> failwith ("Unexpected error: " ^ err)));
   assert !done_
 
+let test_refresh_http_200_with_error_body_returns_clean_error () =
+  print_string "Test: refresh HTTP 200 with error body returns clean error... ";
+  reset_mock_state ();
+  let now = Ptime_clock.now () in
+  let expiring_soon =
+    match Ptime.add_span now (Ptime.Span.of_int_s 5) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> Ptime.to_rfc3339 now
+  in
+  Mock_config.set_credentials {
+    Social_core.access_token = "stale_access";
+    refresh_token = Some "expired_refresh";
+    expires_at = Some expiring_soon;
+    auth_type = Bearer;
+  };
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"oauth/token/" url then
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"error":"invalid_grant","error_description":"Refresh token is invalid or expired","log_id":"abc123"}|};
+      }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = "{}";
+      });
+  let error_received = ref false in
+  TikTok.get_creator_info
+    ~account_id:"test_account"
+    (handle_api_result
+      (fun _ -> failwith "Expected refresh failure, but call succeeded")
+      (fun err ->
+        assert (
+          let s = err in
+          let contains sub =
+            try
+              let _ = Str.search_forward (Str.regexp_string sub) s 0 in
+              true
+            with Not_found -> false
+          in
+          contains "invalid_grant"
+          && contains "Refresh token is invalid or expired"
+          && not (contains "Yojson")
+          && not (contains "Type_error"));
+        error_received := true;
+        print_endline "PASSED"));
+  assert !error_received
+
 let test_post_single_multiple_media_rejected () =
   print_string "Test: post_single rejects multiple media... ";
   reset_mock_state ();
@@ -3050,7 +3100,7 @@ let test_validate_video_accepts_large_file_under_4gb () =
 
 let () =
   print_endline "\n=== TikTok Provider Tests ===\n";
-  
+
   print_endline "--- Video Validation ---";
   test_validate_video_ok ();
   test_validate_video_too_short ();
@@ -3156,6 +3206,7 @@ let () =
   test_oauth_refresh_triggered_within_buffer ();
   test_refresh_without_new_refresh_token_keeps_old ();
   test_refresh_without_expires_in_uses_default ();
+  test_refresh_http_200_with_error_body_returns_clean_error ();
   test_get_oauth_url_missing_client_key ();
   test_post_single_multiple_media_rejected ();
 
