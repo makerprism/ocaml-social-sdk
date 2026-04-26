@@ -166,6 +166,13 @@ let test_oauth_url () =
       assert (string_contains url "code_challenge");
       assert (string_contains url "code_challenge_method=S256");
       assert (string_contains url "access_type=offline");
+      (* Analytics scope must be requested at consent time. Without it,
+         downstream Analytics API calls 403 even for testers, because
+         Google grants scopes per-user at consent — there is no way to
+         opt in later without re-running OAuth. *)
+      assert (string_contains url "youtube.upload");
+      assert (string_contains url "youtube.readonly");
+      assert (string_contains url "yt-analytics.readonly");
       print_endline "✓ OAuth URL generation with PKCE")
     (fun err -> failwith ("OAuth URL failed: " ^ err))
 

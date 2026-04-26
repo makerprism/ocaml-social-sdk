@@ -1270,7 +1270,7 @@ module Make (Config : CONFIG) = struct
     else
       let url = Social_google_oauth.get_authorization_url
         ~client_id ~redirect_uri ~state ~code_verifier
-        ~scopes:(OAuth.Scopes.write @ OAuth.Scopes.read) in
+        ~scopes:(OAuth.Scopes.write @ OAuth.Scopes.read @ OAuth.Scopes.analytics) in
       on_success url
   
   (** Exchange OAuth code for access token with PKCE *)
