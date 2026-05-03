@@ -4,6 +4,13 @@
 
 Initial release of the Reddit API v1 client.
 
+### Changed
+
+- `SUBREDDIT_NOTALLOWED`/`SUBREDDIT_NOEXIST` and bare 403 responses now
+  carry Reddit's verbatim `message`/`error` text via the new
+  `platform_message` field on `Insufficient_permissions`. See
+  `social-core/CHANGES.md` for the breaking variant change.
+
 ### Features
 
 - **OAuth 2.0 authentication**

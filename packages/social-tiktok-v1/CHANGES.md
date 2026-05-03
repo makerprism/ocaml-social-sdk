@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Changed
+
+- 403 responses with scope/permission body markers now carry TikTok's
+  verbatim error text via the new `platform_message` field on
+  `Insufficient_permissions`. See `social-core/CHANGES.md` for the
+  breaking variant change.
+
 ### Added
 
 - OAuth 2.0 authentication with PKCE support

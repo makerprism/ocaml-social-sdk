@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Changed
+
+- `parse_api_error_with_permissions` now preserves Facebook's verbatim
+  `error.message` when the upstream returns a permission_denied code (200,
+  299, or 10), via the new `platform_message` field on
+  `Insufficient_permissions`. Synthetic constructions in
+  `recover_page_access_token` get descriptive `platform_message` values.
+  Mirrors the v25 change. See `social-core/CHANGES.md` for the breaking
+  variant change.
+
 ### Added
 
 #### Authentication

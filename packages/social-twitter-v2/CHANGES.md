@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Changed
+
+- Forbidden 403 responses now carry Twitter's verbatim `detail` text via
+  the new `platform_message` field on `Insufficient_permissions`. See
+  `social-core/CHANGES.md` for the breaking variant change.
+
 ### Added
 
 #### Character Counting (`Char_counter` module)
