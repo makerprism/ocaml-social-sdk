@@ -59,11 +59,16 @@ module OAuth = struct
       try json |> member "token_type" |> to_string
       with _ -> "Bearer"
     in
+    let scope =
+      try Some (json |> member "scope" |> to_string)
+      with _ -> None
+    in
     ({
       access_token;
       refresh_token = None;
       expires_at;
       auth_type = auth_type_of_string token_type_str;
+      scope;
     } : credentials)
 
   let parse_api_error ~status_code ~response_body =

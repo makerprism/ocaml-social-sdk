@@ -7,12 +7,13 @@ let rfc3339_in_seconds seconds =
   in
   Ptime.to_rfc3339 target
 
-let make_credentials ?refresh_token ?expires_at ?(auth_type = Social_core.Bearer) access_token =
+let make_credentials ?refresh_token ?expires_at ?(auth_type = Social_core.Bearer) ?scope access_token =
   {
     Social_core.access_token;
     refresh_token;
     expires_at;
     auth_type;
+    scope;
   }
 
 let test_refresh_time_boundaries () =

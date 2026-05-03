@@ -511,6 +511,7 @@ let test_post_single () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -590,6 +591,7 @@ let test_post_with_alt_text () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -635,6 +637,7 @@ let test_carousel_with_alt_texts () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -674,6 +677,7 @@ let test_reel_with_alt_text () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -749,6 +753,7 @@ let test_post_reel_structured_auth_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -784,6 +789,7 @@ let test_post_without_alt_text () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -863,6 +869,7 @@ let test_post_story_image () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -900,6 +907,7 @@ let test_post_story_image_structured_auth_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -934,6 +942,7 @@ let test_post_story_video () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -970,6 +979,7 @@ let test_post_story_auto_image () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1006,6 +1016,7 @@ let test_post_story_auto_video () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1309,6 +1320,7 @@ let test_video_post_full_flow () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1350,6 +1362,7 @@ let test_mixed_carousel () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1396,6 +1409,7 @@ let test_video_processing_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2028,6 +2042,7 @@ let test_post_reel_e2e_with_params () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;

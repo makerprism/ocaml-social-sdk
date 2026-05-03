@@ -660,6 +660,7 @@ let test_post_single () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1271,6 +1272,7 @@ let test_post_reel_e2e_with_params () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;

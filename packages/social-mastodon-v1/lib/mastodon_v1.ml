@@ -276,6 +276,7 @@ module OAuth = struct
                 refresh_token = None;
                 expires_at = None;  (* Never expires *)
                 auth_type = auth_type_of_string token_type_str;
+                scope = granted_scope;
               } in
               on_success (creds, granted_scope)
             with e ->
@@ -732,6 +733,7 @@ module Make (Config : CONFIG) = struct
       refresh_token = mastodon_creds.refresh_token;
       expires_at = None; (* Mastodon tokens don't expire *)
       auth_type = mastodon_creds.auth_type;
+      scope = None;
     }
   
   (** Generate a UUID v4 for idempotency keys *)

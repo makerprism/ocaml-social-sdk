@@ -94,6 +94,7 @@ module List_ops_config = struct
       refresh_token = None;
       expires_at = None;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"

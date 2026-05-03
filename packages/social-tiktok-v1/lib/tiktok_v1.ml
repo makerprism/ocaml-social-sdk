@@ -208,11 +208,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds)
             with e ->
@@ -268,11 +272,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token = new_refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds)
             with e ->
@@ -1177,6 +1185,7 @@ module Make (Config : CONFIG) = struct
                 refresh_token = Some new_refresh;
                 expires_at = Some expires_at;
                 auth_type = Bearer;
+                scope = credentials.Social_core.scope;
               })
             (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
@@ -2167,11 +2176,16 @@ module Make (Config : CONFIG) = struct
                 | Some exp -> Ptime.to_rfc3339 exp
                 | None -> Ptime.to_rfc3339 now
               in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None
+              in
               let credentials = {
                 access_token;
                 refresh_token;
                 expires_at = Some expires_at;
                 auth_type = Bearer;
+                scope;
               } in
               on_result (Ok credentials))
             with e ->

@@ -135,6 +135,7 @@ module Mock_config = struct
     refresh_token = Some "test_refresh_token";
     expires_at = Some "2099-12-31T23:59:59Z";
     auth_type = Bearer;
+    scope = None;
   }
 
   let set_credentials creds =
@@ -177,6 +178,7 @@ let reset_mock_state () =
     refresh_token = Some "test_refresh_token";
     expires_at = Some "2099-12-31T23:59:59Z";
     auth_type = Bearer;
+    scope = None;
   }
 
 (** Helper to handle outcome type for tests *)
@@ -873,6 +875,7 @@ let test_oauth_refresh_triggered_within_buffer () =
     refresh_token = Some "old_refresh";
     expires_at = Some expiring_soon;
     auth_type = Bearer;
+    scope = None;
   };
   Mock_http.set_custom_post_handler (fun url _headers body ->
     if String.ends_with ~suffix:"oauth/token/" url then {
@@ -2152,6 +2155,7 @@ let test_refresh_without_new_refresh_token_keeps_old () =
     refresh_token = Some "persist_refresh";
     expires_at = Some expiring_soon;
     auth_type = Bearer;
+    scope = None;
   };
   Mock_http.set_custom_post_handler (fun url _headers _body ->
     if String.ends_with ~suffix:"oauth/token/" url then
@@ -2198,6 +2202,7 @@ let test_refresh_without_expires_in_uses_default () =
     refresh_token = Some "refresh_for_default";
     expires_at = Some expiring_soon;
     auth_type = Bearer;
+    scope = None;
   };
   Mock_http.set_custom_post_handler (fun url _headers _body ->
     if String.ends_with ~suffix:"oauth/token/" url then
@@ -2244,6 +2249,7 @@ let test_refresh_http_200_with_error_body_returns_clean_error () =
     refresh_token = Some "expired_refresh";
     expires_at = Some expiring_soon;
     auth_type = Bearer;
+    scope = None;
   };
   Mock_http.set_custom_post_handler (fun url _headers _body ->
     if String.ends_with ~suffix:"oauth/token/" url then

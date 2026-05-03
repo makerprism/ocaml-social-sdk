@@ -279,7 +279,9 @@ module Make (Config : CONFIG) = struct
       | Some refresh_token ->
           let client_id = Config.get_env "GOOGLE_BUSINESS_CLIENT_ID" |> Option.value ~default:"" in
           let client_secret = Config.get_env "GOOGLE_BUSINESS_CLIENT_SECRET" |> Option.value ~default:"" in
-          Shared_oauth.refresh_token ~client_id ~client_secret ~refresh_token
+          Shared_oauth.refresh_token
+            ?prior_scope:credentials.Social_core.scope
+            ~client_id ~client_secret ~refresh_token
             on_refresh_success
             (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in

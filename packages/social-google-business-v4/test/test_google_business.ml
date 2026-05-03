@@ -124,6 +124,7 @@ let set_valid_credentials ~account_id =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   Mock_config.set_credentials ~account_id ~credentials:creds
 
@@ -192,6 +193,7 @@ let test_token_refresh () =
     refresh_token = Some "old_refresh";
     expires_at = Some past_time;
     auth_type = Social_core.Bearer;
+    scope = None;
   } in
   Mock_config.set_credentials ~account_id:"test" ~credentials:expired_creds;
 
@@ -478,6 +480,7 @@ let test_ensure_valid_token_expired () =
     refresh_token = Some "refresh_token";
     expires_at = Some past_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;

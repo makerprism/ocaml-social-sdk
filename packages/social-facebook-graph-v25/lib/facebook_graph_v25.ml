@@ -163,11 +163,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token = None;  (* Facebook doesn't use refresh tokens *)
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->
@@ -175,7 +179,7 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
         on_error
-    
+
     (** Exchange short-lived token for long-lived token (60 days)
         
         IMPORTANT: Always call this after exchange_code to get a usable token.
@@ -215,11 +219,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token = None;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->

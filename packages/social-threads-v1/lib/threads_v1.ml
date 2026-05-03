@@ -58,7 +58,8 @@ let parse_credentials_from_json json =
         | _ -> "Bearer"
       in
       let expires_at = parse_expires_in json |> expires_at_of_expires_in in
-      Ok ({ access_token; refresh_token = None; expires_at; auth_type = auth_type_of_string token_type_str } : credentials)
+      let scope = try Some (json |> member "scope" |> to_string) with _ -> None in
+      Ok ({ access_token; refresh_token = None; expires_at; auth_type = auth_type_of_string token_type_str; scope } : credentials)
   with exn ->
     Error (Printf.sprintf "invalid OAuth response payload: %s" (Printexc.to_string exn))
 

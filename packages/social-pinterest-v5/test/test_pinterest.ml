@@ -151,6 +151,7 @@ let setup_valid_credentials ?(account_id="test_account") () =
       refresh_token = Some "test_refresh_token";
       expires_at = None;
       auth_type = Bearer;
+      scope = None;
     }
 
 let past_expiry () =
@@ -260,6 +261,7 @@ let test_post_single_refreshes_expired_token () =
       refresh_token = Some "refresh_token_456";
       expires_at = Some (past_expiry ());
       auth_type = Bearer;
+      scope = None;
     };
 
   let refresh_response =
@@ -307,6 +309,7 @@ let test_post_single_expired_token_without_refresh_fails () =
       refresh_token = None;
       expires_at = Some (past_expiry ());
       auth_type = Bearer;
+      scope = None;
     };
 
   Pinterest.post_single

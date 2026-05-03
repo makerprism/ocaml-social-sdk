@@ -78,11 +78,15 @@ module Make (Http : Social_core.HTTP_CLIENT) = struct
             let token_type_str =
               try json |> member "token_type" |> to_string
               with _ -> "Bearer" in
+            let scope =
+              try Some (json |> member "scope" |> to_string)
+              with _ -> None in
             let creds : Social_core.credentials = {
               access_token;
               refresh_token;
               expires_at = expires_at_of_expires_in expires_in;
               auth_type = Social_core.auth_type_of_string token_type_str;
+              scope;
             } in
             on_success creds
           with e ->
@@ -91,8 +95,11 @@ module Make (Http : Social_core.HTTP_CLIENT) = struct
           on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
       on_error
 
-  (** If Google does not return a new refresh token, the original is preserved. *)
-  let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
+  (** If Google does not return a new refresh token, the original is preserved.
+      Likewise, if the refresh response omits [scope], the caller's
+      [prior_scope] is preserved so the stored grant set never silently
+      narrows on a routine refresh. *)
+  let refresh_token ?prior_scope ~client_id ~client_secret ~refresh_token on_success on_error =
     let body = Social_core.form_urlencode_kvs [
       ("grant_type", "refresh_token");
       ("refresh_token", refresh_token);
@@ -118,11 +125,19 @@ module Make (Http : Social_core.HTTP_CLIENT) = struct
             let token_type_str =
               try json |> member "token_type" |> to_string
               with _ -> "Bearer" in
+            let scope =
+              match
+                try Some (json |> member "scope" |> to_string) with _ -> None
+              with
+              | Some _ as s -> s
+              | None -> prior_scope
+            in
             let creds : Social_core.credentials = {
               access_token;
               refresh_token = Some new_refresh;
               expires_at = expires_at_of_expires_in expires_in;
               auth_type = Social_core.auth_type_of_string token_type_str;
+              scope;
             } in
             on_success creds
           with e ->

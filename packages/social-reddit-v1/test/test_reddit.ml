@@ -160,6 +160,7 @@ module Mock_config = struct
       refresh_token = Some "refresh_tok";
       expires_at = Some (future_expiry ());
       auth_type = Bearer;
+      scope = None;
     }
   
   (** Helper: Setup test environment with expired credentials *)
@@ -172,6 +173,7 @@ module Mock_config = struct
       refresh_token = Some "refresh_tok";
       expires_at = Some (past_expiry ());
       auth_type = Bearer;
+      scope = None;
     }
 end
 
@@ -1521,6 +1523,7 @@ let test_token_refresh_no_refresh_token () =
       refresh_token = None;
       expires_at = Some (past_expiry ());
       auth_type = Bearer;
+      scope = None;
     };
   
   Reddit.submit_self_post
@@ -1579,6 +1582,7 @@ let test_authorization_header () =
       refresh_token = Some "refresh_tok";
       expires_at = Some (future_expiry ());
       auth_type = Bearer;
+      scope = None;
     };
   
   let response_body = {|{
@@ -1618,6 +1622,7 @@ let test_missing_credentials () =
       refresh_token = Some "refresh_tok";
       expires_at = Some (past_expiry ());  (* expired, so refresh will be attempted *)
       auth_type = Bearer;
+      scope = None;
     };
   
   Reddit.submit_self_post

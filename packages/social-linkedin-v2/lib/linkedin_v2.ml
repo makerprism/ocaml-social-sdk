@@ -257,6 +257,7 @@ module OAuth = struct
                 refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success (creds, scope)
             with e ->
@@ -324,11 +325,13 @@ module OAuth = struct
                 | Some exp -> Some (Ptime.to_rfc3339 exp)
                 | None -> None in
               let token_type_str = json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer" in
+              let scope = json |> member "scope" |> to_string_option in
               let creds : credentials = {
                 access_token;
                 refresh_token = new_refresh;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->
@@ -985,6 +988,7 @@ module Make (Config : CONFIG) = struct
                 refresh_token = Some new_refresh;
                 expires_at = Some expires_at;
                 auth_type = Bearer;
+                scope = credentials.Social_core.scope;
               })
             (fun err ->
               let message = user_friendly_refresh_error err in
@@ -1636,6 +1640,7 @@ module Make (Config : CONFIG) = struct
                 refresh_token;
                 expires_at = Some expires_at;
                 auth_type = auth_type_of_string (json |> member "token_type" |> to_string_option |> Option.value ~default:"Bearer");
+                scope;
               } in
               on_success (credentials, scope)
             with e ->

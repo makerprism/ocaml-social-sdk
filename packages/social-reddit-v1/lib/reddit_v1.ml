@@ -286,11 +286,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->
@@ -298,7 +302,7 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status response.body))
         on_error
-    
+
     (** Refresh access token
         
         Reddit access tokens last 1 hour. Refresh tokens last indefinitely
@@ -342,11 +346,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token = new_refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->
@@ -1874,6 +1882,7 @@ module Make (Config : CONFIG) = struct
                   refresh_token;
                   expires_at;
                   auth_type = auth_type_of_string token_type_str;
+                  scope = granted_scope_raw;
                 } in
                 on_success credentials
             with e ->

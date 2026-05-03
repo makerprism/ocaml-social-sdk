@@ -118,6 +118,7 @@ module Mock_config = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
@@ -478,6 +479,7 @@ module Mock_config_refresh_success = struct
       refresh_token = Some "good_refresh";
       expires_at = Some (rfc3339_in_seconds 10);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -531,6 +533,7 @@ module Mock_config_refresh_missing = struct
       refresh_token = None;
       expires_at = Some (rfc3339_in_seconds 10);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -588,6 +591,7 @@ module Mock_config_refresh_failed = struct
       refresh_token = Some "bad_refresh";
       expires_at = Some (rfc3339_in_seconds 10);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -649,6 +653,7 @@ module Mock_config_refresh_preserve = struct
       refresh_token = Some "old_refresh_token";
       expires_at = Some (rfc3339_in_seconds 5);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials on_success _on_error =
     refresh_preserve_updated_refresh := credentials.Social_core.refresh_token;
@@ -701,6 +706,7 @@ module Mock_config_no_refresh = struct
       refresh_token = Some "refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -752,6 +758,7 @@ module Mock_config_missing_client = struct
       refresh_token = Some "refresh_token";
       expires_at = Some (rfc3339_in_seconds 5);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -815,6 +822,7 @@ module Mock_config_mixed_payload = struct
       refresh_token = Some "refresh";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -1183,6 +1191,7 @@ module Mock_config_reply_quote_contract = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -1340,6 +1349,7 @@ module Mock_config_request_contract = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -1528,6 +1538,7 @@ module Mock_config_analytics_contract = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -1937,6 +1948,7 @@ module Mock_config_invalid_media_post = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -1997,6 +2009,7 @@ module Mock_config_no_retry_post = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2053,6 +2066,7 @@ module Mock_config_too_long_guard = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2115,6 +2129,7 @@ module Mock_config_malformed_post_response = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2181,6 +2196,7 @@ module Mock_config_boundary_validation = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2257,6 +2273,7 @@ module Mock_config_alt_meta_contract = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2331,6 +2348,7 @@ module Mock_config_unknown_fields = struct
       refresh_token = Some "refresh";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2390,6 +2408,7 @@ module Mock_config_partial_read = struct
       refresh_token = Some "refresh";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2445,6 +2464,7 @@ module Mock_config_read_no_retry = struct
       refresh_token = Some "refresh";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -2473,6 +2493,7 @@ let rotation_creds = ref {
   refresh_token = Some "old_refresh_token";
   expires_at = Some (rfc3339_in_seconds 5);
   auth_type = Social_core.Bearer;
+  scope = None;
 }
 
 module Mock_http_refresh_rotation : Social_core.HTTP_CLIENT = struct
@@ -2535,6 +2556,7 @@ let test_refresh_rotation_uses_latest_refresh_token () =
     refresh_token = Some "old_refresh_token";
     expires_at = Some (rfc3339_in_seconds 5);
     auth_type = Social_core.Bearer;
+    scope = None;
   };
 
   let result1 = ref None in
@@ -3690,6 +3712,7 @@ module Mock_config_errors = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
@@ -3742,6 +3765,7 @@ module Mock_config_rate_reset = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -4015,6 +4039,7 @@ module Mock_config_pagination_stop = struct
       refresh_token = Some "refresh";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -4614,6 +4639,7 @@ module Mock_config_video_gate = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
@@ -4735,6 +4761,7 @@ module Mock_config_video_immediate = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
@@ -4813,7 +4840,7 @@ module Mock_config_video_fail = struct
     | "TWITTER_LINK_REDIRECT_URI" -> Some "http://localhost/callback"
     | _ -> None
   let get_credentials ~account_id:_ on_success _on_error =
-    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer }
+    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer; scope = None }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
@@ -4889,7 +4916,7 @@ module Mock_config_video_timeout = struct
     | "TWITTER_LINK_REDIRECT_URI" -> Some "http://localhost/callback"
     | _ -> None
   let get_credentials ~account_id:_ on_success _on_error =
-    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer }
+    on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer; scope = None }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
@@ -5006,6 +5033,7 @@ module Mock_config_video_interrupt = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -5105,6 +5133,7 @@ module Mock_config_video_codec = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 4000);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -5251,6 +5280,7 @@ module Mock_config_chunked_contract = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some (rfc3339_in_seconds 3600);
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -5404,6 +5434,7 @@ module Mock_config_upload_mode = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
@@ -5777,6 +5808,7 @@ module Mock_config_retry_401 = struct
       refresh_token = Some "good_refresh";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"
@@ -5864,6 +5896,7 @@ module Mock_config_share_followers = struct
       refresh_token = Some "test_refresh_token";
       expires_at = Some expires_at;
       auth_type = Social_core.Bearer;
+      scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
   let encrypt _data on_success _on_error = on_success "encrypted"

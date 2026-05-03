@@ -179,6 +179,7 @@ module Auth = struct
         refresh_token = Some app_password;
         expires_at = None;  (* App passwords don't expire *)
         auth_type = App_password;
+        scope = None;  (* Bluesky app passwords have no OAuth scope concept *)
       }
   end
 end

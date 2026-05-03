@@ -62,6 +62,7 @@ let example_post_simple () =
     refresh_token = Some "your-app-password";
     expires_at = None;
     auth_type = Social_core.Bearer;
+    scope = None;
   };
   
   (* Post using CPS style with outcome type *)

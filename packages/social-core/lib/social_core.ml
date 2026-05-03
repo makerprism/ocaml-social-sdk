@@ -36,12 +36,20 @@ let string_of_auth_type = function
   | App_password -> "app_password"
   | Custom s -> s
 
-(** Account credentials *)
+(** Account credentials.
+
+    [scope] is the space-delimited set of OAuth scopes the provider granted on
+    the most recent authorization. Providers that do not return scope on the
+    token endpoint (or that have no notion of scopes) leave this as [None];
+    callers persisting credentials should preserve any prior value when a
+    refresh response omits scope, since some providers only echo scope on the
+    initial authorization. *)
 type credentials = {
   access_token: string;
   refresh_token: string option;
   expires_at: string option;
   auth_type: auth_type;
+  scope: string option;
 }
 
 (** {1 HTTP Client Interface} 
@@ -273,11 +281,12 @@ let parse_credentials_json json_str =
     let access_token = json |> member "access_token" |> to_string in
     let refresh_token = try Some (json |> member "refresh_token" |> to_string) with _ -> None in
     let expires_at = try Some (json |> member "expires_at" |> to_string) with _ -> None in
+    let scope = try Some (json |> member "scope" |> to_string) with _ -> None in
     let auth_type =
       let s = try json |> member "token_type" |> to_string with _ -> "Bearer" in
       auth_type_of_string s
     in
-    Ok { access_token; refresh_token; expires_at; auth_type }
+    Ok { access_token; refresh_token; expires_at; auth_type; scope }
   with e ->
     Error (Printf.sprintf "Failed to parse credentials: %s" (Printexc.to_string e))
 
@@ -288,4 +297,5 @@ let create_credentials_json (creds : credentials) =
     ("refresh_token", match creds.refresh_token with Some rt -> `String rt | None -> `Null);
     ("expires_at", match creds.expires_at with Some exp -> `String exp | None -> `Null);
     ("token_type", `String (string_of_auth_type creds.auth_type));
+    ("scope", match creds.scope with Some s -> `String s | None -> `Null);
   ] |> Yojson.Basic.to_string

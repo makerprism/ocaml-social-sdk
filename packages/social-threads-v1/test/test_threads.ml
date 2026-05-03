@@ -377,6 +377,7 @@ let test_refresh_account_credentials_success () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds (-10));
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -423,6 +424,7 @@ let test_refresh_account_credentials_persist_failure () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_config.update_credentials_error_override := Some "db write failed";
@@ -808,6 +810,7 @@ let test_get_me_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -837,6 +840,7 @@ let test_get_me_malformed_payload_returns_internal_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -864,6 +868,7 @@ let test_get_me_retries_500_then_succeeds () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -899,6 +904,7 @@ let test_get_me_retry_config_single_attempt () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -933,6 +939,7 @@ let test_get_me_retry_config_clamps_low_to_one () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -967,6 +974,7 @@ let test_get_me_retry_config_clamps_high_to_ten () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1002,6 +1010,7 @@ let test_get_me_retry_config_invalid_falls_back_to_default () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1042,6 +1051,7 @@ let test_get_me_retry_disable_429 () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1076,6 +1086,7 @@ let test_get_me_retry_enable_429 () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1111,6 +1122,7 @@ let test_get_me_retry_disable_5xx () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1145,6 +1157,7 @@ let test_get_me_retry_disable_network_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   (* No responses configured -> mock emits network-like on_error path *)
@@ -1167,6 +1180,7 @@ let test_get_me_retry_toggle_invalid_429_defaults_to_disabled () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1201,6 +1215,7 @@ let test_get_me_retry_toggle_invalid_5xx_defaults_to_enabled () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1236,6 +1251,7 @@ let test_get_me_retry_toggle_invalid_network_defaults_to_enabled () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   (* No responses configured: mock emits network-like on_error on each attempt *)
@@ -1257,6 +1273,7 @@ let test_post_single_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1288,6 +1305,7 @@ let test_post_single_text_trimmed_before_send () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1323,6 +1341,7 @@ let test_post_single_no_retry_on_publish_500 () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1355,6 +1374,7 @@ let test_get_posts_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1397,6 +1417,7 @@ let test_get_posts_malformed_payload_returns_internal_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1429,6 +1450,7 @@ let test_get_posts_limit_clamped_to_minimum () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1465,6 +1487,7 @@ let test_get_posts_limit_clamped_to_maximum () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1501,6 +1524,7 @@ let test_get_posts_after_cursor_trimmed () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1538,6 +1562,7 @@ let test_get_posts_after_cursor_whitespace_omitted () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1574,6 +1599,7 @@ let test_get_account_insights_contract () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1627,6 +1653,7 @@ let test_get_account_insights_malformed_payload_returns_internal_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1662,6 +1689,7 @@ let test_get_post_insights_contract () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1705,6 +1733,7 @@ let test_get_post_insights_malformed_payload_returns_internal_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1732,6 +1761,7 @@ let test_insights_network_error_redacts_query_token () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_errors
@@ -1759,6 +1789,7 @@ let test_post_single_image_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1797,6 +1828,7 @@ let test_post_single_media_only_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1829,6 +1861,7 @@ let test_post_single_with_idempotency_key () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1862,6 +1895,7 @@ let test_post_single_idempotency_key_trimmed () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1895,6 +1929,7 @@ let test_post_single_reply_control_forwarded () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1946,6 +1981,7 @@ let test_post_single_media_url_with_query_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1972,6 +2008,7 @@ let test_post_single_media_url_uppercase_scheme_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -1998,6 +2035,7 @@ let test_post_single_media_url_trimmed_before_send () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2035,6 +2073,7 @@ let test_get_me_rate_limited () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2076,6 +2115,7 @@ let test_get_me_rate_limited_non_json_body () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2113,6 +2153,7 @@ let test_get_me_rate_limited_negative_retry_after_clamped () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2140,6 +2181,7 @@ let test_get_me_rate_limited_float_retry_after_rounded () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2167,6 +2209,7 @@ let test_get_me_rate_limited_retry_after_clamped_high () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2194,6 +2237,7 @@ let test_get_me_rate_limited_retry_after_huge_float_clamped () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2221,6 +2265,7 @@ let test_get_me_api_error_request_id () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2258,6 +2303,7 @@ let test_get_me_api_error_request_id_fallback_header () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2296,6 +2342,7 @@ let test_get_me_api_error_preserves_provider_metadata () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2327,6 +2374,7 @@ let test_get_me_api_error_raw_response_redacts_sensitive_fields () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2371,6 +2419,7 @@ let test_get_me_api_error_raw_response_redacts_sensitive_non_json_body () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2411,6 +2460,7 @@ let test_get_me_api_error_message_redacts_sensitive_text () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2464,6 +2514,7 @@ let test_get_me_empty_access_token_treated_missing () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2566,6 +2617,7 @@ let test_get_me_token_expiry_skew_default_blocks_near_expiry () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2587,6 +2639,7 @@ let test_get_me_token_expiry_skew_override_allows_request () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2617,6 +2670,7 @@ let test_get_me_token_expiry_skew_invalid_defaults_to_60 () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2638,6 +2692,7 @@ let test_get_me_token_expiry_skew_high_clamped_to_3600 () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 3500);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2659,6 +2714,7 @@ let test_get_me_token_expiry_skew_negative_clamped_to_0 () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 30);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2688,6 +2744,7 @@ let test_get_me_malformed_expiry_treated_as_expired () =
           refresh_token = None;
           expires_at = Some "not-a-timestamp";
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_me ~account_id:"acct-1"
@@ -2709,6 +2766,7 @@ let test_get_me_malformed_expiry_with_auto_refresh () =
           refresh_token = None;
           expires_at = Some "not-a-timestamp";
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2745,6 +2803,7 @@ let test_get_me_auto_refresh_enabled_refreshes_and_proceeds () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2783,6 +2842,7 @@ let test_get_me_auto_refresh_empty_token_from_refresh_fails () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2811,6 +2871,7 @@ let test_get_me_auto_refresh_enabled_refresh_failure_returns_expired () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2841,6 +2902,7 @@ let test_get_me_auto_refresh_persist_failure_returns_error () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2872,6 +2934,7 @@ let test_get_me_auto_refresh_updates_health_status () =
           refresh_token = None;
           expires_at = Some (rfc3339_after_seconds 10);
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2911,6 +2974,7 @@ let test_post_thread_multi_item_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -2960,6 +3024,7 @@ let test_post_thread_multi_item_with_media_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3003,6 +3068,7 @@ let test_post_thread_idempotency_key_suffixes () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3039,6 +3105,7 @@ let test_post_thread_idempotency_key_trimmed_suffixes () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3075,6 +3142,7 @@ let test_post_thread_reply_control_forwarded () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3111,6 +3179,7 @@ let test_post_thread_partial_failure () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3148,6 +3217,7 @@ let test_post_thread_first_item_failure () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3262,6 +3332,7 @@ let test_post_single_gif_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3297,6 +3368,7 @@ let test_post_single_with_topic_tag () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3330,6 +3402,7 @@ let test_post_single_topic_tag_trimmed () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3363,6 +3436,7 @@ let test_post_single_empty_topic_tag_omitted () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3396,6 +3470,7 @@ let test_check_container_status_finished () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3523,6 +3598,7 @@ let test_post_carousel_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3622,6 +3698,7 @@ let test_post_carousel_with_topic_tag () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3658,6 +3735,7 @@ let test_post_carousel_child_creation_failure () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3686,6 +3764,7 @@ let test_get_replies_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3723,6 +3802,7 @@ let test_get_replies_with_pagination () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3756,6 +3836,7 @@ let test_get_conversation_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3791,6 +3872,7 @@ let test_post_single_as_reply () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3822,6 +3904,7 @@ let test_get_publishing_limit_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3860,6 +3943,7 @@ let test_get_publishing_limit_defaults () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3891,6 +3975,7 @@ let test_get_publishing_limit_api_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -3919,6 +4004,7 @@ let test_validate_media_urls_allows_20_for_carousel () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   (* Create 20 URLs and try to post carousel - it should pass validation *)
@@ -3955,6 +4041,7 @@ let test_post_thread_with_topic_tag () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4010,6 +4097,7 @@ let test_get_replies_rejects_empty_media_id () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_replies ~account_id:"acct-1" ~media_id:"   "
@@ -4028,6 +4116,7 @@ let test_get_conversation_rejects_empty_media_id () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Threads.get_conversation ~account_id:"acct-1" ~media_id:"   "
@@ -4046,6 +4135,7 @@ let test_get_replies_api_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4072,6 +4162,7 @@ let test_get_conversation_api_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4121,6 +4212,7 @@ let test_delete_post_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4157,6 +4249,7 @@ let test_delete_post_api_error () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4183,6 +4276,7 @@ let test_approve_reply_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4211,6 +4305,7 @@ let test_ignore_reply_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4238,6 +4333,7 @@ let test_hide_reply_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4268,6 +4364,7 @@ let test_unhide_reply_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses
@@ -4304,6 +4401,7 @@ let test_get_pending_replies_success () =
           refresh_token = None;
           expires_at = None;
           auth_type = Bearer;
+          scope = None;
         } );
     ];
   Mock_http.set_responses

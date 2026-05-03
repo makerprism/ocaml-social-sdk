@@ -275,6 +275,7 @@ let test_ensure_valid_token_fresh () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -305,6 +306,7 @@ let test_ensure_valid_token_expired () =
     refresh_token = None;
     expires_at = Some past_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1091,6 +1093,7 @@ let test_token_expiry_detection () =
     refresh_token = None;
     expires_at = Some near_future;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1213,6 +1216,7 @@ let test_post_with_alt_text () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1250,6 +1254,7 @@ let test_post_with_multiple_alt_texts () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1289,6 +1294,7 @@ let test_post_with_indexed_attached_media_payload () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1337,6 +1343,7 @@ let test_post_recovers_page_token_from_user_token () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let permission_error = {|{
@@ -1407,6 +1414,7 @@ let test_post_recovery_uses_stored_user_token_fallback () =
     refresh_token = Some "stored_user_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let permission_error = {|{
@@ -1471,6 +1479,7 @@ let test_post_recovery_stops_on_rate_limit () =
     refresh_token = Some "stored_user_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let permission_error = {|{
@@ -1533,6 +1542,7 @@ let test_post_cleans_up_uploaded_photos_on_publish_failure () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let publish_error = {|{
@@ -1614,6 +1624,7 @@ let test_post_without_alt_text () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1670,6 +1681,7 @@ let test_partial_alt_texts () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1765,6 +1777,7 @@ let test_post_story_photo () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1800,6 +1813,7 @@ let test_post_story_video () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1837,6 +1851,7 @@ let test_post_story_video_recovers_on_upload_auth_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let permission_error = {|{
@@ -1898,6 +1913,7 @@ let test_post_story_video_no_recovery_on_upload_rate_limit () =
     refresh_token = Some "stored_user_token_story_rl";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let rate_limit_error = {|{
@@ -1949,6 +1965,7 @@ let test_post_story_auto_image () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1984,6 +2001,7 @@ let test_post_story_auto_video () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2082,6 +2100,7 @@ let test_post_reel () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2118,6 +2137,7 @@ let test_post_reel_no_recovery_on_non_auth_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2161,6 +2181,7 @@ let test_post_reel_recovers_on_auth_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let permission_error = {|{
@@ -2218,6 +2239,7 @@ let test_post_reel_recovers_on_upload_auth_error () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let permission_error = {|{
@@ -2278,6 +2300,7 @@ let test_post_reel_no_recovery_on_upload_rate_limit () =
     refresh_token = Some "stored_user_token_reel_rl";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let rate_limit_error = {|{
@@ -2329,6 +2352,7 @@ let test_reel_caption_validation () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2581,6 +2605,7 @@ let test_post_with_link () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2625,6 +2650,7 @@ let test_post_with_scheduled_publish_time () =
     refresh_token = None;
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;

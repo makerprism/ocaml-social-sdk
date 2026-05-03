@@ -55,8 +55,12 @@ module Make (_ : Social_core.HTTP_CLIENT) : sig
     unit
 
   (** Refresh an access token. If Google does not return a new refresh token,
-      the original is preserved in the returned credentials. *)
+      the original is preserved in the returned credentials. If
+      [prior_scope] is supplied and the refresh response omits [scope] (which
+      Google does for refresh requests in the common case), the prior scope
+      is carried over so the stored grant set does not silently narrow. *)
   val refresh_token :
+    ?prior_scope:string ->
     client_id:string ->
     client_secret:string ->
     refresh_token:string ->

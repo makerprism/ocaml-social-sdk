@@ -205,11 +205,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->
@@ -217,7 +221,7 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status (redact_sensitive_text response.body)))
         on_error
-    
+
     (** Refresh access token using refresh token
         
         @param client_id OAuth 2.0 Client ID
@@ -258,11 +262,15 @@ module OAuth = struct
               let token_type_str =
                 try json |> member "token_type" |> to_string
                 with _ -> "Bearer" in
+              let scope =
+                try Some (json |> member "scope" |> to_string)
+                with _ -> None in
               let creds : credentials = {
                 access_token;
                 refresh_token = new_refresh;
                 expires_at;
                 auth_type = auth_type_of_string token_type_str;
+                scope;
               } in
               on_success creds
             with e ->
@@ -270,7 +278,7 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status (redact_sensitive_text response.body)))
         on_error
-    
+
     (** Revoke a token
         
         @param client_id OAuth 2.0 Client ID
@@ -938,6 +946,7 @@ module Make (Config : CONFIG) = struct
                    refresh_token = Some new_refresh;
                    expires_at = Some expires_at;
                    auth_type = credentials.auth_type;
+                   scope = credentials.scope;
                  })
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
@@ -997,6 +1006,7 @@ module Make (Config : CONFIG) = struct
                             refresh_token = Some new_refresh;
                             expires_at = Some expires_at;
                             auth_type = creds.auth_type;
+                            scope = creds.scope;
                           } in
                           Config.update_credentials ~account_id ~credentials:updated_creds
                             (fun () ->

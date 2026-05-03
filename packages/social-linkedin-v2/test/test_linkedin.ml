@@ -353,6 +353,7 @@ let test_get_organization_access () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -399,6 +400,7 @@ let test_get_organization_access_parsing_resilience () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -457,6 +459,7 @@ let test_get_organization_access_pagination () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -513,6 +516,7 @@ let test_get_organization_access_blank_role_filter () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -550,6 +554,7 @@ let test_get_organization_access_trims_role_state_filters () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -588,6 +593,7 @@ let test_get_organization_access_uppercases_role_state_filters () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -627,6 +633,7 @@ let test_get_organization_access_invalid_version_fallback () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -665,6 +672,7 @@ let test_get_organization_access_valid_version_header () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -703,6 +711,7 @@ let test_get_organization_access_invalid_month_version_fallback () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -741,6 +750,7 @@ let test_get_organization_access_dotted_version_fallback () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -778,6 +788,7 @@ let test_get_organization_access_deduplicates_by_org () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -817,6 +828,7 @@ let test_get_organization_access_non_advancing_paging_stops () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -864,6 +876,7 @@ let test_get_organization_access_pagination_fallback_uses_raw_count () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let invalid_elements =
@@ -920,6 +933,7 @@ let test_get_organization_access_pagination_fallback_has_page_cap () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   let invalid_elements =
@@ -962,6 +976,7 @@ let test_get_organization_access_prefers_admin_approved () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1002,6 +1017,7 @@ let test_get_organization_access_preference_case_insensitive () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1042,6 +1058,7 @@ let test_get_organization_access_preference_trims_role_state () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1082,6 +1099,7 @@ let test_get_organization_access_preference_stable_on_tie () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1159,6 +1177,7 @@ let test_get_preferred_organization_access () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1198,6 +1217,7 @@ let test_get_preferred_organization_access_none () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1503,6 +1523,7 @@ let test_ensure_valid_token_fresh () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1533,6 +1554,7 @@ let test_get_profile () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1574,6 +1596,7 @@ let test_get_profile_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1605,6 +1628,7 @@ let test_api_error_redacts_sensitive_json () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1643,6 +1667,7 @@ let test_api_error_redacts_non_json () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1681,6 +1706,7 @@ let test_get_posts () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1749,6 +1775,7 @@ let test_get_posts_rejects_malformed_person_urn () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1782,6 +1809,7 @@ let test_get_posts_pagination_normalization () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1820,6 +1848,7 @@ let test_get_posts_rate_limited_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1852,6 +1881,7 @@ let test_get_posts_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1885,6 +1915,7 @@ let test_batch_get_posts () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1935,6 +1966,7 @@ let test_batch_get_posts_rejects_malformed_urns () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1967,6 +1999,7 @@ let test_batch_get_posts_malformed_json () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -1999,6 +2032,7 @@ let test_batch_get_posts_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2033,6 +2067,7 @@ let test_posts_scroller () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2075,6 +2110,7 @@ let test_posts_scroller_back_from_second_page () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2125,6 +2161,7 @@ let test_posts_scroller_back_error_preserves_position () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2164,6 +2201,7 @@ let test_search_scroller_with_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2228,6 +2266,7 @@ let test_search_scroller_back_from_second_page () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2279,6 +2318,7 @@ let test_search_scroller_back_error_preserves_position () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2322,6 +2362,7 @@ let test_search_scroller_rejects_keywords () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2360,6 +2401,7 @@ let test_search_scroller_defaults_to_current_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2407,6 +2449,7 @@ let test_posts_scroller_page_size_normalization () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2443,6 +2486,7 @@ let test_search_scroller_page_size_normalization () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2476,6 +2520,7 @@ let test_search_posts () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2516,6 +2561,7 @@ let test_search_posts_author_filter_encoding () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2552,6 +2598,7 @@ let test_search_posts_defaults_to_current_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2592,6 +2639,7 @@ let test_search_posts_defaults_reject_malformed_person_urn () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2625,6 +2673,7 @@ let test_search_posts_rejects_whitespace_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2656,6 +2705,7 @@ let test_search_posts_rejects_malformed_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2686,6 +2736,7 @@ let test_search_posts_pagination_normalization () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2720,6 +2771,7 @@ let test_finder_zero_count_normalization () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2752,6 +2804,7 @@ let test_search_posts_api_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2785,6 +2838,7 @@ let test_like_post () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2817,6 +2871,7 @@ let test_like_post_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2893,6 +2948,7 @@ let test_comment_on_post () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -2931,6 +2987,7 @@ let test_comment_on_post_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3021,6 +3078,7 @@ let test_get_post_comments () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3064,6 +3122,7 @@ let test_get_post_comments_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3137,6 +3196,7 @@ let test_get_post_engagement () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3184,6 +3244,7 @@ let test_get_post_engagement_missing_fields () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3219,6 +3280,7 @@ let test_get_post_engagement_api_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3296,6 +3358,7 @@ let test_get_account_analytics () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3377,6 +3440,7 @@ let test_post_with_url_preview () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3430,6 +3494,7 @@ let test_post_with_url_preview_explicit_title () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3472,6 +3537,7 @@ let test_post_with_url_preview_utf8_truncation () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3524,6 +3590,7 @@ let test_post_single_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3557,6 +3624,7 @@ let test_post_single_with_organization_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3614,6 +3682,7 @@ let test_post_single_org_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3648,6 +3717,7 @@ let test_post_single_rejects_malformed_author_urn () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3681,6 +3751,7 @@ let test_post_single_malformed_author_urn_short_circuits_network () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -3714,6 +3785,7 @@ let test_post_single_rejects_whitespace_author_urn_short_circuits_network () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4099,6 +4171,7 @@ let test_expired_token_detection () =
     refresh_token = Some "refresh_token";
     expires_at = Some past_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4213,6 +4286,7 @@ let test_post_with_alt_text () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4245,6 +4319,7 @@ let test_post_with_multiple_alt_texts () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4277,6 +4352,7 @@ let test_post_without_alt_text () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4309,6 +4385,7 @@ let test_post_with_partial_alt_texts () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4341,6 +4418,7 @@ let test_alt_text_special_chars () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4373,6 +4451,7 @@ let test_thread_with_alt_texts () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4412,6 +4491,7 @@ let test_restli_protocol_version_header () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4455,6 +4535,7 @@ let test_authorization_header_format () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4493,6 +4574,7 @@ let test_content_type_header_json () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4539,6 +4621,7 @@ let test_urn_path_encoding () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4583,6 +4666,7 @@ let test_get_post_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4660,6 +4744,7 @@ let test_batch_urns_encoding () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4708,6 +4793,7 @@ let test_finder_method_header () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4744,6 +4830,7 @@ let test_rest_post_request_body_structure () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4800,6 +4887,7 @@ let test_comment_request_body_structure () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4852,6 +4940,7 @@ let test_unlike_post_delete () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4900,6 +4989,7 @@ let test_unlike_post_insufficient_permissions_error () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -4976,6 +5066,7 @@ let test_like_request_body_structure () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5056,6 +5147,7 @@ let test_query_param_encoding () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5096,6 +5188,7 @@ let test_negative_pagination_normalization () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5131,6 +5224,7 @@ let test_comments_count_cap () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5197,6 +5291,7 @@ let test_post_with_video () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5314,6 +5409,7 @@ let test_post_video_detection_from_url () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
   
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5358,6 +5454,7 @@ let test_delete_post () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5406,6 +5503,7 @@ let test_delete_post_insufficient_permissions () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5451,6 +5549,7 @@ let test_post_document () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5504,6 +5603,7 @@ let test_post_document_with_org_author () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5584,6 +5684,7 @@ let test_post_poll () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5636,6 +5737,7 @@ let test_post_poll_durations () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5708,6 +5810,7 @@ let test_post_poll_too_few_options () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5743,6 +5846,7 @@ let test_post_poll_too_many_options () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5778,6 +5882,7 @@ let test_post_poll_invalid_duration () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5813,6 +5918,7 @@ let test_post_poll_blank_question () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
@@ -5848,6 +5954,7 @@ let test_linkedin_version_header_on_all_requests () =
     refresh_token = Some "refresh_token";
     expires_at = Some future_time;
     auth_type = Bearer;
+    scope = None;
   } in
 
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
