@@ -877,7 +877,7 @@ let test_parse_api_error_403_forbidden_maps_insufficient_permissions () =
       ~headers:[]
   in
   (match err with
-   | Error_types.Auth_error (Error_types.Insufficient_permissions perms) ->
+   | Error_types.Auth_error (Error_types.Insufficient_permissions { required = perms; _ }) ->
        assert (List.mem "tweet.write" perms)
    | _ -> failwith "Expected forbidden 403 to map to Insufficient_permissions");
   print_endline "✓ API error 403 forbidden mapping test passed"

@@ -481,7 +481,7 @@ let test_permission_error_scopes () =
   Facebook.get ~path:"me" ~access_token:"token"
     (function
       | Ok _ -> failwith "Should have failed with permission error"
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "pages_manage_posts" scopes);
           assert (List.mem "pages_show_list" scopes);
           assert (List.mem "pages_read_engagement" scopes);
@@ -507,7 +507,7 @@ let test_me_accounts_permission_scope () =
   Facebook.get ~path:"me/accounts" ~access_token:"token"
     (function
       | Ok _ -> failwith "Should have failed with permission error"
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["pages_show_list"]);
           print_endline "✓ me/accounts permission scope mapping"
       | Error e ->
@@ -534,7 +534,7 @@ let test_get_required_permissions_override () =
     ~required_permissions:["custom_scope"]
     (function
       | Ok _ -> failwith "Should have failed with permission error"
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["custom_scope"]);
           print_endline "✓ GET required_permissions override"
       | Error e ->
@@ -562,7 +562,7 @@ let test_post_required_permissions_override () =
     ~required_permissions:["custom_post_scope"]
     (function
       | Ok _ -> failwith "Should have failed with permission error"
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["custom_post_scope"]);
           print_endline "✓ POST required_permissions override"
       | Error e ->
@@ -589,7 +589,7 @@ let test_delete_required_permissions_override () =
     ~required_permissions:["custom_delete_scope"]
     (function
       | Ok _ -> failwith "Should have failed with permission error"
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["custom_delete_scope"]);
           print_endline "✓ DELETE required_permissions override"
       | Error e ->
@@ -687,7 +687,7 @@ let test_batch_required_permissions_override () =
     ~required_permissions:["custom_batch_scope"]
     (function
       | Ok _ -> failwith "Should have failed with permission error"
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["custom_batch_scope"]);
           print_endline "✓ BATCH required_permissions override"
       | Error e ->

@@ -707,10 +707,20 @@ module Make (Config : CONFIG) = struct
   (** Parse API error from response *)
   let parse_api_error ~required_scopes ~status_code ~body =
     let redacted_body = redact_sensitive_payload body in
+    let extract_linkedin_message () =
+      try
+        let json = Yojson.Basic.from_string redacted_body in
+        let open Yojson.Basic.Util in
+        json |> member "message" |> to_string_option
+      with _ -> None
+    in
     if status_code = 401 then
       Error_types.Auth_error Error_types.Token_expired
     else if status_code = 403 then
-      Error_types.Auth_error (Error_types.Insufficient_permissions required_scopes)
+      Error_types.Auth_error (Error_types.Insufficient_permissions {
+        required = required_scopes;
+        platform_message = extract_linkedin_message ();
+      })
     else if status_code = 429 then
       Error_types.make_rate_limited ()
     else

@@ -1605,7 +1605,7 @@ let test_get_profile_insufficient_permissions_error () =
   LinkedIn.get_profile ~account_id:"test_account"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "openid" scopes);
           assert (List.mem "profile" scopes);
           print_endline "✓ Get profile maps 403 to OpenID profile scopes"
@@ -1893,7 +1893,7 @@ let test_get_posts_insufficient_permissions_error () =
   LinkedIn.get_posts ~account_id:"test_account"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "r_member_social" scopes);
           print_endline "✓ Get posts maps 403 to insufficient permissions"
       | Ok _ -> failwith "Expected permission error"
@@ -2045,7 +2045,7 @@ let test_batch_get_posts_insufficient_permissions_error () =
   LinkedIn.batch_get_posts ~account_id:"test_account" ~post_urns:["urn:li:share:123"]
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "r_member_social" scopes);
           print_endline "✓ Batch get posts maps 403 to read scope"
       | Ok _ -> failwith "Expected permission error"
@@ -2883,7 +2883,7 @@ let test_like_post_insufficient_permissions_error () =
   LinkedIn.like_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "w_member_social" scopes);
           print_endline "✓ Like post maps 403 to write scope"
       | Ok _ -> failwith "Expected permission error"
@@ -2999,7 +2999,7 @@ let test_comment_on_post_insufficient_permissions_error () =
   LinkedIn.comment_on_post ~account_id:"test_account" ~post_urn:"urn:li:share:123" ~text:"Great post!"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "w_member_social" scopes);
           print_endline "✓ Comment on post maps 403 to write scope"
       | Ok _ -> failwith "Expected permission error"
@@ -3131,7 +3131,7 @@ let test_get_post_comments_insufficient_permissions_error () =
   LinkedIn.get_post_comments ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "r_member_social" scopes);
           print_endline "✓ Get post comments maps 403 to read scope"
       | Ok _ -> failwith "Expected permission error"
@@ -3293,7 +3293,7 @@ let test_get_post_engagement_api_error () =
   LinkedIn.get_post_engagement ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "r_member_social" scopes);
           print_endline "✓ Get post engagement API error propagation"
       | Ok _ -> failwith "Expected API error for get_post_engagement"
@@ -3601,7 +3601,7 @@ let test_post_single_insufficient_permissions_error () =
 
   LinkedIn.post_single ~account_id:"test_account" ~text:"hello" ~media_urls:[]
     (function
-      | Error_types.Failure (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error_types.Failure (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "w_member_social" scopes);
           print_endline "✓ Post single maps 403 to write scope"
       | Error_types.Success _ -> failwith "Expected permission failure"
@@ -3694,7 +3694,7 @@ let test_post_single_org_insufficient_permissions_error () =
     ~text:"Organization post"
     ~media_urls:[]
     (function
-      | Error_types.Failure (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error_types.Failure (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "w_organization_social" scopes);
           print_endline "✓ Post single org author maps 403 to organization scope"
       | Error_types.Success _ -> failwith "Expected permission failure"
@@ -4679,7 +4679,7 @@ let test_get_post_insufficient_permissions_error () =
   LinkedIn.get_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "r_member_social" scopes);
           print_endline "✓ Get post maps 403 to read scope"
       | Ok _ -> failwith "Expected permission error"
@@ -5001,7 +5001,7 @@ let test_unlike_post_insufficient_permissions_error () =
   LinkedIn.unlike_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "w_member_social" scopes);
           print_endline "✓ Unlike post maps 403 to write scope"
       | Ok _ -> failwith "Expected permission error"
@@ -5512,7 +5512,7 @@ let test_delete_post_insufficient_permissions () =
   LinkedIn.delete_post ~account_id:"test_account" ~post_urn:"urn:li:share:123"
     (fun result ->
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (List.mem "w_member_social" scopes);
           print_endline "✓ Delete post maps 403 to write scope"
       | Ok () -> failwith "Expected permission error"

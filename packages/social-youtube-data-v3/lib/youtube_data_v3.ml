@@ -243,7 +243,10 @@ module Make (Config : CONFIG) = struct
       if status_code = 401 then
         Error_types.Auth_error Error_types.Token_invalid
       else if status_code = 403 then
-        Error_types.Auth_error (Error_types.Insufficient_permissions ["youtube.upload"])
+        Error_types.Auth_error (Error_types.Insufficient_permissions {
+          required = ["youtube.upload"];
+          platform_message = Some error_msg;
+        })
       else if status_code = 429 then
         Error_types.Rate_limited { 
           retry_after_seconds = Some 60;

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Changed
+
+- **Breaking**: `Insufficient_permissions` now carries an inline record
+  `{ required: string list; platform_message: string option }` instead of a
+  bare `string list`. The new `platform_message` field lets platform SDKs
+  preserve the verbatim error text from the upstream API alongside the
+  required-scopes list, so consumers can distinguish a token-side scope gap
+  from a server-side App-Review/asset-binding rejection. Callers that
+  pattern-matched `Insufficient_permissions perms` need to be updated to
+  `Insufficient_permissions { required = perms; _ }`.
+
 ### Added
 
 - Core interfaces for runtime-agnostic social media API clients

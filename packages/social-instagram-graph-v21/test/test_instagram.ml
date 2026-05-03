@@ -1149,7 +1149,7 @@ let test_parse_api_error_permissions () =
       ~response_body:{|{"error":{"code":10,"message":"Missing permissions"}}|}
   in
   match err with
-  | Error_types.Auth_error (Error_types.Insufficient_permissions perms) when List.mem "instagram_content_publish" perms ->
+  | Error_types.Auth_error (Error_types.Insufficient_permissions { required = perms; _ }) when List.mem "instagram_content_publish" perms ->
       print_endline "✓ OAuth API error mapping (permissions)"
   | _ -> failwith "Expected Insufficient_permissions mapping"
 

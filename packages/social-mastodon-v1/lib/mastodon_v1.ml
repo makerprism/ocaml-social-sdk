@@ -667,7 +667,10 @@ module Make (Config : CONFIG) = struct
       if status_code = 401 then
         Error_types.Auth_error Error_types.Token_invalid
       else if status_code = 403 then
-        Error_types.Auth_error (Error_types.Insufficient_permissions ["write:statuses"])
+        Error_types.Auth_error (Error_types.Insufficient_permissions {
+          required = ["write:statuses"];
+          platform_message = Some error_msg;
+        })
       else if status_code = 429 then
         let retry_after_seconds =
           match header_value_case_insensitive headers "retry-after" with
@@ -3805,7 +3808,10 @@ module Make (Config : CONFIG) = struct
          | Some granted_scopes ->
              let missing = List.filter (fun req -> not (List.mem req granted_scopes)) requested_scopes in
              if missing <> [] then
-               on_result (Error (Error_types.Auth_error (Error_types.Insufficient_permissions missing)))
+               on_result (Error (Error_types.Auth_error (Error_types.Insufficient_permissions {
+                 required = missing;
+                 platform_message = None;
+               })))
              else
                on_result (Ok core_creds)))
       (fun err ->

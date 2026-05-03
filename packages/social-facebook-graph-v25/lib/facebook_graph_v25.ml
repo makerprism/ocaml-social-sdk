@@ -558,8 +558,11 @@ module Make (Config : CONFIG) = struct
               remaining = Some 0;
               reset_at = None;
             }
-        | Permission_denied -> 
-            Error_types.Auth_error (Error_types.Insufficient_permissions required_permissions)
+        | Permission_denied ->
+            Error_types.Auth_error (Error_types.Insufficient_permissions {
+              required = required_permissions;
+              platform_message = Some fb_err.message;
+            })
         | Duplicate_post ->
             Error_types.Duplicate_content
         | _ ->
@@ -816,11 +819,17 @@ module Make (Config : CONFIG) = struct
                   | Some page ->
                       let page_access_token = page |> member "access_token" |> to_string in
                       if page_access_token = "" then
-                        on_error_fetch (Error_types.Auth_error (Error_types.Insufficient_permissions ["pages_show_list"; "pages_manage_posts"]))
+                        on_error_fetch (Error_types.Auth_error (Error_types.Insufficient_permissions {
+                          required = ["pages_show_list"; "pages_manage_posts"];
+                          platform_message = Some "Page access token missing from /me/accounts response";
+                        }))
                       else
                         on_success_fetch (user_token, page_access_token)
                   | None ->
-                      on_error_fetch (Error_types.Auth_error (Error_types.Insufficient_permissions ["pages_show_list"; "pages_manage_posts"]))
+                      on_error_fetch (Error_types.Auth_error (Error_types.Insufficient_permissions {
+                        required = ["pages_show_list"; "pages_manage_posts"];
+                        platform_message = Some "Page not visible in /me/accounts — user may lack admin access";
+                      }))
                 with _ ->
                   on_error_fetch (Error_types.Auth_error Error_types.Token_invalid)
               else
@@ -2008,11 +2017,15 @@ module Make (Config : CONFIG) = struct
     get_paginated ~path ~access_token ?fields ?cursor:None
       (function
         | Ok response -> on_result (Ok response)
-        | Error (Error_types.Auth_error (Error_types.Insufficient_permissions _)) ->
-            (match required_permissions with
-             | Some perms ->
-                 on_result (Error (Error_types.Auth_error (Error_types.Insufficient_permissions perms)))
-             | None -> on_result (Error (Error_types.Auth_error (Error_types.Insufficient_permissions (permissions_for_path path)))))
+        | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { platform_message; _ })) ->
+            let required = match required_permissions with
+              | Some perms -> perms
+              | None -> permissions_for_path path
+            in
+            on_result (Error (Error_types.Auth_error (Error_types.Insufficient_permissions {
+              required;
+              platform_message;
+            })))
         | Error e -> on_result (Error e))
   
   (** Get a page of results from a collection endpoint *)

@@ -582,7 +582,10 @@ module Make (Config : CONFIG) = struct
         | "USER_REQUIRED" | "INVALID_TOKEN" ->
             Error_types.Auth_error Error_types.Token_invalid
         | "SUBREDDIT_NOTALLOWED" | "SUBREDDIT_NOEXIST" ->
-            Error_types.Auth_error (Error_types.Insufficient_permissions ["subreddit_access"])
+            Error_types.Auth_error (Error_types.Insufficient_permissions {
+              required = ["subreddit_access"];
+              platform_message = Some error_msg;
+            })
         | "NO_SELFS" ->
             Error_types.Api_error {
               status_code;
@@ -623,7 +626,10 @@ module Make (Config : CONFIG) = struct
         if status_code = 401 then
           Error_types.Auth_error Error_types.Token_invalid
         else if status_code = 403 then
-          Error_types.Auth_error (Error_types.Insufficient_permissions [])
+          Error_types.Auth_error (Error_types.Insufficient_permissions {
+            required = [];
+            platform_message = Some error_msg;
+          })
         else if status_code = 429 then
           Error_types.Rate_limited { 
             retry_after_seconds = Some 60;

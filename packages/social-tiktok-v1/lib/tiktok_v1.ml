@@ -1080,7 +1080,10 @@ module Make (Config : CONFIG) = struct
     else if status_code = 403 then
       (* Check if the error body indicates a scope/permission issue *)
       if has_substring lower_error_signals "scope" || has_substring lower_error_signals "permission" then
-        Error_types.Auth_error (Error_types.Insufficient_permissions required_scopes)
+        Error_types.Auth_error (Error_types.Insufficient_permissions {
+          required = required_scopes;
+          platform_message = Some error_msg;
+        })
       else
         Error_types.Api_error {
           status_code = 403;

@@ -106,7 +106,10 @@ module OAuth = struct
             reset_at = None;
           }
       | 10 | 200 ->
-          Error_types.Auth_error (Error_types.Insufficient_permissions ["instagram_content_publish"])
+          Error_types.Auth_error (Error_types.Insufficient_permissions {
+            required = ["instagram_content_publish"];
+            platform_message = Some error_message;
+          })
       | _ ->
           Error_types.Api_error {
             status_code;

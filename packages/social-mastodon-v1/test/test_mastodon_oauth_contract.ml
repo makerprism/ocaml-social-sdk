@@ -202,7 +202,7 @@ let test_exchange_code_missing_required_scope () =
     (fun result ->
       got_result := true;
       match result with
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions missing)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = missing; _ })) ->
           assert (List.mem "write" missing);
           assert (List.mem "follow" missing)
       | Error err ->

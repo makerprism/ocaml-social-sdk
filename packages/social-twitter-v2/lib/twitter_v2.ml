@@ -796,7 +796,10 @@ module Make (Config : CONFIG) = struct
         let detail = json |> Yojson.Basic.Util.member "detail" |> Yojson.Basic.Util.to_string in
         let detail_lower = String.lowercase_ascii detail in
         if String.starts_with ~prefix:"forbidden" detail_lower then
-          Error_types.Auth_error (Error_types.Insufficient_permissions ["tweet.write"])
+          Error_types.Auth_error (Error_types.Insufficient_permissions {
+            required = ["tweet.write"];
+            platform_message = Some detail;
+          })
         else
           Error_types.make_api_error
             ~platform:Platform_types.Twitter
@@ -804,7 +807,10 @@ module Make (Config : CONFIG) = struct
             ~message:detail
             ~raw_response:body ()
       with _ ->
-        Error_types.Auth_error (Error_types.Insufficient_permissions ["tweet.write"]))
+        Error_types.Auth_error (Error_types.Insufficient_permissions {
+          required = ["tweet.write"];
+          platform_message = None;
+        }))
     else if status_code = 429 then
       let retry_after_seconds =
         let now_unix = int_of_float (Unix.time ()) in

@@ -1776,7 +1776,7 @@ let test_get_creator_info_403_scope_mapping () =
   let done_ = ref false in
   TikTok.get_creator_info ~account_id:"test_account"
     (function
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["user.info.basic"]);
           done_ := true;
           print_endline "PASSED"
@@ -1807,7 +1807,7 @@ let test_init_video_upload_403_scope_mapping () =
     ~post_info
     ~video_size:123
     (function
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["video.publish"]);
           done_ := true;
           print_endline "PASSED"
@@ -1836,7 +1836,7 @@ let test_check_publish_status_403_scope_mapping () =
     ~account_id:"test_account"
     ~publish_id:"pub_scope"
     (function
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["video.publish"]);
           done_ := true;
           print_endline "PASSED"
@@ -1858,7 +1858,7 @@ let test_upload_video_chunk_403_scope_mapping () =
     ~upload_url:"https://upload.tiktok.com/video"
     ~video_content:"bytes"
     (function
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["video.upload"]);
           done_ := true;
           print_endline "PASSED"
@@ -2133,7 +2133,7 @@ let test_exchange_code_403_scope_mapping () =
     ~code:"auth_code_123"
     ~redirect_uri:"https://example.com/callback"
     (function
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["user.info.basic"; "video.publish"]);
           done_ := true;
           print_endline "PASSED"
@@ -2784,7 +2784,7 @@ let test_init_photo_post_403_scope_mapping () =
     ~account_id:"test_account"
     ~photo_post_info:photo_info
     (function
-      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions scopes)) ->
+      | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required = scopes; _ })) ->
           assert (scopes = ["video.publish"]);
           done_ := true;
           print_endline "PASSED"

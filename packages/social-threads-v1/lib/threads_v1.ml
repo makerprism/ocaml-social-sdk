@@ -223,7 +223,10 @@ let parse_api_error ~status_code ~headers ~response_body =
       match code with
       | 190 -> Error_types.Auth_error Error_types.Token_expired
       | 102 -> Error_types.Auth_error Error_types.Token_invalid
-      | 10 | 200 -> Error_types.Auth_error (Error_types.Insufficient_permissions ["threads_basic"])
+      | 10 | 200 -> Error_types.Auth_error (Error_types.Insufficient_permissions {
+          required = ["threads_basic"];
+          platform_message = Some (message ^ provider_metadata_suffix);
+        })
       | 4 | 32 | 613 ->
           Error_types.Rate_limited {
             retry_after_seconds = parse_retry_after headers;

@@ -40,7 +40,17 @@ type auth_error =
   | Token_revoked
   | Refresh_failed of string
   | Missing_credentials
-  | Insufficient_permissions of string list
+  | Insufficient_permissions of {
+      required: string list;
+      (** Permissions/scopes the SDK believes are needed for the call.
+          May be a heuristic (the SDK's best guess for the failed path)
+          rather than what the platform specifically rejected. *)
+      platform_message: string option;
+      (** Verbatim error message text from the platform, when available.
+          Use this to disambiguate which specific scope the platform
+          rejected — the [required] list is the SDK's heuristic and may
+          be broader than the actual cause. *)
+    }
 
 (** {1 API Errors} *)
 
@@ -150,8 +160,13 @@ let auth_error_to_string = function
   | Token_revoked -> "Access token has been revoked"
   | Refresh_failed msg -> Printf.sprintf "Token refresh failed: %s" msg
   | Missing_credentials -> "No credentials available"
-  | Insufficient_permissions perms -> 
-      Printf.sprintf "Missing permissions: %s" (String.concat ", " perms)
+  | Insufficient_permissions { required; platform_message } ->
+      let required_part =
+        Printf.sprintf "Missing permissions: %s" (String.concat ", " required)
+      in
+      (match platform_message with
+       | None -> required_part
+       | Some msg -> Printf.sprintf "%s (platform: %s)" required_part msg)
 
 (** Convert a network error to human-readable string *)
 let network_error_to_string = function

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Changed
+
+- `parse_api_error_with_permissions` now preserves Facebook's verbatim
+  `error.message` when the upstream returns a permission-denied code (200,
+  299, or 10), via the new `platform_message` field on
+  `Insufficient_permissions`. Previously the SDK substituted a hardcoded
+  required-scopes list for FB's actual message, which made it impossible
+  for consumers to tell which specific scope or asset binding the platform
+  rejected. The synthetic `Insufficient_permissions` constructions in
+  `recover_page_access_token` (page token missing / page not found in
+  `/me/accounts`) carry descriptive `platform_message` values for the same
+  reason.
+
 ### Added
 
 #### Authentication
