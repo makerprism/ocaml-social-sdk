@@ -905,19 +905,40 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_error (Error_types.Internal_error err)))
       on_error
 
-  (** Get published posts from a Facebook Page's feed.
+  (** Get published posts from a Facebook Page's feed, including inline
+      engagement and insights metrics for each post.
 
       Fetches posts using cursor-based pagination via the Graph API
-      /{page_id}/feed endpoint. Returns raw JSON with post data and
-      pagination cursors.
+      /{page_id}/feed endpoint. Returns raw JSON with post data,
+      pagination cursors, and per-post metrics nested under [insights],
+      [comments_summary], [reactions_summary], and [shares].
+
+      Why field-expansion instead of per-post /{post_id}/insights:
+      Meta deprecated the singular-status endpoint in v2.4 (April 2019).
+      Calls of the form [GET /{post_id}/insights] return
+      [(#12) singular statuses API is deprecated] for status-type posts
+      (text-only, no attachments). Reaching the insights via field
+      expansion on the parent /{page_id}/posts edge bypasses the
+      deprecation entirely — Meta serves the data because the request
+      is rooted at the Page, not the singular post node. This restores
+      analytics for status posts and drops API quota usage from
+      [N posts × per-post calls] to [1 call per pagination page].
+
+      Insights metric set covers what FeedMansion's analytics surface
+      consumes: [post_total_media_view_unique] for unique viewers,
+      [post_impressions_organic_unique] for organic reach,
+      [post_reactions_by_type_total] for the like/love/haha breakdown,
+      [post_clicks] / [post_clicks_by_type] for clicks. Status posts
+      get [reactions_summary.summary.total_count] /
+      [comments_summary.summary.total_count] / [shares.count] even
+      when their insights array is empty.
 
       Fields returned: id, message, created_time, full_picture,
-      permalink_url, attachments. Callers needing a post-level "type"
+      permalink_url, attachments, insights, comments_summary,
+      reactions_summary, shares. Callers needing a post-level "type"
       classification should derive it from [attachments[0].media_type]
       — Meta deprecated the post-level [type] aggregation field in
-      Graph API v3.3 and v25 returns
-      [(#12) deprecate_post_aggregated_fields_for_attachement] when it
-      is requested.
+      Graph API v3.3.
 
       @param account_id Social account ID for credential resolution
       @param limit Number of posts per page (default 25, max 100)
@@ -929,7 +950,17 @@ module Make (Config : CONFIG) = struct
       (fun access_token ->
         Config.get_page_id ~account_id
           (fun page_id ->
-            let fields = "id,message,created_time,full_picture,permalink_url,attachments{type,media_type,url,media,subattachments}" in
+            let fields =
+              "id,message,created_time,full_picture,permalink_url,\
+               attachments{type,media_type,url,media,subattachments},\
+               insights.metric(post_total_media_view_unique,\
+                               post_impressions_organic_unique,\
+                               post_reactions_by_type_total,\
+                               post_clicks,\
+                               post_clicks_by_type).as(insights),\
+               comments.summary(true).limit(0).as(comments_summary),\
+               reactions.summary(true).limit(0).as(reactions_summary),\
+               shares" in
             let params = [
               ("fields", [fields]);
               ("limit", [string_of_int limit]);
