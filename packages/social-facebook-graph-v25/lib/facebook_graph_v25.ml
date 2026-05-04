@@ -981,7 +981,7 @@ module Make (Config : CONFIG) = struct
                feed-expansion call. *)
             let fields =
               "id,message,created_time,full_picture,permalink_url,\
-               attachments{type,media_type,url,media,subattachments,target{id,type}},\
+               attachments{type,media_type,url,media,subattachments,target{id}},\
                insights.metric(post_impressions_unique,\
                                post_reactions_by_type_total,\
                                post_clicks,\
