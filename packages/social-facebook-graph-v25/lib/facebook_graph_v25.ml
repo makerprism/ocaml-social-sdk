@@ -912,7 +912,12 @@ module Make (Config : CONFIG) = struct
       pagination cursors.
 
       Fields returned: id, message, created_time, full_picture,
-      permalink_url, type, attachments.
+      permalink_url, attachments. Callers needing a post-level "type"
+      classification should derive it from [attachments[0].media_type]
+      — Meta deprecated the post-level [type] aggregation field in
+      Graph API v3.3 and v25 returns
+      [(#12) deprecate_post_aggregated_fields_for_attachement] when it
+      is requested.
 
       @param account_id Social account ID for credential resolution
       @param limit Number of posts per page (default 25, max 100)
@@ -924,7 +929,7 @@ module Make (Config : CONFIG) = struct
       (fun access_token ->
         Config.get_page_id ~account_id
           (fun page_id ->
-            let fields = "id,message,created_time,full_picture,permalink_url,type,attachments{type,media_type,url,media,subattachments}" in
+            let fields = "id,message,created_time,full_picture,permalink_url,attachments{type,media_type,url,media,subattachments}" in
             let params = [
               ("fields", [fields]);
               ("limit", [string_of_int limit]);
