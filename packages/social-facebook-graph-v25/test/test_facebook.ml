@@ -793,7 +793,7 @@ let test_post_analytics_request_contract () =
               assert (headers = []);
               assert (body = "");
               assert (url =
-                "https://graph.facebook.com/v25.0/12345_67890/insights?metric=post_total_media_view_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
+                "https://graph.facebook.com/v25.0/12345_67890/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
               print_endline "✓ Post analytics request contract"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Post analytics contract test failed: " ^ Error_types.error_to_string e))
@@ -846,10 +846,15 @@ let test_account_analytics_parsing () =
 let test_post_analytics_parsing () =
   Mock_config.reset ();
 
-  (* The parser prefers the v25 name [post_total_media_view_unique]
-     and falls back to [post_impressions_unique] for legacy responses.
-     This test exercises the v25 path; [test_post_analytics_parsing_legacy_unique]
-     below covers the fallback. *)
+  (* The parser accepts BOTH the v25 name [post_total_media_view_unique]
+     and the legacy [post_impressions_unique], even though we now only
+     REQUEST the legacy name (the v25 name triggers silent-omit on real
+     Page responses). The parser tolerance lets us flip back to the v25
+     name on the request side as soon as Meta fixes whatever is causing
+     the silent-drop, without code changes on the response side. This
+     test exercises the v25 response shape;
+     [test_post_analytics_parsing_legacy_unique] covers the legacy
+     response shape. *)
   let response_body = {|{
     "data": [
       {"name": "post_total_media_view_unique", "values": [{"value": 1234}]},
@@ -946,8 +951,14 @@ let test_get_page_posts_includes_inline_analytics_expansions () =
                   failwith ("get_page_posts URL missing expected marker: " ^ marker)
               in
               must_contain "insights.metric";
-              must_contain "post_total_media_view_unique";
-              must_contain "post_impressions_organic_unique";
+              (* [post_impressions_unique] is the legacy / pre-v25 name
+                 for unique reach. We request it instead of the v25
+                 successor [post_total_media_view_unique] because the
+                 latter triggers Meta's silent-omit-on-any-invalid-
+                 metric behaviour, dropping the entire insights field
+                 from the response. The legacy name still works in v25
+                 in 2026. *)
+              must_contain "post_impressions_unique";
               must_contain "post_reactions_by_type_total";
               must_contain "comments.summary";
               must_contain "reactions.summary";

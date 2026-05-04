@@ -958,11 +958,31 @@ module Make (Config : CONFIG) = struct
       (fun access_token ->
         Config.get_page_id ~account_id
           (fun page_id ->
+            (* Insights metric set is bounded by Meta's
+               silent-omit-on-any-invalid-metric behaviour: if ANY
+               metric in the list is invalid (or unavailable for a
+               given post type), Meta drops the entire [insights]
+               field from the response — no error, just absent. So
+               the metric set has to be every-metric-valid-for-every-
+               post-type. Empirically, [post_impressions_unique] /
+               [post_reactions_by_type_total] / [post_clicks] /
+               [post_clicks_by_type] survive across post types in v25
+               in 2026; the v25 successor names
+               [post_total_media_view_unique] and
+               [post_impressions_organic_unique] are documented but
+               appear to be the silent-omit triggers (verified
+               empirically — including them on a real Page response
+               drops the whole insights field).
+
+               Reels are a separate pipeline at
+               /{video_id}/video_insights with reels-specific
+               metrics (fb_reels_total_plays etc.) — handled by a
+               separate code path in the consumer, not via this
+               feed-expansion call. *)
             let fields =
               "id,message,created_time,full_picture,permalink_url,\
                attachments{type,media_type,url,media,subattachments},\
-               insights.metric(post_total_media_view_unique,\
-                               post_impressions_organic_unique,\
+               insights.metric(post_impressions_unique,\
                                post_reactions_by_type_total,\
                                post_clicks,\
                                post_clicks_by_type).as(insights),\
@@ -1795,11 +1815,17 @@ module Make (Config : CONFIG) = struct
   let account_analytics_metrics =
     "page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views"
 
-  (* v25 metric set for per-post insights. [post_total_media_view_unique]
-     replaced [post_impressions_unique] in v25 and the legacy name is
-     scheduled for removal in v26 (~June 2026); we request the v25 name
-     directly. The parser accepts either name on the response side so
-     callers depending on the legacy name still get the value.
+  (* Metric set for per-post insights via [get_post_analytics]. We
+     request [post_impressions_unique] (the legacy v24 / pre-v25 name
+     for unique reach) rather than the documented v25 successor
+     [post_total_media_view_unique], because the v25 name appears to
+     be a silent-omit trigger on real Page responses — including it
+     in the metric list drops the entire [insights] field from the
+     reply with no error. The legacy name still works in v25 in 2026
+     (Meta hasn't actually removed it; the public deprecation date
+     for [post_impressions] — note: NOT [_unique] — is November 2025,
+     and [post_impressions_unique] survives unchanged). When Meta
+     ships a working v26 successor we'll add it back here.
 
      Note: this metric set is requested by [get_post_analytics] which
      hits [GET /{post_id}/insights]. That endpoint is blocked for
@@ -1809,7 +1835,7 @@ module Make (Config : CONFIG) = struct
      which expands the same insights inline on the parent edge — see
      the docstring on that function for details. *)
   let post_analytics_metrics =
-    "post_total_media_view_unique,\
+    "post_impressions_unique,\
      post_reactions_by_type_total,post_clicks,post_clicks_by_type"
 
   let account_analytics_canonical_metric_keys =
