@@ -793,7 +793,7 @@ let test_post_analytics_request_contract () =
               assert (headers = []);
               assert (body = "");
               assert (url =
-                "https://graph.facebook.com/v25.0/12345_67890/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
+                "https://graph.facebook.com/v25.0/12345_67890/insights?metric=post_total_media_view_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
               print_endline "✓ Post analytics request contract"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Post analytics contract test failed: " ^ Error_types.error_to_string e))
@@ -846,9 +846,13 @@ let test_account_analytics_parsing () =
 let test_post_analytics_parsing () =
   Mock_config.reset ();
 
+  (* The parser prefers the v25 name [post_total_media_view_unique]
+     and falls back to [post_impressions_unique] for legacy responses.
+     This test exercises the v25 path; [test_post_analytics_parsing_legacy_unique]
+     below covers the fallback. *)
   let response_body = {|{
     "data": [
-      {"name": "post_impressions_unique", "values": [{"value": 1234}]},
+      {"name": "post_total_media_view_unique", "values": [{"value": 1234}]},
       {"name": "post_reactions_by_type_total", "values": [{"value": {"like": 10, "love": 3}}]},
       {"name": "post_clicks", "values": [{"value": 345}]},
       {"name": "post_clicks_by_type", "values": [{"value": {"other clicks": 12, "photo view": 9}}]}
@@ -868,8 +872,91 @@ let test_post_analytics_parsing () =
           assert (List.assoc_opt "love" analytics.post_reactions_by_type_total = Some 3);
           assert (List.assoc_opt "other clicks" analytics.post_clicks_by_type = Some 12);
           assert (List.assoc_opt "photo view" analytics.post_clicks_by_type = Some 9);
-          print_endline "✓ Post analytics parsing"
+          print_endline "✓ Post analytics parsing (v25 name)"
        | Error e -> failwith ("Post analytics parsing failed: " ^ Error_types.error_to_string e))
+
+let test_post_analytics_parsing_legacy_unique () =
+  Mock_config.reset ();
+
+  (* Legacy fallback: when only [post_impressions_unique] is in the
+     response (older accounts, archived data, or external callers
+     pinning to v24), the parser still surfaces it on the same field. *)
+  let response_body = {|{
+    "data": [
+      {"name": "post_impressions_unique", "values": [{"value": 999}]}
+    ]
+  }|} in
+
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+
+  Facebook.get_post_analytics
+    ~post_id:"post_legacy"
+    ~access_token:"token"
+    (function
+      | Ok analytics ->
+          assert (analytics.post_impressions_unique = Some 999);
+          print_endline "✓ Post analytics parsing (legacy fallback)"
+       | Error e -> failwith ("Post analytics legacy fallback failed: " ^ Error_types.error_to_string e))
+
+(** Lock in that [get_page_posts] requests the inline-analytics field
+    expansions Meta needs us to use for status posts (since per-post
+    /{post_id}/insights is blocked there since v2.4). The page-feed
+    edge bypasses the deprecation; this test guards that we keep
+    asking for the data and don't accidentally regress to a slim
+    field set. *)
+let test_get_page_posts_includes_inline_analytics_expansions () =
+  Mock_config.reset ();
+  let future_time =
+    match Ptime.add_span (Ptime_clock.now ()) (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  let creds = {
+    access_token = "tok";
+    refresh_token = None;
+    expires_at = Some future_time;
+    auth_type = Bearer;
+    scope = None;
+  } in
+  Mock_config.set_credentials ~account_id:"acct_with_inline_metrics" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"acct_with_inline_metrics" ~page_id:"page_xyz";
+  let response_body = {|{ "data": [], "paging": { "cursors": {} } }|} in
+  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+  Facebook.get_page_posts
+    ~account_id:"acct_with_inline_metrics"
+    ~limit:25
+    ~after:None
+    ()
+    (function
+      | Ok _ ->
+          (match !Mock_http.requests with
+          | (_, url, _, _) :: _ ->
+              let must_contain marker =
+                let needle_present =
+                  let len_url = String.length url in
+                  let len_n = String.length marker in
+                  let rec find i =
+                    if i + len_n > len_url then false
+                    else if String.sub url i len_n = marker then true
+                    else find (i + 1)
+                  in
+                  find 0
+                in
+                if not needle_present then
+                  failwith ("get_page_posts URL missing expected marker: " ^ marker)
+              in
+              must_contain "insights.metric";
+              must_contain "post_total_media_view_unique";
+              must_contain "post_impressions_organic_unique";
+              must_contain "post_reactions_by_type_total";
+              must_contain "comments.summary";
+              must_contain "reactions.summary";
+              must_contain "shares";
+              print_endline "✓ get_page_posts requests inline analytics expansions"
+          | [] -> failwith "No request recorded for get_page_posts")
+      | Error e ->
+          failwith ("get_page_posts inline-expansion test failed: "
+                    ^ Error_types.error_to_string e))
 
 let test_canonical_analytics_adapters () =
   let find_series provider_metric series =
@@ -2782,6 +2869,8 @@ let () =
   test_post_analytics_request_contract ();
   test_account_analytics_parsing ();
   test_post_analytics_parsing ();
+  test_post_analytics_parsing_legacy_unique ();
+  test_get_page_posts_includes_inline_analytics_expansions ();
   test_canonical_analytics_adapters ();
   test_analytics_network_error_redacts_query_token ();
   test_graph_version_policy_guard ();

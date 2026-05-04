@@ -1739,7 +1739,30 @@ module Make (Config : CONFIG) = struct
     else
       Ok ()
 
-  (** {1 Insights / Analytics} *)
+  (** {1 Insights / Analytics}
+
+      Two paths to per-post analytics. Pick based on what data you need:
+
+      - [get_page_posts] (recommended for new code): walks
+        /{page_id}/posts with field expansion. The response carries
+        per-post [insights], [comments_summary], [reactions_summary],
+        and [shares] inline. Works for ALL post types — including
+        text-only status posts, where Meta has blocked direct insights
+        access since v2.4. One round-trip per pagination page covers
+        N posts. Production-tested connectors (Airbyte, Mage) all use
+        this form.
+
+      - [get_post_analytics] / [get_post_analytics_canonical]: the
+        legacy per-post path. Hits [GET /{post_id}/insights] for one
+        post at a time. Returns
+        [(#12) singular statuses API is deprecated] for status posts;
+        works fine for posts with media. Retained for callers that
+        only deal with media posts and prefer the simpler typed
+        [post_analytics] result over parsing the page-feed response.
+
+      Account-level analytics (page reach, follower deltas, etc.)
+      lives in [get_account_analytics] / [get_account_analytics_canonical]
+      — that path is unaffected by the singular-status deprecation. *)
 
   type insight_timeseries_point = {
     end_time : string option;
@@ -1764,8 +1787,22 @@ module Make (Config : CONFIG) = struct
   let account_analytics_metrics =
     "page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views"
 
+  (* v25 metric set for per-post insights. [post_total_media_view_unique]
+     replaced [post_impressions_unique] in v25 and the legacy name is
+     scheduled for removal in v26 (~June 2026); we request the v25 name
+     directly. The parser accepts either name on the response side so
+     callers depending on the legacy name still get the value.
+
+     Note: this metric set is requested by [get_post_analytics] which
+     hits [GET /{post_id}/insights]. That endpoint is blocked for
+     status-type posts since v2.4 (returns
+     [(#12) singular statuses API is deprecated]). For analytics that
+     covers ALL post types, callers should prefer [get_page_posts],
+     which expands the same insights inline on the parent edge — see
+     the docstring on that function for details. *)
   let post_analytics_metrics =
-    "post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type"
+    "post_total_media_view_unique,\
+     post_reactions_by_type_total,post_clicks,post_clicks_by_type"
 
   let account_analytics_canonical_metric_keys =
     Analytics_normalization.canonical_metric_keys_of_provider_metrics
@@ -1779,7 +1816,8 @@ module Make (Config : CONFIG) = struct
   let post_analytics_canonical_metric_keys =
     Analytics_normalization.canonical_metric_keys_of_provider_metrics
       ~provider:Analytics_normalization.Facebook
-      [ "post_impressions_unique";
+      [ "post_total_media_view_unique";
+        "post_impressions_organic_unique";
         "post_reactions_by_type_total";
         "post_clicks";
         "post_clicks_by_type" ]
@@ -1832,7 +1870,12 @@ module Make (Config : CONFIG) = struct
              points)
 
   let to_canonical_post_analytics_series ?time_range post_analytics =
-    [ ("post_impressions_unique",
+    (* Surface the unique-views value under the v25 name
+       [post_total_media_view_unique] so canonical-series consumers see
+       the current Meta naming. The record field is still called
+       [post_impressions_unique] for backwards-compatible record
+       construction; the two names refer to the same metric. *)
+    [ ("post_total_media_view_unique",
        to_canonical_optional_point post_analytics.post_impressions_unique);
       ("post_reactions_by_type_total",
        to_canonical_assoc_total_points post_analytics.post_reactions_by_type_total);
@@ -1917,11 +1960,21 @@ module Make (Config : CONFIG) = struct
           | value_json :: _ -> Some (value_json |> member "value")
           | [] -> None)
     in
+    (* Prefer the v25 name [post_total_media_view_unique]; fall back to
+       the legacy name [post_impressions_unique] for older response
+       payloads or callers requesting the legacy metric set. The two
+       are aliases for the same number — Meta renamed it in v25 to
+       reflect that it actually measures unique viewers. *)
+    let unique_views =
+      match first_metric_value "post_total_media_view_unique" with
+      | Some json_value -> int_of_json_safe json_value
+      | None ->
+          (match first_metric_value "post_impressions_unique" with
+          | Some json_value -> int_of_json_safe json_value
+          | None -> None)
+    in
     {
-      post_impressions_unique =
-        (match first_metric_value "post_impressions_unique" with
-        | Some json_value -> int_of_json_safe json_value
-        | None -> None);
+      post_impressions_unique = unique_views;
       post_reactions_by_type_total =
         (match first_metric_value "post_reactions_by_type_total" with
         | Some json_value -> int_assoc_of_json json_value
@@ -1999,11 +2052,32 @@ module Make (Config : CONFIG) = struct
                     analytics))
         | Error err -> on_result (Error err))
 
-  (** Post analytics via post insights endpoint.
+  (** Post analytics via per-post insights endpoint. Legacy path —
+      see [get_page_posts] for the recommended page-feed-expansion
+      flow.
+
+      ⚠️ This endpoint returns [(#12) singular statuses API is
+      deprecated for versions v2.4 and higher] for text-only status
+      posts (no attachments). Meta retired the singular-status node
+      in April 2019 and never restored it. Calls of this form work
+      for posts with media (photo, video, link, share) but silently
+      fail for status posts.
+
+      For analytics that covers ALL post types, prefer
+      [get_page_posts]: it traverses /{page_id}/posts with field
+      expansion, which Meta still serves because the request is
+      rooted at the Page node. The expanded response carries
+      per-post [insights] (same metric set), [comments_summary],
+      [reactions_summary], and [shares] inline. Production-tested
+      connectors (Airbyte, Mage) use that path for the same reason.
+
+      This function is retained for callers that only deal with
+      media posts and want the simpler per-post API. New code should
+      prefer [get_page_posts] unless there's a specific reason not to.
 
       Contract:
       GET https://graph.facebook.com/v25.0/{post_id}/insights
-          ?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type
+          ?metric=post_total_media_view_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type
           &access_token=...
   *)
   let get_post_analytics ~post_id ~access_token on_result =
@@ -2039,6 +2113,11 @@ module Make (Config : CONFIG) = struct
         on_result
           (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
 
+  (** Canonical-series wrapper around [get_post_analytics]. Same
+      caveats apply: this is the legacy per-post path that fails
+      with (#12) for status posts. Use [get_page_posts] when you
+      need analytics for arbitrary post types — see that function's
+      docstring for the recommended flow. *)
   let get_post_analytics_canonical ~post_id ~access_token on_result =
     get_post_analytics ~post_id ~access_token
       (function
