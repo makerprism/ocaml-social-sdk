@@ -682,8 +682,16 @@ module Make (Config : CONFIG) = struct
       }, next_url, previous_url
     with _ -> None, None, None
   
-  (** Generic GET request with pagination support *)
-  let get_paginated ~path ~access_token ?fields ?cursor on_result =
+  (** Generic GET request with pagination support.
+
+      [?query] accepts arbitrary additional query-string params for
+      endpoints that need more than [fields] / [cursor]. Most insights
+      endpoints, for example, take [metric] / [period] / [since] /
+      [until] as plain query params; passing them through here keeps
+      callers off the hand-rolled URL-construction path and routes
+      everything through the SDK's auth / appsecret_proof / rate-limit
+      / error-classification stack. *)
+  let get_paginated ~path ~access_token ?fields ?cursor ?(query=[]) on_result =
     let field_params = match fields with
       | Some f -> [("fields", String.concat "," f)]
       | None -> []
@@ -692,7 +700,7 @@ module Make (Config : CONFIG) = struct
       | Some c -> [("after", c)]
       | None -> []
     in
-    let params = field_params @ cursor_params in
+    let params = field_params @ cursor_params @ query in
     
     let url = 
       if List.length params > 0 then
@@ -2127,9 +2135,14 @@ module Make (Config : CONFIG) = struct
   
   (** {1 Generic API Methods} *)
   
-  (** Generic GET request to any Graph API endpoint *)
-  let get ~path ~access_token ?fields ?required_permissions on_result =
-    get_paginated ~path ~access_token ?fields ?cursor:None
+  (** Generic GET request to any Graph API endpoint.
+
+      Pass [?query] for arbitrary query-string params (e.g.
+      [metric], [period], [since], [until] on insights endpoints).
+      [?fields] is a convenience shortcut for the common [fields=...]
+      pattern; [?query] is the escape hatch for everything else. *)
+  let get ~path ~access_token ?fields ?(query=[]) ?required_permissions on_result =
+    get_paginated ~path ~access_token ?fields ~query ?cursor:None
       (function
         | Ok response -> on_result (Ok response)
         | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { platform_message; _ })) ->
