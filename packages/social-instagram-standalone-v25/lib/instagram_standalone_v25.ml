@@ -49,6 +49,114 @@ type standalone_profile = {
     - Redirect URI (registered callback URL)
 *)
 module OAuth = struct
+  (** Instagram OAuth scopes as an ADT with string fallback for future scopes.
+      Use [Custom s] for scopes not yet modeled in the ADT.
+
+      Full list from Meta Developer Portal:
+      - instagram_basic: Basic profile fields for Instagram users
+      - instagram_business_basic: Business profile fields and media
+      - instagram_content_publish: Create organic feed photo/video posts (creator accounts)
+      - instagram_business_content_publish: Create organic feed photo/video posts (business accounts)
+      - instagram_manage_insights: Access insights for Instagram accounts
+      - instagram_business_manage_insights: Access insights for Instagram business accounts
+      - instagram_manage_comments: Access and manage comments on business account media
+      - instagram_business_manage_comments: Access and manage comments on professional accounts
+      - pages_read_engagement: Read engagement data from pages (shared with Facebook)
+      - pages_show_list: Access pages managed by user (shared with Facebook)
+      - public_profile: Access public profile fields (shared across Meta)
+      - read_insights: Read insights data (shared with Facebook)
+      - business_management: Business asset management (shared across Meta)
+      - email: Access primary email address (shared across Meta)
+      - instagram_branded_content_ads_brand: Branded content ads for brands
+      - instagram_branded_content_brand: Branded content tools for brands
+      - instagram_branded_content_creator: Branded content tools for creators
+      - instagram_business_manage_messages: Message management for business accounts
+      - instagram_manage_messages: Message management for creator accounts
+      - instagram_creator_marketplace_discovery: Discover creators on marketplace
+      - instagram_manage_contents: Delete media on behalf of user
+      - instagram_manage_engagement: Like/unlike media and comments
+      - instagram_shopping_tag_products: Tag products in media
+      - instagram_manage_upcoming_events: Manage upcoming events
+      - facebook_creator_marketplace_discovery: Discover creators on Facebook marketplace
+      - ads_management: Manage ad accounts
+      - ads_read: Read ad insights
+      - catalog_management: Manage product catalogs
+  *)
+  type scope =
+    | Instagram_basic
+    | Instagram_business_basic
+    | Instagram_content_publish
+    | Instagram_business_content_publish
+    | Instagram_manage_insights
+    | Instagram_business_manage_insights
+    | Instagram_manage_comments
+    | Instagram_business_manage_comments
+    | Pages_read_engagement
+    | Pages_show_list
+    | Public_profile
+    | Read_insights
+    | Business_management
+    | Email
+    | Instagram_branded_content_ads_brand
+    | Instagram_branded_content_brand
+    | Instagram_branded_content_creator
+    | Instagram_business_manage_messages
+    | Instagram_manage_messages
+    | Instagram_creator_marketplace_discovery
+    | Instagram_manage_contents
+    | Instagram_manage_engagement
+    | Instagram_shopping_tag_products
+    | Instagram_manage_upcoming_events
+    | Facebook_creator_marketplace_discovery
+    | Ads_management
+    | Ads_read
+    | Catalog_management
+    | Custom of string
+
+  (** Convert a scope to its string representation. *)
+  let scope_to_string = function
+    | Instagram_basic -> "instagram_basic"
+    | Instagram_business_basic -> "instagram_business_basic"
+    | Instagram_content_publish -> "instagram_content_publish"
+    | Instagram_business_content_publish -> "instagram_business_content_publish"
+    | Instagram_manage_insights -> "instagram_manage_insights"
+    | Instagram_business_manage_insights -> "instagram_business_manage_insights"
+    | Instagram_manage_comments -> "instagram_manage_comments"
+    | Instagram_business_manage_comments -> "instagram_business_manage_comments"
+    | Pages_read_engagement -> "pages_read_engagement"
+    | Pages_show_list -> "pages_show_list"
+    | Public_profile -> "public_profile"
+    | Read_insights -> "read_insights"
+    | Business_management -> "business_management"
+    | Email -> "email"
+    | Instagram_branded_content_ads_brand -> "instagram_branded_content_ads_brand"
+    | Instagram_branded_content_brand -> "instagram_branded_content_brand"
+    | Instagram_branded_content_creator -> "instagram_branded_content_creator"
+    | Instagram_business_manage_messages -> "instagram_business_manage_messages"
+    | Instagram_manage_messages -> "instagram_manage_messages"
+    | Instagram_creator_marketplace_discovery -> "instagram_creator_marketplace_discovery"
+    | Instagram_manage_contents -> "instagram_manage_contents"
+    | Instagram_manage_engagement -> "instagram_manage_engagement"
+    | Instagram_shopping_tag_products -> "instagram_shopping_tag_products"
+    | Instagram_manage_upcoming_events -> "instagram_manage_upcoming_events"
+    | Facebook_creator_marketplace_discovery -> "facebook_creator_marketplace_discovery"
+    | Ads_management -> "ads_management"
+    | Ads_read -> "ads_read"
+    | Catalog_management -> "catalog_management"
+    | Custom s -> s
+
+  (** Convert a scope list to the new Meta params[scope] JSON array format.
+      Meta changed from ?scope=xxx to ?params[scope]=["xxx","yyy"] *)
+  let scopes_to_json_array scopes =
+    scopes
+    |> List.map scope_to_string
+    |> List.map (fun s -> Printf.sprintf "\"%s\"" s)
+    |> String.concat ","
+    |> Printf.sprintf "[%s]"
+
+  (** Helper to create custom scopes from strings. *)
+  let custom_scope s = Custom s
+
   let compute_app_secret_proof ~app_secret ~access_token =
     let digest = Digestif.SHA256.hmac_string ~key:app_secret access_token in
     Digestif.SHA256.to_hex digest
@@ -180,22 +288,32 @@ module OAuth = struct
   (** Scope definitions for Instagram Standalone (Business Login) *)
   module Scopes = struct
     (** Basic business profile scope *)
-    let basic = "instagram_business_basic"
+    let basic = [Instagram_business_basic]
 
     (** Content publish scope *)
-    let content_publish = "instagram_business_content_publish"
+    let content_publish = [Instagram_business_basic; Instagram_business_content_publish]
+
+    (** Content publish with insights scope *)
+    let publish_with_insights = [
+      Instagram_business_basic;
+      Instagram_business_content_publish;
+      Instagram_business_manage_insights;
+    ]
 
     (** Scopes for basic profile read access *)
-    let read = [basic]
+    let read = basic
 
     (** Scopes for read + content publishing *)
-    let write = [basic; content_publish]
+    let write = content_publish
   end
 
   (** Generate authorization URL for Instagram Standalone OAuth 2.0 flow
 
       Note: This uses Instagram's own OAuth dialog (not Facebook's).
       The user will log in directly to Instagram and grant permissions.
+
+      Uses Meta's new params[scope] JSON array format instead of the legacy
+      ?scope=xxx format.
 
       @param client_id Instagram App ID (same as Facebook App ID)
       @param redirect_uri Registered callback URL
@@ -204,12 +322,12 @@ module OAuth = struct
       @return Full authorization URL to redirect user to
   *)
   let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) () =
-    let scope_str = String.concat "," scopes in
+    let scopes_json = scopes_to_json_array scopes in
     let params = [
       ("enable_fb_login", "0");
       ("client_id", client_id);
       ("redirect_uri", redirect_uri);
-      ("scope", scope_str);
+      ("params[scope]", scopes_json);
       ("response_type", "code");
       ("state", state);
     ] in

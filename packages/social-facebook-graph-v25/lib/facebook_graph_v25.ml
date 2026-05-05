@@ -28,26 +28,94 @@ open Social_core
 module OAuth = struct
   (** Scope definitions for Facebook Graph API *)
   module Scopes = struct
+    (** Facebook OAuth scopes as an ADT with string fallback for future scopes.
+        Use [Custom s] for scopes not yet modeled in the ADT.
+
+        Full list from Meta Developer Portal:
+        - pages_manage_posts: Create, edit, and delete page posts
+        - pages_manage_engagement: Manage comments on page posts
+        - pages_read_engagement: Read page content and engagement data
+        - pages_read_user_content: Read user-generated content on page
+        - pages_show_list: Access pages managed by user
+        - pages_manage_metadata: Manage webhooks and page settings
+        - read_insights: Read insights data for pages, apps, domains
+        - public_profile: Access public profile fields (shared across Meta)
+        - business_management: Business asset management (shared across Meta)
+        - email: Access primary email address (shared across Meta)
+        - facebook_branded_content_ads_brand: Branded content ads for brands
+        - facebook_creator_marketplace_discovery: Discover creators on marketplace
+        - ads_management: Manage ad accounts
+        - ads_read: Read ad insights
+        - catalog_management: Manage product catalogs
+    *)
+    type scope =
+      | Pages_manage_posts
+      | Pages_manage_engagement
+      | Pages_read_engagement
+      | Pages_read_user_content
+      | Pages_show_list
+      | Pages_manage_metadata
+      | Read_insights
+      | Public_profile
+      | Business_management
+      | Email
+      | Facebook_branded_content_ads_brand
+      | Facebook_creator_marketplace_discovery
+      | Ads_management
+      | Ads_read
+      | Catalog_management
+      | Custom of string
+
+    (** Convert a scope to its string representation. *)
+    let scope_to_string = function
+      | Pages_manage_posts -> "pages_manage_posts"
+      | Pages_manage_engagement -> "pages_manage_engagement"
+      | Pages_read_engagement -> "pages_read_engagement"
+      | Pages_read_user_content -> "pages_read_user_content"
+      | Pages_show_list -> "pages_show_list"
+      | Pages_manage_metadata -> "pages_manage_metadata"
+      | Read_insights -> "read_insights"
+      | Public_profile -> "public_profile"
+      | Business_management -> "business_management"
+      | Email -> "email"
+      | Facebook_branded_content_ads_brand -> "facebook_branded_content_ads_brand"
+      | Facebook_creator_marketplace_discovery -> "facebook_creator_marketplace_discovery"
+      | Ads_management -> "ads_management"
+      | Ads_read -> "ads_read"
+      | Catalog_management -> "catalog_management"
+      | Custom s -> s
+
+    (** Convert a scope list to the new Meta params[scope] JSON array format.
+        Meta changed from ?scope=xxx to ?params[scope]=["xxx","yyy"] *)
+    let scopes_to_json_array scopes =
+      scopes
+      |> List.map scope_to_string
+      |> List.map (fun s -> Printf.sprintf "\"%s\"" s)
+      |> String.concat ","
+      |> Printf.sprintf "[%s]"
+
+    (** Helper to create custom scopes from strings. *)
+    let custom_scope s = Custom s
+
     (** Scopes required for basic read operations *)
-    let read = ["public_profile"; "email"]
-    
+    let read = [Public_profile; Email]
+
     (** Scopes required for Facebook Page posting *)
     let write = [
-      "pages_read_engagement";
-      "pages_manage_posts";
-      "pages_show_list";
+      Pages_read_engagement;
+      Pages_manage_posts;
+      Pages_show_list;
     ]
-    
+
     (** All commonly used scopes for Pages management *)
     let all = [
-      "public_profile"; "email";
-      "pages_read_engagement"; "pages_manage_posts";
-      "pages_show_list"; "pages_read_user_content";
-      "pages_manage_metadata"; "pages_manage_engagement";
+      Public_profile; Email;
+      Pages_read_engagement; Pages_manage_posts;
+      Pages_show_list; Pages_read_user_content;
+      Pages_manage_metadata; Pages_manage_engagement;
     ]
-    
     (** Operations that can be performed with Facebook API *)
-    type operation = 
+    type operation =
       | Post_text
       | Post_media
       | Post_video
@@ -56,14 +124,14 @@ module OAuth = struct
       | Read_posts
       | Delete_post
       | Manage_pages
-    
+
     (** Get scopes required for specific operations *)
     let for_operations ops =
-      let base = ["public_profile"] in
+      let base = [Public_profile] in
       if List.exists (fun o -> o = Post_text || o = Post_media || o = Post_video || o = Post_story || o = Delete_post || o = Manage_pages) ops
       then base @ write
       else if List.exists (fun o -> o = Read_profile || o = Read_posts) ops
-      then base @ ["pages_read_engagement"; "pages_show_list"]
+      then base @ [Pages_read_engagement; Pages_show_list]
       else base
   end
   
@@ -98,9 +166,12 @@ module OAuth = struct
   end
   
   (** Generate authorization URL for Facebook OAuth 2.0 flow
-      
+
       Note: Facebook does NOT support PKCE.
-      
+
+      Uses Meta's new params[scope] JSON array format instead of the legacy
+      ?scope=xxx format.
+
       @param client_id Facebook App ID
       @param redirect_uri Registered callback URL
       @param state CSRF protection state parameter
@@ -108,12 +179,12 @@ module OAuth = struct
       @return Full authorization URL to redirect user to
   *)
   let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) () =
-    let scope_str = String.concat "," scopes in
+    let scopes_json = Scopes.scopes_to_json_array scopes in
     let params = [
       ("client_id", client_id);
       ("redirect_uri", redirect_uri);
       ("state", state);
-      ("scope", scope_str);
+      ("params[scope]", scopes_json);
       ("response_type", "code");
       ("auth_type", "rerequest");
     ] in
