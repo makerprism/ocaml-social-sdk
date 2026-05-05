@@ -330,14 +330,16 @@ module OAuth = struct
   let token_endpoint = "https://graph.threads.net/oauth/access_token"
 
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
-    (** Meta's new OAuth format uses params[scope]=["scope1","scope2"] instead of
-        ?scope=scope1,scope2. We encode the scopes as a JSON array. *)
-    let scopes_json = scopes_to_json_array scopes in
+    (** Use comma-separated scope format (?scope=scope1,scope2) instead of
+        Meta's new params[scope]=["scope1","scope2"] JSON format. The new format
+        causes "InvalidScopeRequested" errors. *)
+    let scope_list = List.map scope_to_string scopes in
+    let scope = String.concat "," scope_list in
     let query =
       Uri.encoded_of_query
         [ ("client_id", [client_id]);
           ("redirect_uri", [redirect_uri]);
-          ("params[scope]", [scopes_json]);
+          ("scope", [scope]);
           ("response_type", ["code"]);
           ("state", [state]) ]
     in
