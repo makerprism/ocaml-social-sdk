@@ -255,9 +255,74 @@ let network_error err =
   Error_types.Network_error (Error_types.Connection_failed (sanitize_text_if_sensitive err))
 
 module OAuth = struct
+  (** Thread OAuth scopes as an ADT with string fallback for future scopes.
+      Use [Custom s] for scopes not yet modeled in the ADT.
+
+      Full list from Meta Developer Portal:
+      - threads_basic: Display user's own posts
+      - threads_content_publish: Create and publish content
+      - threads_delete: Delete user's posts
+      - threads_keyword_search: Search and fetch content by keyword
+      - threads_location_tagging: Search locations and tag media with location
+      - threads_manage_insights: Access profile insights (analytics)
+      - threads_manage_mentions: Fetch mentions
+      - threads_manage_replies: Create, hide/show replies, control who can reply
+      - threads_profile_discovery: Access public profiles and posts
+      - threads_read_replies: Read replies to user's threads
+      - threads_share_to_instagram: Share Threads posts to linked Instagram account *)
+  type scope =
+    | Threads_basic
+    | Threads_content_publish
+    | Threads_delete
+    | Threads_keyword_search
+    | Threads_location_tagging
+    | Threads_manage_insights
+    | Threads_manage_mentions
+    | Threads_manage_replies
+    | Threads_profile_discovery
+    | Threads_read_replies
+    | Threads_share_to_instagram
+    | Custom of string
+
+  (** Convert a scope to its string representation. *)
+  let scope_to_string = function
+    | Threads_basic -> "threads_basic"
+    | Threads_content_publish -> "threads_content_publish"
+    | Threads_delete -> "threads_delete"
+    | Threads_keyword_search -> "threads_keyword_search"
+    | Threads_location_tagging -> "threads_location_tagging"
+    | Threads_manage_insights -> "threads_manage_insights"
+    | Threads_manage_mentions -> "threads_manage_mentions"
+    | Threads_manage_replies -> "threads_manage_replies"
+    | Threads_profile_discovery -> "threads_profile_discovery"
+    | Threads_read_replies -> "threads_read_replies"
+    | Threads_share_to_instagram -> "threads_share_to_instagram"
+    | Custom s -> s
+
+  (** Convert a scope list to the new Meta params[scope] JSON array format.
+      Meta changed from ?scope=xxx to ?params[scope]=["xxx","yyy"] *)
+  let scopes_to_json_array scopes =
+    scopes
+    |> List.map scope_to_string
+    |> List.map (fun s -> Printf.sprintf "\"%s\"" s)
+    |> String.concat ","
+    |> Printf.sprintf "[%s]"
+
+  (** Helper to create custom scopes from strings. *)
+  let custom_scope s = Custom s
+
+  module Presets = struct
+    let basic = [Threads_basic]
+    let publish = [Threads_basic; Threads_content_publish]
+    let publish_with_analytics = [Threads_basic; Threads_content_publish; Threads_manage_insights; Threads_location_tagging]
+    let read = [Threads_basic]
+  end
+
+  (** Backward compatibility: string lists for legacy code *)
   module Scopes = struct
     let basic = ["threads_basic"]
     let publish = ["threads_basic"; "threads_content_publish"]
+    let publish_with_analytics = ["threads_basic"; "threads_content_publish"; "threads_manage_insights"; "threads_location_tagging"]
     let read = ["threads_basic"]
   end
 
@@ -265,12 +330,14 @@ module OAuth = struct
   let token_endpoint = "https://graph.threads.net/oauth/access_token"
 
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
-    let scope = String.concat "," scopes in
+    (** Meta's new OAuth format uses params[scope]=["scope1","scope2"] instead of
+        ?scope=scope1,scope2. We encode the scopes as a JSON array. *)
+    let scopes_json = scopes_to_json_array scopes in
     let query =
       Uri.encoded_of_query
         [ ("client_id", [client_id]);
           ("redirect_uri", [redirect_uri]);
-          ("scope", [scope]);
+          ("params[scope]", [scopes_json]);
           ("response_type", ["code"]);
           ("state", [state]) ]
     in
@@ -1755,7 +1822,7 @@ module Make (Config : CONFIG) = struct
   let unhide_reply ~account_id ~reply_id on_result =
     reply_action ~account_id ~reply_id ~endpoint:"" ~extra_params:[("hide", "false")] on_result
 
-  let get_oauth_url ~redirect_uri ~state on_success on_error =
+  let get_oauth_url ?(scopes=OAuth.Presets.publish) ~redirect_uri ~state on_success on_error =
     let raw_client_id = Config.get_env "THREADS_CLIENT_ID" |> Option.value ~default:"" in
     let raw_configured_redirect_uri =
       Config.get_env "THREADS_REDIRECT_URI" |> Option.value ~default:""
@@ -1789,7 +1856,7 @@ module Make (Config : CONFIG) = struct
                ~client_id
                ~redirect_uri
                ~state
-               ~scopes:OAuth.Scopes.publish
+               ~scopes
            in
            on_success url)
 
