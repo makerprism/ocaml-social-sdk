@@ -329,10 +329,10 @@ module OAuth = struct
   let authorization_endpoint = "https://threads.net/oauth/authorize"
   let token_endpoint = "https://graph.threads.net/oauth/access_token"
 
+  (* Use comma-separated scope format (?scope=scope1,scope2) instead of
+     Meta's new params[scope]=["scope1","scope2"] JSON format. The new format
+     causes "InvalidScopeRequested" errors. *)
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
-    (** Use comma-separated scope format (?scope=scope1,scope2) instead of
-        Meta's new params[scope]=["scope1","scope2"] JSON format. The new format
-        causes "InvalidScopeRequested" errors. *)
     let scope_list = List.map scope_to_string scopes in
     let scope = String.concat "," scope_list in
     let query =
@@ -1824,7 +1824,7 @@ module Make (Config : CONFIG) = struct
   let unhide_reply ~account_id ~reply_id on_result =
     reply_action ~account_id ~reply_id ~endpoint:"" ~extra_params:[("hide", "false")] on_result
 
-  let get_oauth_url ?(scopes=OAuth.Presets.publish) ~redirect_uri ~state on_success on_error =
+  let get_oauth_url ~redirect_uri ~state ~scopes on_success on_error =
     let raw_client_id = Config.get_env "THREADS_CLIENT_ID" |> Option.value ~default:"" in
     let raw_configured_redirect_uri =
       Config.get_env "THREADS_REDIRECT_URI" |> Option.value ~default:""

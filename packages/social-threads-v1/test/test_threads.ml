@@ -151,7 +151,10 @@ module OAuth_http = Social_threads_v1.OAuth.Make (Mock_http)
 let test_oauth_url () =
   Mock_config.reset ();
   Mock_config.env_vars := [ ("THREADS_CLIENT_ID", "client-123") ];
-  Threads.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"state-xyz"
+  Threads.get_oauth_url
+    ~redirect_uri:"https://example.com/callback"
+    ~state:"state-xyz"
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun url ->
       assert (string_contains url "threads.net/oauth/authorize");
       assert (query_param url "client_id" = Some "client-123");
@@ -168,6 +171,7 @@ let test_oauth_url_encodes_special_characters () =
   Threads.get_oauth_url
     ~redirect_uri:"https://example.com/callback?x=1&y=two"
     ~state:"abc/123"
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun url ->
       assert (query_param url "redirect_uri" = Some "https://example.com/callback?x=1&y=two");
       assert (query_param url "state" = Some "abc/123");
@@ -177,7 +181,10 @@ let test_oauth_url_encodes_special_characters () =
 let test_oauth_url_rejects_empty_state () =
   Mock_config.reset ();
   Mock_config.env_vars := [ ("THREADS_CLIENT_ID", "client-123") ];
-  Threads.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"   "
+  Threads.get_oauth_url
+    ~redirect_uri:"https://example.com/callback"
+    ~state:"   "
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun _ -> failwith "expected oauth url failure for empty state")
     (fun err ->
       assert (string_contains err "state must not be empty");
@@ -186,7 +193,10 @@ let test_oauth_url_rejects_empty_state () =
 let test_oauth_url_rejects_whitespace_client_id () =
   Mock_config.reset ();
   Mock_config.env_vars := [ ("THREADS_CLIENT_ID", " client-123 ") ];
-  Threads.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"state-xyz"
+  Threads.get_oauth_url
+    ~redirect_uri:"https://example.com/callback"
+    ~state:"state-xyz"
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun _ -> failwith "expected oauth url failure for empty client id")
     (fun err ->
       assert (string_contains err "client ID must not contain leading or trailing whitespace");
@@ -195,7 +205,10 @@ let test_oauth_url_rejects_whitespace_client_id () =
 let test_oauth_url_rejects_state_with_surrounding_whitespace () =
   Mock_config.reset ();
   Mock_config.env_vars := [ ("THREADS_CLIENT_ID", "client-123") ];
-  Threads.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:" state-xyz "
+  Threads.get_oauth_url
+    ~redirect_uri:"https://example.com/callback"
+    ~state:" state-xyz "
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun _ -> failwith "expected oauth url failure for whitespace state")
     (fun err ->
       assert (string_contains err "state must not contain leading or trailing whitespace");
@@ -204,7 +217,10 @@ let test_oauth_url_rejects_state_with_surrounding_whitespace () =
 let test_oauth_url_rejects_redirect_with_surrounding_whitespace () =
   Mock_config.reset ();
   Mock_config.env_vars := [ ("THREADS_CLIENT_ID", "client-123") ];
-  Threads.get_oauth_url ~redirect_uri:" https://example.com/callback " ~state:"state-xyz"
+  Threads.get_oauth_url
+    ~redirect_uri:" https://example.com/callback "
+    ~state:"state-xyz"
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun _ -> failwith "expected oauth url failure for whitespace redirect")
     (fun err ->
       assert (string_contains err "redirect URI must not contain leading or trailing whitespace");
@@ -217,7 +233,10 @@ let test_oauth_url_rejects_redirect_uri_mismatch_with_config () =
       ("THREADS_CLIENT_ID", "client-123");
       ("THREADS_REDIRECT_URI", "https://example.com/callback");
     ];
-  Threads.get_oauth_url ~redirect_uri:"https://example.com/other" ~state:"state-xyz"
+  Threads.get_oauth_url
+    ~redirect_uri:"https://example.com/other"
+    ~state:"state-xyz"
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun _ -> failwith "expected oauth url failure for configured redirect mismatch")
     (fun err ->
       assert (string_contains err "must exactly match THREADS_REDIRECT_URI");
@@ -230,7 +249,10 @@ let test_oauth_url_rejects_whitespace_configured_redirect_uri () =
       ("THREADS_CLIENT_ID", "client-123");
       ("THREADS_REDIRECT_URI", " https://example.com/callback ");
     ];
-  Threads.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"state-xyz"
+  Threads.get_oauth_url
+    ~redirect_uri:"https://example.com/callback"
+    ~state:"state-xyz"
+    ~scopes:Social_threads_v1.OAuth.Presets.publish
     (fun _ -> failwith "expected oauth url failure for whitespace configured redirect")
     (fun err ->
       assert (string_contains err "Configured Threads redirect URI must not contain leading or trailing whitespace");

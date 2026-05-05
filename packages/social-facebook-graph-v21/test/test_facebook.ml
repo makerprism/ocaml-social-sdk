@@ -175,7 +175,9 @@ let test_oauth_url () =
   let state = "test_state_123" in
   let redirect_uri = "https://example.com/callback" in
   
-  Facebook.get_oauth_url ~redirect_uri ~state
+  let scopes = ["pages_read_engagement"; "pages_manage_posts"; "pages_show_list"] in
+
+  Facebook.get_oauth_url ~redirect_uri ~state ~scopes
     (fun url ->
       assert (string_contains url "client_id=test_app_id");
       assert (string_contains url "state=test_state_123");
@@ -950,7 +952,10 @@ let test_graph_version_policy_guard () =
       { status = 200; body = {|{"data":[]}|}; headers = [] } ];
 
   let oauth_url = ref "" in
-  Facebook.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"state-123"
+  Facebook.get_oauth_url
+    ~redirect_uri:"https://example.com/callback"
+    ~state:"state-123"
+    ~scopes:["pages_manage_posts"]
     (fun url -> oauth_url := url)
     (fun err -> failwith ("OAuth URL generation failed: " ^ err));
 
@@ -980,7 +985,9 @@ let test_oauth_url_permissions () =
   let state = "test_state" in
   let redirect_uri = "https://example.com/callback" in
   
-  Facebook.get_oauth_url ~redirect_uri ~state
+  let scopes = ["pages_manage_posts"; "pages_read_engagement"] in
+
+  Facebook.get_oauth_url ~redirect_uri ~state ~scopes
     (fun url ->
       (* Should contain required permissions *)
       assert (string_contains url "pages_manage_posts" || string_contains url "pages_read_engagement");
@@ -995,7 +1002,9 @@ let test_oauth_url_special_chars () =
   let redirect_uri = "https://example.com/callback?foo=bar&baz=qux" in
   let state = "state with spaces & special=chars" in
   
-  Facebook.get_oauth_url ~redirect_uri ~state
+  let scopes = ["pages_manage_posts"] in
+
+  Facebook.get_oauth_url ~redirect_uri ~state ~scopes
     (fun url ->
       (* URL should be properly encoded *)
       assert (not (String.contains url ' '));
@@ -1117,9 +1126,11 @@ let test_oauth_csrf_protection () =
   let state2 = "csrf_token_2" in
   let redirect_uri = "https://example.com/callback" in
   
-  Facebook.get_oauth_url ~redirect_uri ~state:state1
+  let scopes = ["pages_manage_posts"] in
+
+  Facebook.get_oauth_url ~redirect_uri ~state:state1 ~scopes
     (fun url1 ->
-      Facebook.get_oauth_url ~redirect_uri ~state:state2
+      Facebook.get_oauth_url ~redirect_uri ~state:state2 ~scopes
         (fun url2 ->
           (* Each URL should have different state *)
           assert (string_contains url1 state1);
@@ -1165,10 +1176,12 @@ let test_redirect_uri_validation () =
   ] in
   
   (* All should generate valid URLs *)
+  let scopes = ["pages_manage_posts"] in
+
   let results = List.map (fun uri ->
     let state = "test_state" in
     let success = ref false in
-    Facebook.get_oauth_url ~redirect_uri:uri ~state
+    Facebook.get_oauth_url ~redirect_uri:uri ~state ~scopes
       (fun url ->
         success := true && String.length url > 0)
       (fun _ -> ());

@@ -192,7 +192,7 @@ let test_oauth_url () =
   let state = "test_state_123" in
   let redirect_uri = "https://example.com/callback" in
   
-  Instagram.get_oauth_url ~redirect_uri ~state
+  Instagram.get_oauth_url ~redirect_uri ~state ~scopes:Social_instagram_graph_v21.OAuth.Scopes.write
     (fun url ->
       assert (string_contains url "client_id=test_app_id");
       assert (string_contains url "state=test_state_123");

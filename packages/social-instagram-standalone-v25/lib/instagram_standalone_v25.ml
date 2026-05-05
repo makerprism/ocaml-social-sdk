@@ -318,10 +318,10 @@ module OAuth = struct
       @param client_id Instagram App ID (same as Facebook App ID)
       @param redirect_uri Registered callback URL
       @param state CSRF protection state parameter
-      @param scopes OAuth scopes to request (defaults to Scopes.write)
+      @param scopes OAuth scopes to request explicitly
       @return Full authorization URL to redirect user to
   *)
-  let get_authorization_url ~client_id ~redirect_uri ~state ?(scopes=Scopes.write) () =
+  let get_authorization_url ~client_id ~redirect_uri ~state ~scopes () =
     let scopes_json = scopes_to_json_array scopes in
     let params = [
       ("enable_fb_login", "0");
@@ -2023,7 +2023,7 @@ module Make (Config : CONFIG) = struct
               on_result (Error_types.Failure err))
 
   (** OAuth authorization URL *)
-  let get_oauth_url ~redirect_uri ~state on_success on_error =
+  let get_oauth_url ~redirect_uri ~state ~scopes on_success on_error =
     let client_id = Config.get_env "INSTAGRAM_APP_ID" |> Option.value ~default:"" in
 
     if client_id = "" then
@@ -2034,7 +2034,7 @@ module Make (Config : CONFIG) = struct
            ~client_id
            ~redirect_uri
            ~state
-           ~scopes:OAuth.Scopes.write
+           ~scopes
            ())
 
   let exchange_for_long_lived_token ~client_secret ~short_lived_token on_success on_error =

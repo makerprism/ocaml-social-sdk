@@ -186,6 +186,7 @@ let test_standalone_auth_url_endpoint () =
     ~client_id:"test_app_id"
     ~redirect_uri:"https://example.com/callback"
     ~state:"state_abc"
+    ~scopes:OAuth.Scopes.write
     ()
   in
   assert (String.length url > 0);
@@ -198,6 +199,7 @@ let test_standalone_auth_url_enable_fb_login () =
     ~client_id:"test_app_id"
     ~redirect_uri:"https://example.com/callback"
     ~state:"state_abc"
+    ~scopes:OAuth.Scopes.write
     ()
   in
   assert (string_contains url "enable_fb_login=0");
@@ -209,6 +211,7 @@ let test_standalone_auth_url_scopes_comma_separated () =
     ~client_id:"test_app_id"
     ~redirect_uri:"https://example.com/callback"
     ~state:"state_abc"
+    ~scopes:OAuth.Scopes.write
     ()
   in
   let scope_val = query_param url "scope" in
@@ -226,6 +229,7 @@ let test_standalone_auth_url_response_type () =
     ~client_id:"test_app_id"
     ~redirect_uri:"https://example.com/callback"
     ~state:"state_abc"
+    ~scopes:OAuth.Scopes.write
     ()
   in
   assert (query_param url "response_type" = Some "code");
@@ -517,6 +521,7 @@ let test_oauth_url () =
   Mock_config.set_env "INSTAGRAM_APP_ID" "test_app_id";
 
   Instagram.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"test_state_123"
+    ~scopes:OAuth.Scopes.write
     (fun url ->
       assert (string_contains url "client_id=test_app_id");
       assert (string_contains url "state=test_state_123");
