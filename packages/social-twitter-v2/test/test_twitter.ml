@@ -4454,7 +4454,7 @@ let test_video_media_category () =
 (** Test: Chunked upload initialization
     X API v2 chunked upload uses 3 phases:
     1. INIT - Initialize with total_bytes, media_type, media_category
-    2. APPEND - Upload chunks (5MB each recommended)
+    2. APPEND - Upload chunks (1 MiB each to stay below X request-size limits)
     3. FINALIZE - Complete and get media_id
     
     Reference: https://docs.x.com/x-api/media/quickstart/media-upload-chunked
@@ -4462,10 +4462,10 @@ let test_video_media_category () =
 let test_chunked_upload_init () =
   (* Verify chunked upload parameters *)
   let video_size = 50_000_000 in (* 50 MB video *)
-  let chunk_size = 5 * 1024 * 1024 in (* 5 MB chunks per X API recommendation *)
+  let chunk_size = 1024 * 1024 in
   let expected_chunks = (video_size + chunk_size - 1) / chunk_size in
   
-  assert (expected_chunks = 10); (* 50MB / 5MB = 10 chunks *)
+  assert (expected_chunks = 48); (* 50,000,000 bytes / 1 MiB = 48 chunks *)
   
   (* Verify media category for video *)
   let mime_type = "video/mp4" in

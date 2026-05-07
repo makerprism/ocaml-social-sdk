@@ -1284,8 +1284,11 @@ module Make (Config : CONFIG) = struct
               with _ -> init_json |> Yojson.Basic.Util.member "media_id_string" |> Yojson.Basic.Util.to_string
             in
 
-            (* Phase 2: APPEND chunks - POST /2/media/upload/{id}/append with multipart *)
-            let chunk_size = 5 * 1024 * 1024 in (* 5MB chunks *)
+            (* Phase 2: APPEND chunks - POST /2/media/upload/{id}/append with multipart.
+               Keep raw chunks well below X's request-size ceiling, because multipart
+               framing adds bytes around the media part and exact 5 MiB chunks can
+               be rejected with HTTP 413 before the API returns a JSON error. *)
+            let chunk_size = 1024 * 1024 in
             let rec upload_chunks offset segment_index =
               if offset >= total_bytes then begin
                 (* Phase 3: FINALIZE - POST /2/media/upload/{id}/finalize *)
