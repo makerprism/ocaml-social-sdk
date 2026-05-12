@@ -995,9 +995,15 @@ module Make (Config : CONFIG) = struct
                   (fun () -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
                   (fun _ -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
             | Some stored_secret ->
-                let is_jwt_mode = match creds.auth_type with
-                  | Bearer -> true
-                  | App_password | OAuth1a | Custom _ -> false
+                (* Discriminate by format. A JWT is base64url-encoded JSON,
+                   so it always starts with eyJ; an app password never does.
+                   Detecting by format rather than [auth_type] lets us
+                   migrate existing rows without a schema/data migration -
+                   [auth_type] defaults to Bearer in many storage backends
+                   even when the stored value is actually an app password. *)
+                let is_jwt_mode =
+                  String.length stored_secret >= 3
+                  && String.sub stored_secret 0 3 = "eyJ"
                 in
                 if is_jwt_mode then
                   AuthMake.refresh_session ~refresh_jwt:stored_secret (function
