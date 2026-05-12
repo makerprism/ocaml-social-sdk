@@ -940,41 +940,118 @@ module Make (Config : CONFIG) = struct
           (Printf.sprintf "Network error: %s" err) :: !warnings;
         on_success (None, !warnings))
   
-  (** Ensure valid session token, reusing cached session when available *)
+  (** Ensure valid session token, reusing cached session when available.
+
+      Auth model:
+      - [creds.access_token] is the user's identifier (handle/DID); public.
+      - [creds.refresh_token] holds either a Bluesky [refresh_jwt] (when
+        [creds.auth_type = Bearer]) or a legacy app password (when
+        [creds.auth_type = App_password]).
+      - On first use with an [App_password]-flagged row, we call
+        [Auth.create_session] to obtain a JWT pair and immediately rotate
+        storage to [Bearer] with [refresh_jwt]; the app password is then no
+        longer persisted. This addresses the H4 finding (see CHANGES.md):
+        previously the app password was retained indefinitely and could be
+        used by anyone with DB access until the user manually revoked it in
+        Bluesky settings.
+      - Once in Bearer mode, every refresh rotates [refresh_jwt] via
+        [Auth.refresh_session]; an attacker who exfiltrated a refresh_jwt
+        becomes useless after our next refresh. *)
   let ensure_valid_token ~account_id on_success on_error =
-    (* Check for a cached session that hasn't expired *)
+    let module AuthMake = Auth.Make (Config.Http) in
+    let cache_and_succeed ~did ~access_jwt =
+      Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
+      Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
+        (fun () -> on_success access_jwt)
+        (fun _ -> on_success access_jwt)
+    in
+    let on_token_revoked () =
+      invalidate_session ~account_id;
+      Config.update_health_status ~account_id ~status:"token_revoked"
+        ~error_message:(Some "Bluesky session no longer valid. Please reconnect this account.")
+        (fun () -> on_error (Error_types.Auth_error Error_types.Token_expired))
+        (fun _ -> on_error (Error_types.Auth_error Error_types.Token_expired))
+    in
+    let on_other_refresh_failure msg =
+      invalidate_session ~account_id;
+      Config.update_health_status ~account_id ~status:"refresh_failed"
+        ~error_message:(Some msg)
+        (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
+        (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
+    in
     let now = Unix.gettimeofday () in
     match Hashtbl.find_opt session_cache account_id with
     | Some (_did, access_jwt, created_at)
       when now -. created_at < session_max_age_seconds ->
         on_success access_jwt
     | _ ->
-        (* No valid cached session - create a new one *)
         Config.get_credentials ~account_id
           (fun creds ->
-            (* Bluesky uses identifier (handle/email) as access_token and password as refresh_token *)
+            let identifier = creds.access_token in
             match creds.refresh_token with
             | None ->
                 Config.update_health_status ~account_id ~status:"refresh_failed"
-                  ~error_message:(Some "No app password available")
+                  ~error_message:(Some "No Bluesky credentials available - reconnect the account")
                   (fun () -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
                   (fun _ -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
-            | Some password ->
-                (* Create new session *)
-                create_session ~identifier:creds.access_token ~password
-                  (fun (did, access_jwt) ->
-                    (* Cache the session *)
-                    Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
-                    Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                      (fun () -> on_success access_jwt)
-                      (fun _ -> on_success access_jwt))
-                  (fun err ->
-                    (* Invalidate any stale cache entry *)
-                    invalidate_session ~account_id;
-                    Config.update_health_status ~account_id ~status:"refresh_failed"
-                      ~error_message:(Some ("Session creation failed: " ^ err))
-                      (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
-                      (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
+            | Some stored_secret ->
+                let is_jwt_mode = match creds.auth_type with
+                  | Bearer -> true
+                  | App_password | OAuth1a | Custom _ -> false
+                in
+                if is_jwt_mode then
+                  AuthMake.refresh_session ~refresh_jwt:stored_secret (function
+                    | Error_types.Success session
+                    | Error_types.Partial_success { result = session; _ } ->
+                        let new_creds = { creds with
+                          refresh_token = Some session.refresh_jwt;
+                        } in
+                        Config.update_credentials ~account_id ~credentials:new_creds
+                          (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
+                          (fun _ ->
+                            (* Persist failed but we still have a valid
+                               access_jwt; the next call will retry. *)
+                            cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
+                    | Error_types.Failure (Error_types.Auth_error _) ->
+                        on_token_revoked ()
+                    | Error_types.Failure (Error_types.Api_error api_err)
+                      when api_err.Error_types.status_code = 400 ->
+                        (* Bluesky returns 400 ExpiredToken when the refresh
+                           JWT itself has aged out. *)
+                        on_token_revoked ()
+                    | Error_types.Failure err ->
+                        on_other_refresh_failure
+                          ("Session refresh failed: " ^ Error_types.error_to_string err))
+                else
+                  (* Legacy app_password row: exchange for a JWT pair and
+                     rotate storage so the app password is forgotten. *)
+                  AuthMake.create_session
+                    ~identifier
+                    ~app_password:stored_secret
+                    (function
+                      | Error_types.Success session
+                      | Error_types.Partial_success { result = session; _ } ->
+                          let rotated = { creds with
+                            (* access_token stays the identifier (public);
+                               refresh_token becomes the refresh_jwt;
+                               auth_type flips to Bearer so subsequent calls
+                               take the refresh path above. *)
+                            refresh_token = Some session.refresh_jwt;
+                            auth_type = Bearer;
+                            expires_at = None;
+                          } in
+                          Config.update_credentials ~account_id ~credentials:rotated
+                            (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
+                            (fun _ ->
+                              (* Rotation persistence failed; next call will
+                                 retry rotation. Still serve the current
+                                 access_jwt. *)
+                              cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
+                      | Error_types.Failure (Error_types.Auth_error _) ->
+                          on_token_revoked ()
+                      | Error_types.Failure err ->
+                          on_other_refresh_failure
+                            ("Session creation failed: " ^ Error_types.error_to_string err)))
           (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
   
   (** Ensure valid session token and also return the DID *)

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **Security: stop persisting the Bluesky app password long-term.**
+  `Make(Config).ensure_valid_token` now exchanges legacy app-password rows
+  (`auth_type = App_password`) for a JWT session on first use via
+  `Auth.create_session`, then rotates storage to `auth_type = Bearer` with
+  `refresh_token = refresh_jwt`. Subsequent refreshes go through
+  `Auth.refresh_session`, which rotates the `refresh_jwt` itself. The app
+  password is forgotten after the one-time exchange. Previously the app
+  password was retained indefinitely and would remain usable by anyone with
+  DB access until the user manually revoked it in Bluesky settings.
+  `access_token` continues to hold the user's identifier (handle/DID), so
+  callers that use `creds.access_token` as the repo field are unaffected.
+
 ## [0.0.1] - Unreleased
 
 ### Added
