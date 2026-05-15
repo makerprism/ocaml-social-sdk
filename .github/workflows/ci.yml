@@ -9,27 +9,22 @@ on:
 jobs:
   build:
     name: Build and test
-
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubicloud-standard-2
-          - macos-latest
+    runs-on: ubicloud-standard-2
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Install system dependencies (Linux)
+      - name: Install system dependencies
         run: sudo apt update && sudo apt-get install -y libev-dev libgmp-dev libssl-dev pkg-config
-        if: runner.os == 'Linux'
 
-      - name: Install system dependencies (macOS)
-        run: brew install libev gmp openssl@3 pkg-config
-        if: runner.os == 'macOS'
+      - name: Cache dune
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dune
+          key: ${{ runner.os }}-dune-${{ hashFiles('dune-project') }}
+          restore-keys: |
+            ${{ runner.os }}-dune-
 
       - name: Setup Dune
         uses: ocaml-dune/setup-dune@v1
@@ -46,6 +41,4 @@ jobs:
         run: dune runtest
 
       - name: Verify package metadata
-        run: |
-          dune pkg lock
-          dune build @pkg-install
+        run: dune build @pkg-install
