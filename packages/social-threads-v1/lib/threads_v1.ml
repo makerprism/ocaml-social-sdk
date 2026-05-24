@@ -1379,6 +1379,20 @@ module Make (Config : CONFIG) = struct
     in
     loop 1
 
+  let carousel_stage_error ~stage = function
+    | Error_types.Api_error { status_code; message; platform; raw_response; request_id } ->
+        Error_types.Api_error
+          {
+            status_code;
+            message = Printf.sprintf "%s: %s" stage message;
+            platform;
+            raw_response;
+            request_id;
+          }
+    | Error_types.Internal_error message ->
+        Error_types.Internal_error (Printf.sprintf "%s: %s" stage message)
+    | err -> err
+
   let create_carousel_item_container
       ~access_token
       ~user_id
@@ -1416,13 +1430,29 @@ module Make (Config : CONFIG) = struct
                ?alt_text
                (function
                  | Ok child_id ->
-                     create_carousel_children
+                     poll_container_status
                        ~access_token
-                       ~user_id
-                       ~media_urls_with_alt:rest
-                       ~acc:(child_id :: acc)
-                       on_result
-                 | Error err -> on_result (Error err))
+                       ~container_id:child_id
+                       (function
+                         | Ok _child_id ->
+                             create_carousel_children
+                               ~access_token
+                               ~user_id
+                               ~media_urls_with_alt:rest
+                               ~acc:(child_id :: acc)
+                               on_result
+                         | Error err ->
+                             on_result
+                               (Error
+                                  (carousel_stage_error
+                                     ~stage:"carousel child container processing failed"
+                                     err)))
+                 | Error err ->
+                     on_result
+                       (Error
+                          (carousel_stage_error
+                             ~stage:"carousel child container create failed"
+                             err)))
          | None ->
              on_result
                (Error
@@ -1531,13 +1561,23 @@ module Make (Config : CONFIG) = struct
                             ?quoted_post_id
                             ?location_id
                             (function
-                              | Error err -> on_result (Error_types.Failure err)
+                              | Error err ->
+                                  on_result
+                                    (Error_types.Failure
+                                       (carousel_stage_error
+                                          ~stage:"carousel parent container create failed"
+                                          err))
                               | Ok carousel_id ->
                                   poll_container_status
                                     ~access_token:creds.access_token
                                     ~container_id:carousel_id
                                     (function
-                                      | Error err -> on_result (Error_types.Failure err)
+                                      | Error err ->
+                                          on_result
+                                            (Error_types.Failure
+                                               (carousel_stage_error
+                                                  ~stage:"carousel parent container processing failed"
+                                                  err))
                                       | Ok _container_id ->
                                           publish_container
                                             ~access_token:creds.access_token
@@ -1545,7 +1585,12 @@ module Make (Config : CONFIG) = struct
                                             ~creation_id:carousel_id
                                             (function
                                               | Ok post_id -> on_result (Error_types.Success post_id)
-                                              | Error err -> on_result (Error_types.Failure err)))))))
+                                              | Error err ->
+                                                  on_result
+                                                    (Error_types.Failure
+                                                       (carousel_stage_error
+                                                          ~stage:"carousel publish failed"
+                                                          err))))))))
         (fun err -> on_result (Error_types.Failure err))
 
   let parse_posts_response response_body =

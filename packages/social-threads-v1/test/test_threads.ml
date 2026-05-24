@@ -3628,11 +3628,15 @@ let test_post_carousel_success () =
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
       (* child container 1 *)
       { status = 200; headers = []; body = "{\"id\":\"child-1\"}" };
+      (* child poll 1 *)
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       (* child container 2 *)
       { status = 200; headers = []; body = "{\"id\":\"child-2\"}" };
+      (* child poll 2 *)
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       (* carousel container *)
       { status = 200; headers = []; body = "{\"id\":\"carousel-1\"}" };
-      (* poll status *)
+      (* carousel poll status *)
       { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       (* publish *)
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
@@ -3649,15 +3653,21 @@ let test_post_carousel_success () =
            | [
             (_, _, _, _);          (* me *)
             (_, _, _, child1_body);  (* child 1 *)
+            (_, child1_poll_url, _, _); (* child 1 poll *)
             (_, _, _, child2_body);  (* child 2 *)
+            (_, child2_poll_url, _, _); (* child 2 poll *)
             (_, _, _, carousel_body); (* carousel *)
-            (_, poll_url, _, _);     (* poll *)
+            (_, poll_url, _, _);     (* carousel poll *)
             (_, _, _, publish_body); (* publish *)
            ] ->
                assert (string_contains child1_body "is_carousel_item=true");
                assert (string_contains child1_body "media_type=IMAGE");
+               assert (string_contains child1_poll_url "child-1");
+               assert (string_contains child1_poll_url "fields=status");
                assert (string_contains child2_body "is_carousel_item=true");
                assert (string_contains child2_body "media_type=IMAGE");
+               assert (string_contains child2_poll_url "child-2");
+               assert (string_contains child2_poll_url "fields=status");
                assert (string_contains carousel_body "media_type=CAROUSEL");
                assert (string_contains carousel_body "children=child-1%2Cchild-2");
                (if not (string_contains carousel_body "text=carousel") then
@@ -3727,7 +3737,9 @@ let test_post_carousel_with_topic_tag () =
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"child-1\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       { status = 200; headers = []; body = "{\"id\":\"child-2\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       { status = 200; headers = []; body = "{\"id\":\"carousel-1\"}" };
       { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
@@ -3741,7 +3753,7 @@ let test_post_carousel_with_topic_tag () =
       | Error_types.Success _ ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ _; _; _; (_, _, _, carousel_body); _; _ ] ->
+           | [ _; _; _; _; _; (_, _, _, carousel_body); _; _ ] ->
                assert (string_contains carousel_body "text_post_app_tags=fashion")
            | _ -> failwith "unexpected request sequence for carousel topic tag");
           print_endline "ok: post carousel with topic tag"
@@ -3764,6 +3776,7 @@ let test_post_carousel_child_creation_failure () =
     [
       { status = 200; headers = []; body = "{\"id\":\"user-1\"}" };
       { status = 200; headers = []; body = "{\"id\":\"child-1\"}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
       { status = 400; headers = []; body = "{\"error\":{\"message\":\"bad url\",\"code\":1}}" };
     ];
   Threads.post_carousel
@@ -4035,11 +4048,17 @@ let test_validate_media_urls_allows_20_for_carousel () =
   let me_response = { Social_core.status = 200; headers = []; body = "{\"id\":\"user-1\"}" } in
   let child_responses = List.init 20 (fun i ->
     { Social_core.status = 200; headers = []; body = Printf.sprintf "{\"id\":\"child-%d\"}" i }) in
+  let child_poll_responses = List.init 20 (fun _ ->
+    { Social_core.status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" }) in
+  let child_responses_with_polls =
+    let pairs = List.combine child_responses child_poll_responses in
+    List.concat_map (fun (child_response, poll_response) -> [ child_response; poll_response ]) pairs
+  in
   let carousel_response = { Social_core.status = 200; headers = []; body = "{\"id\":\"carousel-1\"}" } in
   let poll_response = { Social_core.status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" } in
   let publish_response = { Social_core.status = 200; headers = []; body = "{\"id\":\"post-1\"}" } in
   Mock_http.set_responses
-    ([ me_response ] @ child_responses @ [ carousel_response; poll_response; publish_response ]);
+    ([ me_response ] @ child_responses_with_polls @ [ carousel_response; poll_response; publish_response ]);
   Threads.post_carousel
     ~account_id:"acct-1"
     ~text:"big carousel"
