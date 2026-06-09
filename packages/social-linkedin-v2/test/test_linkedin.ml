@@ -6029,6 +6029,33 @@ let test_ltf_plain_text_unchanged () =
   assert (out = "Just a normal sentence.");
   print_endline "✓ LTF leaves plain text unchanged"
 
+let test_ltf_url_in_parentheses () =
+  (* The greedy URL match must not swallow a trailing ")" — it has to be
+     peeled off and escaped, or it reintroduces an unbalanced paren. *)
+  let out = escape_little_text_format "Details (see https://ex.com/p)." in
+  assert (out = "Details \\(see https://ex.com/p\\).");
+  (* The link target itself stays intact (no escaped chars inside it). *)
+  assert (string_contains out "https://ex.com/p");
+  print_endline "✓ LTF peels trailing punctuation off a URL"
+
+let test_ltf_url_trailing_period () =
+  let out = escape_little_text_format "Read https://ex.com/a_b. Thanks" in
+  (* Trailing period is not part of the link; underscore inside the URL
+     stays unescaped so the link target is preserved. *)
+  assert (string_contains out "https://ex.com/a_b");
+  assert (not (string_contains out "a\\_b"));
+  print_endline "✓ LTF keeps a URL with an underscore intact"
+
+let test_ltf_annotation_with_bracket_in_name () =
+  (* A "]" in the display name would break annotation matching; callers
+     must not emit one (the resolver strips it). Document that a clean
+     name with reserved chars like "(" is escaped inside the annotation. *)
+  let out =
+    escape_little_text_format "@[Acme (US)](urn:li:organization:12)"
+  in
+  assert (out = "@[Acme \\(US\\)](urn:li:organization:12)");
+  print_endline "✓ LTF escapes parens inside an annotation name"
+
 (** Run all tests *)
 let () =
   print_endline "\n=== LinkedIn Provider Tests ===\n";
@@ -6236,5 +6263,8 @@ let () =
   test_ltf_preserves_mention_annotation ();
   test_ltf_escapes_annotation_display_name ();
   test_ltf_plain_text_unchanged ();
+  test_ltf_url_in_parentheses ();
+  test_ltf_url_trailing_period ();
+  test_ltf_annotation_with_bracket_in_name ();
 
   print_endline "\n=== All tests passed! ===\n"

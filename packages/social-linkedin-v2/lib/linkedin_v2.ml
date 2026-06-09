@@ -41,15 +41,32 @@ let escape_ltf_segment s =
     s;
   Buffer.contents buf
 
-(* Whole-span matcher for the elements we preserve: a mention
-   annotation, a URL, or a hashtag, in that precedence. *)
+(* Single whole-span matcher for the elements we preserve, in
+   precedence order. One regex (rather than a second one to re-split the
+   annotation) keeps the annotation grammar in a single place. Groups:
+     1 = annotation display name   2 = annotation URN
+     3 = URL                       4 = hashtag
+   The URN entity-type class allows digits/underscore (e.g.
+   [urn:li:fsd_profile:...]), not just letters. *)
 let ltf_preserve_re =
   Re.Pcre.regexp
-    "@\\[[^\\]]*\\]\\(urn:li:[a-zA-Z]+:[^)]*\\)|https?://[^\\s]+|#[A-Za-z0-9_]+"
+    "@\\[([^\\]]*)\\]\\((urn:li:[a-zA-Z0-9_]+:[^)]*)\\)|(https?://[^\\s]+)|(#[A-Za-z0-9_]+)"
 
-(* Splits a matched mention annotation into (display name, URN). *)
-let ltf_annotation_re =
-  Re.Pcre.regexp "^@\\[([^\\]]*)\\]\\((urn:li:[a-zA-Z]+:[^)]*)\\)$"
+(* Trailing characters that should not be treated as part of a URL: a
+   linkifier (and LinkedIn) stops the link before sentence punctuation
+   and closing brackets. Stripping them and escaping the tail keeps the
+   link target clean and prevents an unescaped reserved [)]/[]] (the
+   greedy-match form of the very truncation-at-paren bug we fix). *)
+let url_trailing_punct = ")].,;:!?"
+
+let strip_url_trailing_punct url =
+  let n = String.length url in
+  let rec back i =
+    if i > 0 && String.contains url_trailing_punct url.[i - 1] then back (i - 1)
+    else i
+  in
+  let keep = back n in
+  (String.sub url 0 keep, String.sub url keep (n - keep))
 
 let escape_little_text_format text =
   let buf = Buffer.create (String.length text + 16) in
@@ -60,18 +77,22 @@ let escape_little_text_format text =
       if mstart > !pos then
         Buffer.add_string buf
           (escape_ltf_segment (String.sub text !pos (mstart - !pos)));
-      let matched = Re.Group.get g 0 in
-      (match Re.exec_opt ltf_annotation_re matched with
-       | Some ag ->
-           (* Escape only the display name; keep structure + URN literal. *)
-           Buffer.add_string buf
-             (Printf.sprintf "@[%s](%s)"
-                (escape_ltf_segment (Re.Group.get ag 1))
-                (Re.Group.get ag 2))
-       | None ->
-           (* URL or hashtag: pass through unescaped so it stays an
-              auto-linked element. *)
-           Buffer.add_string buf matched);
+      (if Re.Group.test g 1 then
+         (* Mention annotation: escape only the display name; keep the
+            structure and URN literal. *)
+         Buffer.add_string buf
+           (Printf.sprintf "@[%s](%s)"
+              (escape_ltf_segment (Re.Group.get g 1))
+              (Re.Group.get g 2))
+       else if Re.Group.test g 3 then (
+         (* URL: pass the link target through unescaped, but peel off and
+            escape any trailing punctuation the greedy match swallowed. *)
+         let core, tail = strip_url_trailing_punct (Re.Group.get g 3) in
+         Buffer.add_string buf core;
+         Buffer.add_string buf (escape_ltf_segment tail))
+       else
+         (* Hashtag: pass through so it stays a clickable hashtag. *)
+         Buffer.add_string buf (Re.Group.get g 0));
       pos := mend)
     (Re.all ltf_preserve_re text);
   if !pos < String.length text then
