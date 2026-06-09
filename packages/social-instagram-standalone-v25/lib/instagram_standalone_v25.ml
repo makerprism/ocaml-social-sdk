@@ -1509,7 +1509,12 @@ module Make (Config : CONFIG) = struct
                 | Error e -> on_error (Error_types.error_to_string e)))
 
   (** Post to Instagram with two-step process *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) on_result =
+  (* [collaborators] are Instagram usernames invited as co-authors. The
+     invited account must accept before the post appears as co-authored.
+     Collaborators are only applied to single image/video posts: the Graph API
+     rejects the parameter on carousels ("param collaborators is not allowed"),
+     so it is ignored for multi-item posts. *)
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(collaborators=[]) on_result =
     let media_count = List.length media_urls in
 
     (* Validate content first - includes media count check *)
@@ -1570,6 +1575,7 @@ module Make (Config : CONFIG) = struct
                            | "VIDEO" ->
                                create_video_container ~ig_user_id ~access_token ~video_url:media_url
                                  ~caption:text ~alt_text ~media_type:"VIDEO" ~is_carousel_item:false
+                                 ~collaborators
                                  (function
                                    | Ok container_id ->
                                        (* Step 2: Poll container status and publish when ready *)
@@ -1582,6 +1588,7 @@ module Make (Config : CONFIG) = struct
                            | _ ->
                                create_image_container ~ig_user_id ~access_token ~image_url:media_url
                                  ~caption:text ~alt_text ~is_carousel_item:false
+                                 ~collaborators
                                  (function
                                    | Ok container_id ->
                                        (* Step 2: Poll container status and publish when ready *)
@@ -1797,7 +1804,7 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error err))
 
   (** Post Reel (short-form video) *)
-  let post_reel ~account_id ~text ~video_url ?(alt_text=None) ?(share_to_feed=None) ?(cover_url=None) ?(thumb_offset=None) ?(audio_name=None) on_result =
+  let post_reel ~account_id ~text ~video_url ?(alt_text=None) ?(share_to_feed=None) ?(cover_url=None) ?(thumb_offset=None) ?(audio_name=None) ?(collaborators=[]) on_result =
     (* Validate caption *)
     match validate_post ~text ~media_count:1 () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1821,6 +1828,7 @@ module Make (Config : CONFIG) = struct
                          (* Create Reel container with REELS media type *)
                          create_video_container ~ig_user_id ~access_token ~video_url
                            ~caption:text ~alt_text ~media_type:"REELS" ~is_carousel_item:false
+                           ~collaborators
                            ?share_to_feed ?cover_url ?thumb_offset ?audio_name
                            (function
                              | Ok container_id ->
