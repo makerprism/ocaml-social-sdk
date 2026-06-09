@@ -5983,6 +5983,52 @@ let test_linkedin_version_header_on_all_requests () =
 
   print_endline "✓ LinkedIn-Version header present on all API requests"
 
+(* ---- Little Text Format escaping (commentary field) ---- *)
+
+let test_ltf_escapes_stray_reserved () =
+  (* Stray parentheses and other reserved chars get backslash-escaped
+     (this is the fix for LinkedIn truncating content at "("). *)
+  let out = escape_little_text_format "Big news (really)!" in
+  assert (out = "Big news \\(really\\)!");
+  let out2 = escape_little_text_format "a_b *c* <d>" in
+  assert (out2 = "a\\_b \\*c\\* \\<d\\>");
+  print_endline "✓ LTF escapes stray reserved characters"
+
+let test_ltf_preserves_hashtags_and_urls () =
+  (* Hashtags and URLs must pass through unescaped so they stay
+     clickable / auto-linked. *)
+  let out = escape_little_text_format "Read #MarketingTips at https://ex.com/a_b?x=1" in
+  assert (string_contains out "#MarketingTips");
+  assert (not (string_contains out "\\#"));
+  assert (string_contains out "https://ex.com/a_b?x=1");
+  assert (not (string_contains out "a\\_b"));
+  print_endline "✓ LTF preserves hashtags and URLs"
+
+let test_ltf_preserves_mention_annotation () =
+  (* The annotation structure and URN stay literal; the surrounding
+     text is escaped. *)
+  let out =
+    escape_little_text_format "thanks @[Acme](urn:li:organization:123) (team)!"
+  in
+  assert (string_contains out "@[Acme](urn:li:organization:123)");
+  assert (string_contains out "\\(team\\)");
+  print_endline "✓ LTF preserves mention annotation, escapes around it"
+
+let test_ltf_escapes_annotation_display_name () =
+  (* Reserved chars inside the display name are escaped; structure and
+     URN are not. *)
+  let out =
+    escape_little_text_format "@[A_B (Co)](urn:li:organization:9)"
+  in
+  assert (out = "@[A\\_B \\(Co\\)](urn:li:organization:9)");
+  print_endline "✓ LTF escapes reserved chars inside annotation name"
+
+let test_ltf_plain_text_unchanged () =
+  (* Text with no reserved chars is returned verbatim. *)
+  let out = escape_little_text_format "Just a normal sentence." in
+  assert (out = "Just a normal sentence.");
+  print_endline "✓ LTF leaves plain text unchanged"
+
 (** Run all tests *)
 let () =
   print_endline "\n=== LinkedIn Provider Tests ===\n";
@@ -6183,5 +6229,12 @@ let () =
 
   print_endline "\n--- LinkedIn-Version Header Tests ---";
   test_linkedin_version_header_on_all_requests ();
+
+  print_endline "\n--- Little Text Format Escaping Tests ---";
+  test_ltf_escapes_stray_reserved ();
+  test_ltf_preserves_hashtags_and_urls ();
+  test_ltf_preserves_mention_annotation ();
+  test_ltf_escapes_annotation_display_name ();
+  test_ltf_plain_text_unchanged ();
 
   print_endline "\n=== All tests passed! ===\n"

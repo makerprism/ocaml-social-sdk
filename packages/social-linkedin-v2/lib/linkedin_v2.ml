@@ -10,6 +10,75 @@
 
 open Social_core
 
+(* LinkedIn "Little Text Format" escaping for the commentary field.
+
+   The Posts API treats [commentary] as Little Text Format, in which
+   the characters [\ | ( ) [ ] { } @ # * ~ < > _] are reserved and must
+   be backslash-escaped unless they form a recognised element. Sending
+   them raw can corrupt a post (LinkedIn is known to truncate content at
+   an unescaped parenthesis) and prevents inline mention annotations from
+   parsing.
+
+   [escape_little_text_format] escapes stray reserved characters while
+   preserving the three elements we and our users rely on, matched as
+   whole spans and passed through:
+     - mention annotations  [@\[Name\](urn:li:organization:123)]
+     - hashtags             [#word]
+     - URLs                 [https://...]
+   Inside a mention annotation the structural [@ \[ \] ( )] and the URN
+   stay literal; only the display name is escaped (a name may itself
+   contain reserved characters). This keeps hashtags clickable and URLs
+   intact, so the change is safe for posts that contain no mentions. *)
+let little_text_format_reserved = "\\|()[]{}@#*~<>_"
+
+let escape_ltf_segment s =
+  let buf = Buffer.create (String.length s + 8) in
+  String.iter
+    (fun c ->
+      if String.contains little_text_format_reserved c then
+        Buffer.add_char buf '\\';
+      Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
+(* Whole-span matcher for the elements we preserve: a mention
+   annotation, a URL, or a hashtag, in that precedence. *)
+let ltf_preserve_re =
+  Re.Pcre.regexp
+    "@\\[[^\\]]*\\]\\(urn:li:[a-zA-Z]+:[^)]*\\)|https?://[^\\s]+|#[A-Za-z0-9_]+"
+
+(* Splits a matched mention annotation into (display name, URN). *)
+let ltf_annotation_re =
+  Re.Pcre.regexp "^@\\[([^\\]]*)\\]\\((urn:li:[a-zA-Z]+:[^)]*)\\)$"
+
+let escape_little_text_format text =
+  let buf = Buffer.create (String.length text + 16) in
+  let pos = ref 0 in
+  List.iter
+    (fun g ->
+      let mstart, mend = Re.Group.offset g 0 in
+      if mstart > !pos then
+        Buffer.add_string buf
+          (escape_ltf_segment (String.sub text !pos (mstart - !pos)));
+      let matched = Re.Group.get g 0 in
+      (match Re.exec_opt ltf_annotation_re matched with
+       | Some ag ->
+           (* Escape only the display name; keep structure + URN literal. *)
+           Buffer.add_string buf
+             (Printf.sprintf "@[%s](%s)"
+                (escape_ltf_segment (Re.Group.get ag 1))
+                (Re.Group.get ag 2))
+       | None ->
+           (* URL or hashtag: pass through unescaped so it stays an
+              auto-linked element. *)
+           Buffer.add_string buf matched);
+      pos := mend)
+    (Re.all ltf_preserve_re text);
+  if !pos < String.length text then
+    Buffer.add_string buf
+      (escape_ltf_segment (String.sub text !pos (String.length text - !pos)));
+  Buffer.contents buf
+
 (** OAuth 2.0 module for LinkedIn
     
     LinkedIn uses standard OAuth 2.0 WITHOUT PKCE support.
@@ -1306,7 +1375,7 @@ module Make (Config : CONFIG) = struct
                     (* Build modern /rest/posts body *)
                     let base_fields = [
                       ("author", `String resolved_author_urn);
-                      ("commentary", `String text);
+                      ("commentary", `String (escape_little_text_format text));
                       ("visibility", `String "PUBLIC");
                       ("distribution", `Assoc [
                         ("feedDistribution", `String "MAIN_FEED");
@@ -2578,7 +2647,7 @@ module Make (Config : CONFIG) = struct
                               (* Step 4: Create the post with document content *)
                               let post_body = `Assoc [
                                 ("author", `String resolved_author_urn);
-                                ("commentary", `String text);
+                                ("commentary", `String (escape_little_text_format text));
                                 ("visibility", `String "PUBLIC");
                                 ("distribution", `Assoc [
                                   ("feedDistribution", `String "MAIN_FEED");
@@ -2705,7 +2774,7 @@ module Make (Config : CONFIG) = struct
 
                 let post_body = `Assoc [
                   ("author", `String resolved_author_urn);
-                  ("commentary", `String text);
+                  ("commentary", `String (escape_little_text_format text));
                   ("visibility", `String "PUBLIC");
                   ("distribution", `Assoc [
                     ("feedDistribution", `String "MAIN_FEED");
