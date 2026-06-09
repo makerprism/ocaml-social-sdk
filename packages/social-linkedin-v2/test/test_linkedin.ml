@@ -6046,6 +6046,41 @@ let test_ltf_url_trailing_period () =
   assert (not (string_contains out "a\\_b"));
   print_endline "✓ LTF keeps a URL with an underscore intact"
 
+let test_ltf_combined_elements () =
+  (* A realistic post: a mention, a hashtag, a URL, and stray parens all
+     in one string. Each element is preserved; only the stray parens are
+     escaped, and the URL's underscore is left intact. *)
+  let out =
+    escape_little_text_format
+      "Thanks @[Acme Co](urn:li:organization:1) for #launch: https://ex.com/a_b (today)"
+  in
+  assert (string_contains out "@[Acme Co](urn:li:organization:1)");
+  assert (string_contains out "#launch");
+  assert (string_contains out "https://ex.com/a_b");
+  assert (not (string_contains out "a\\_b"));
+  assert (string_contains out "\\(today\\)");
+  print_endline "✓ LTF handles a combined mention+hashtag+URL+parens string"
+
+let test_ltf_adjacent_mentions () =
+  let out =
+    escape_little_text_format
+      "@[A](urn:li:organization:1)@[B](urn:li:organization:2)"
+  in
+  assert (out = "@[A](urn:li:organization:1)@[B](urn:li:organization:2)");
+  print_endline "✓ LTF preserves adjacent annotations"
+
+let test_ltf_all_reserved () =
+  (* A run of only reserved characters is fully escaped. *)
+  let out = escape_little_text_format "(){}[]" in
+  assert (out = "\\(\\)\\{\\}\\[\\]");
+  print_endline "✓ LTF escapes a run of reserved characters"
+
+let test_ltf_literal_backslash_doubled () =
+  (* A literal backslash in input is escaped to two (rendered as one). *)
+  let out = escape_little_text_format "a\\b" in
+  assert (out = "a\\\\b");
+  print_endline "✓ LTF doubles a literal backslash"
+
 let test_ltf_annotation_with_bracket_in_name () =
   (* A "]" in the display name would break annotation matching; callers
      must not emit one (the resolver strips it). Document that a clean
@@ -6265,6 +6300,10 @@ let () =
   test_ltf_plain_text_unchanged ();
   test_ltf_url_in_parentheses ();
   test_ltf_url_trailing_period ();
+  test_ltf_combined_elements ();
+  test_ltf_adjacent_mentions ();
+  test_ltf_all_reserved ();
+  test_ltf_literal_backslash_doubled ();
   test_ltf_annotation_with_bracket_in_name ();
 
   print_endline "\n=== All tests passed! ===\n"
