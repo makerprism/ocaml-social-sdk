@@ -1336,7 +1336,7 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Step 1c: Create carousel container from child containers *)
-  let create_carousel_container ~ig_user_id ~access_token ~children_ids ~caption on_result =
+  let create_carousel_container ~ig_user_id ~access_token ~children_ids ~caption ?location_id on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let params = [
@@ -1344,6 +1344,11 @@ module Make (Config : CONFIG) = struct
       ("children", String.concat "," children_ids);
       ("caption", caption);
     ] @
+    (* Geotag the carousel parent container when a place id was resolved.
+       Unlike collaborators, the Graph API accepts location_id on carousels. *)
+    (match location_id with
+     | Some loc -> [("location_id", loc)]
+     | None -> []) @
     (* Add app secret proof if available *)
     (match compute_app_secret_proof ~access_token with
      | Some proof -> [("appsecret_proof", proof)]
@@ -1514,7 +1519,7 @@ module Make (Config : CONFIG) = struct
      Collaborators are only applied to single image/video posts: the Graph API
      rejects the parameter on carousels ("param collaborators is not allowed"),
      so it is ignored for multi-item posts. *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(collaborators=[]) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(collaborators=[]) ?location_id on_result =
     let media_count = List.length media_urls in
 
     (* Validate content first - includes media count check *)
@@ -1545,7 +1550,7 @@ module Make (Config : CONFIG) = struct
                              (fun children_ids ->
                                (* Step 2: Create parent carousel container *)
                                create_carousel_container ~ig_user_id ~access_token
-                                 ~children_ids ~caption:text
+                                 ~children_ids ~caption:text ?location_id
                                  (function
                                    | Ok carousel_id ->
                                        (* Step 3: Poll carousel status and publish when ready *)
@@ -1575,7 +1580,7 @@ module Make (Config : CONFIG) = struct
                            | "VIDEO" ->
                                create_video_container ~ig_user_id ~access_token ~video_url:media_url
                                  ~caption:text ~alt_text ~media_type:"VIDEO" ~is_carousel_item:false
-                                 ~collaborators
+                                 ~collaborators ?location_id
                                  (function
                                    | Ok container_id ->
                                        (* Step 2: Poll container status and publish when ready *)
@@ -1588,7 +1593,7 @@ module Make (Config : CONFIG) = struct
                            | _ ->
                                create_image_container ~ig_user_id ~access_token ~image_url:media_url
                                  ~caption:text ~alt_text ~is_carousel_item:false
-                                 ~collaborators
+                                 ~collaborators ?location_id
                                  (function
                                    | Ok container_id ->
                                        (* Step 2: Poll container status and publish when ready *)
@@ -1804,7 +1809,7 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error err))
 
   (** Post Reel (short-form video) *)
-  let post_reel ~account_id ~text ~video_url ?(alt_text=None) ?(share_to_feed=None) ?(cover_url=None) ?(thumb_offset=None) ?(audio_name=None) ?(collaborators=[]) on_result =
+  let post_reel ~account_id ~text ~video_url ?(alt_text=None) ?(share_to_feed=None) ?(cover_url=None) ?(thumb_offset=None) ?(audio_name=None) ?(collaborators=[]) ?location_id on_result =
     (* Validate caption *)
     match validate_post ~text ~media_count:1 () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1828,7 +1833,7 @@ module Make (Config : CONFIG) = struct
                          (* Create Reel container with REELS media type *)
                          create_video_container ~ig_user_id ~access_token ~video_url
                            ~caption:text ~alt_text ~media_type:"REELS" ~is_carousel_item:false
-                           ~collaborators
+                           ~collaborators ?location_id
                            ?share_to_feed ?cover_url ?thumb_offset ?audio_name
                            (function
                              | Ok container_id ->

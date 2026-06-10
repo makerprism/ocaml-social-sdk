@@ -734,6 +734,51 @@ let test_post_single_with_collaborators () =
         print_endline "PASS Post single with collaborators")
       (fun err -> failwith ("Post single with collaborators failed: " ^ err)))
 
+(** Test: post_single threads location_id into the container request *)
+let test_post_single_with_location () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    auth_type = Bearer;
+    scope = None;
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_123";
+
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "container_12345"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED", "status": "OK"}|}; headers = [] };
+    { status = 200; body = {|{"id": "media_67890"}|}; headers = [] };
+  ];
+
+  Instagram.post_single
+    ~account_id:"test_account"
+    ~text:"Test post"
+    ~media_urls:["https://example.com/image.jpg"]
+    ~location_id:"place_98765"
+    (handle_outcome
+      (fun media_id ->
+        assert (media_id = "media_67890");
+        let requests = !Mock_http.requests in
+        let has_location = List.exists (fun (_, _, _, body) ->
+          string_contains body "location_id"
+          && string_contains body "place_98765"
+        ) requests in
+        assert has_location;
+        print_endline "PASS Post single with location")
+      (fun err -> failwith ("Post single with location failed: " ^ err)))
+
 (** Test: Post requires media *)
 let test_post_requires_media () =
   Mock_config.reset ();
@@ -1386,6 +1431,7 @@ let () =
   test_content_validation ();
   test_post_single ();
   test_post_single_with_collaborators ();
+  test_post_single_with_location ();
   test_post_requires_media ();
   test_post_single_rejects_unsupported_media ();
   test_polling_no_publish_on_status_error ();
