@@ -1336,7 +1336,7 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Step 1c: Create carousel container from child containers *)
-  let create_carousel_container ~ig_user_id ~access_token ~children_ids ~caption ?location_id on_result =
+  let create_carousel_container ~ig_user_id ~access_token ~children_ids ~caption on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let params = [
@@ -1344,11 +1344,6 @@ module Make (Config : CONFIG) = struct
       ("children", String.concat "," children_ids);
       ("caption", caption);
     ] @
-    (* Geotag the carousel parent container when a place id was resolved.
-       Unlike collaborators, the Graph API accepts location_id on carousels. *)
-    (match location_id with
-     | Some loc -> [("location_id", loc)]
-     | None -> []) @
     (* Add app secret proof if available *)
     (match compute_app_secret_proof ~access_token with
      | Some proof -> [("appsecret_proof", proof)]
@@ -1548,9 +1543,12 @@ module Make (Config : CONFIG) = struct
                            create_carousel_children ~ig_user_id ~access_token ~media_urls_with_alt
                              ~index:0 ~acc:[]
                              (fun children_ids ->
-                               (* Step 2: Create parent carousel container *)
+                               (* Step 2: Create parent carousel container.
+                                  location_id is intentionally not forwarded:
+                                  the Graph API does not support a location on
+                                  carousels (only single image/video and Reels). *)
                                create_carousel_container ~ig_user_id ~access_token
-                                 ~children_ids ~caption:text ?location_id
+                                 ~children_ids ~caption:text
                                  (function
                                    | Ok carousel_id ->
                                        (* Step 3: Poll carousel status and publish when ready *)
