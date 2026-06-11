@@ -1438,6 +1438,53 @@ let test_post_with_indexed_attached_media_payload () =
         | None -> failwith "Feed request not found"))
       (fun err -> failwith ("Post payload test failed: " ^ err)))
 
+(** Test: post_single forwards [place] (location Page id) into the /feed request,
+    even when the post has attached media. *)
+let test_post_with_place () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "valid_token";
+    refresh_token = None;
+    expires_at = Some future_time;
+    auth_type = Bearer;
+    scope = None;
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page123";
+
+  Mock_http.set_responses [
+    { status = 200; body = "image_data"; headers = [] };
+    { status = 200; body = {|{"id": "photo123"}|}; headers = [] };
+    { status = 200; body = {|{"id": "post123"}|}; headers = [] };
+  ];
+
+  Facebook.post_single
+    ~account_id:"test_account"
+    ~text:"Photo with a location"
+    ~media_urls:["https://example.com/image.jpg"]
+    ~place:"place_98765"
+    (handle_outcome
+      (fun _post_id ->
+        let reqs = !Mock_http.requests in
+        let feed_request =
+          List.find_opt (fun (m, u, _, _) -> m = "POST" && string_contains u "/feed") reqs
+        in
+        (match feed_request with
+        | Some (_, _, _, body) ->
+            assert (string_contains body "place=place_98765");
+            print_endline "✓ post_single forwards place into the feed request"
+        | None -> failwith "Feed request not found"))
+      (fun err -> failwith ("Post with place failed: " ^ err)))
+
 (** Test: Recovers page token from user token on post failure *)
 let test_post_recovers_page_token_from_user_token () =
   Mock_config.reset ();
@@ -2904,6 +2951,7 @@ let () =
   test_post_with_alt_text ();
   test_post_with_multiple_alt_texts ();
   test_post_with_indexed_attached_media_payload ();
+  test_post_with_place ();
   test_post_recovers_page_token_from_user_token ();
   test_post_recovery_uses_stored_user_token_fallback ();
   test_post_recovery_stops_on_rate_limit ();

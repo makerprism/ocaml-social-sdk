@@ -1560,7 +1560,7 @@ module Make (Config : CONFIG) = struct
              download but before upload. Facebook limits: 4MB images, 1GB video.
              Default: false
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?link ?scheduled_publish_time ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?link ?place ?scheduled_publish_time ?(validate_media_before_upload=false) on_result =
     let media_count = List.length media_urls in
     
     (* Validate content first *)
@@ -1644,6 +1644,13 @@ module Make (Config : CONFIG) = struct
                           (* Add link parameter for link posts *)
                           (match link with
                            | Some l -> [("link", l)]
+                           | None -> []) @
+                          (* Geotag the feed post with a location Page id. The
+                             /{page-id}/feed endpoint accepts [place] regardless
+                             of whether the post also has attached media, so this
+                             covers single-photo and carousel posts. *)
+                          (match place with
+                           | Some p -> [("place", p)]
                            | None -> []) @
                           (* Add scheduled publishing parameters *)
                           (match scheduled_publish_time with
