@@ -1268,6 +1268,68 @@ let test_video_container_with_location () =
         print_endline "PASS Video container with location")
       (fun err -> failwith ("Video container with location failed: " ^ err)))
 
+(** Test: Story image container with user_tags (mentions are username-only,
+    never coordinates) *)
+let test_story_container_with_user_tags () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "story_container_tagged"}|};
+    headers = [];
+  };
+
+  Instagram.create_story_image_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~image_url:"https://example.com/story.jpg"
+    ~user_tags:["mentioned_one"; "mentioned_two"]
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "story_container_tagged");
+        let requests = !Mock_http.requests in
+        let has_tags = List.exists (fun (_, _, _, body) ->
+          string_contains body "user_tags"
+          && string_contains body "mentioned_one"
+          && string_contains body "mentioned_two"
+          && string_contains body "STORIES"
+        ) requests in
+        assert has_tags;
+        (* Story mentions must not carry coordinates. The form-urlencoded
+           body percent-encodes the JSON quotes, so a coordinate key would
+           appear as %22x%22. *)
+        let has_coords = List.exists (fun (_, _, _, body) ->
+          string_contains body "%22x%22"
+        ) requests in
+        assert (not has_coords);
+        print_endline "PASS Story container with user_tags")
+      (fun err -> failwith ("Story container with user_tags failed: " ^ err)))
+
+(** Test: Story container without user_tags omits the parameter entirely *)
+let test_story_container_without_user_tags () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "story_container_plain"}|};
+    headers = [];
+  };
+
+  Instagram.create_story_video_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~video_url:"https://example.com/story.mp4"
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "story_container_plain");
+        let requests = !Mock_http.requests in
+        let has_tags = List.exists (fun (_, _, _, body) ->
+          string_contains body "user_tags"
+        ) requests in
+        assert (not has_tags);
+        print_endline "PASS Story container without user_tags")
+      (fun err -> failwith ("Story container without user_tags failed: " ^ err)))
+
 (** {1 Reel Parameters Tests (H5)} *)
 
 (** Test: Reel with share_to_feed, cover_url, thumb_offset, audio_name *)
@@ -1455,6 +1517,8 @@ let () =
   print_endline "\n--- Tagging Tests (H4) ---";
   test_image_container_with_tagging ();
   test_video_container_with_location ();
+  test_story_container_with_user_tags ();
+  test_story_container_without_user_tags ();
 
   print_endline "\n--- Reel Parameters Tests (H5) ---";
   test_reel_with_extra_params ();

@@ -1216,6 +1216,18 @@ module Make (Config : CONFIG) = struct
     in
     user_tag_params @ location_params @ collab_params
 
+  (** Build the [user_tags] parameter for story containers. Story mentions are
+      username-only (coordinates are optional on stories and the API mention
+      has no visual rendering, so we never send x/y). Serialized with Yojson so
+      a username containing JSON-special characters cannot break the payload. *)
+  let story_user_tag_params = function
+    | [] -> []
+    | usernames ->
+        let json =
+          `List (List.map (fun u -> `Assoc [ ("username", `String u) ]) usernames)
+        in
+        [("user_tags", Yojson.Basic.to_string json)]
+
   (** Step 1a: Create single image container *)
   let create_image_container ~ig_user_id ~access_token ~image_url ~caption ~alt_text ~is_carousel_item ?(user_tags=[]) ?location_id ?(collaborators=[]) on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
@@ -1849,7 +1861,7 @@ module Make (Config : CONFIG) = struct
   (** {1 Instagram Stories} *)
 
   (** Create story container for image *)
-  let create_story_image_container ~ig_user_id ~access_token ~image_url ?alt_text on_result =
+  let create_story_image_container ~ig_user_id ~access_token ~image_url ?alt_text ?(user_tags=[]) on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let params = [
@@ -1860,6 +1872,8 @@ module Make (Config : CONFIG) = struct
      | Some alt when String.length alt > 0 ->
          [("custom_accessibility_caption", alt)]
      | _ -> [])
+    @
+    story_user_tag_params user_tags
     @
     (match compute_app_secret_proof ~access_token with
      | Some proof -> [("appsecret_proof", proof)]
@@ -1888,7 +1902,7 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Create story container for video *)
-  let create_story_video_container ~ig_user_id ~access_token ~video_url ?alt_text on_result =
+  let create_story_video_container ~ig_user_id ~access_token ~video_url ?alt_text ?(user_tags=[]) on_result =
     let url = Printf.sprintf "%s/%s/media" graph_api_base ig_user_id in
 
     let params = [
@@ -1899,6 +1913,8 @@ module Make (Config : CONFIG) = struct
      | Some alt when String.length alt > 0 ->
          [("custom_accessibility_caption", alt)]
      | _ -> [])
+    @
+    story_user_tag_params user_tags
     @
     (match compute_app_secret_proof ~access_token with
      | Some proof -> [("appsecret_proof", proof)]
@@ -1927,12 +1943,12 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Post image story to Instagram *)
-  let post_story_image ~account_id ~image_url ?alt_text on_result =
+  let post_story_image ~account_id ~image_url ?alt_text ?user_tags on_result =
     ensure_valid_token ~account_id
       (fun access_token ->
         Config.get_ig_user_id ~account_id
           (fun ig_user_id ->
-            create_story_image_container ~ig_user_id ~access_token ~image_url ?alt_text
+            create_story_image_container ~ig_user_id ~access_token ~image_url ?alt_text ?user_tags
               (function
                 | Ok container_id ->
                     poll_container_status ~container_id ~access_token ~ig_user_id
@@ -1946,12 +1962,12 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error_types.Failure err))
 
   (** Post video story to Instagram *)
-  let post_story_video ~account_id ~video_url ?alt_text on_result =
+  let post_story_video ~account_id ~video_url ?alt_text ?user_tags on_result =
     ensure_valid_token ~account_id
       (fun access_token ->
         Config.get_ig_user_id ~account_id
           (fun ig_user_id ->
-            create_story_video_container ~ig_user_id ~access_token ~video_url ?alt_text
+            create_story_video_container ~ig_user_id ~access_token ~video_url ?alt_text ?user_tags
               (function
                 | Ok container_id ->
                     poll_container_status ~container_id ~access_token ~ig_user_id
@@ -1965,20 +1981,20 @@ module Make (Config : CONFIG) = struct
       (fun err -> on_result (Error_types.Failure err))
 
   (** Post story to Instagram (auto-detect media type) *)
-  let post_story ~account_id ~media_url ?alt_text on_result =
+  let post_story ~account_id ~media_url ?alt_text ?user_tags on_result =
     let url_lower = String.lowercase_ascii media_url in
     if not (String.starts_with ~prefix:"http://" url_lower || String.starts_with ~prefix:"https://" url_lower) then
       on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Invalid_url media_url]))
     else
       match classify_media_url media_url with
-      | `Video -> post_story_video ~account_id ~video_url:media_url ?alt_text on_result
-      | `Image -> post_story_image ~account_id ~image_url:media_url ?alt_text on_result
+      | `Video -> post_story_video ~account_id ~video_url:media_url ?alt_text ?user_tags on_result
+      | `Image -> post_story_image ~account_id ~image_url:media_url ?alt_text ?user_tags on_result
       | `Unsupported ext ->
           on_result (Error_types.Failure (Error_types.Validation_error [Error_types.Media_unsupported_format (Printf.sprintf "Unsupported media format '%s': %s" ext media_url)]))
       | `Unknown ->
           (* Unknown extension: default to video for stories since images
              always have recognizable extensions (.jpg/.png) *)
-          post_story_video ~account_id ~video_url:media_url ?alt_text on_result
+          post_story_video ~account_id ~video_url:media_url ?alt_text ?user_tags on_result
 
   (** Validate story media *)
   let validate_story ~media_url =
