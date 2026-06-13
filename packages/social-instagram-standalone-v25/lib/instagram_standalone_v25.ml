@@ -1194,15 +1194,19 @@ module Make (Config : CONFIG) = struct
 
   (** {1 Tagging helper} *)
 
-  (** Build optional tagging and location parameters for container creation *)
+  (** Build optional tagging and location parameters for container creation.
+      All JSON values go through Yojson so a username containing JSON-special
+      characters cannot break the payload. *)
   let tagging_params ?(user_tags=[]) ?location_id ?(collaborators=[]) () =
     let user_tag_params = match user_tags with
       | [] -> []
       | tags ->
-          let json_tags = List.map (fun (username, x, y) ->
-            Printf.sprintf {|{"username":"%s","x":%f,"y":%f}|} username x y
-          ) tags in
-          [("user_tags", Printf.sprintf "[%s]" (String.concat "," json_tags))]
+          let json =
+            `List (List.map (fun (username, x, y) ->
+              `Assoc [ ("username", `String username); ("x", `Float x); ("y", `Float y) ]
+            ) tags)
+          in
+          [("user_tags", Yojson.Basic.to_string json)]
     in
     let location_params = match location_id with
       | Some loc -> [("location_id", loc)]
@@ -1211,15 +1215,14 @@ module Make (Config : CONFIG) = struct
     let collab_params = match collaborators with
       | [] -> []
       | collabs ->
-          let json_collabs = List.map (fun c -> Printf.sprintf {|"%s"|} c) collabs in
-          [("collaborators", Printf.sprintf "[%s]" (String.concat "," json_collabs))]
+          let json = `List (List.map (fun c -> `String c) collabs) in
+          [("collaborators", Yojson.Basic.to_string json)]
     in
     user_tag_params @ location_params @ collab_params
 
   (** Build the [user_tags] parameter for story containers. Story mentions are
       username-only (coordinates are optional on stories and the API mention
-      has no visual rendering, so we never send x/y). Serialized with Yojson so
-      a username containing JSON-special characters cannot break the payload. *)
+      has no visual rendering, so we never send x/y). *)
   let story_user_tag_params = function
     | [] -> []
     | usernames ->

@@ -1330,6 +1330,44 @@ let test_story_container_without_user_tags () =
         print_endline "PASS Story container without user_tags")
       (fun err -> failwith ("Story container without user_tags failed: " ^ err)))
 
+(** Test: JSON-special characters in usernames are escaped, not spliced raw
+    into the user_tags / collaborators payloads *)
+let test_tagging_params_escape_json_special_chars () =
+  Mock_config.reset ();
+
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id": "container_escaped"}|};
+    headers = [];
+  };
+
+  Instagram.create_image_container
+    ~ig_user_id:"ig_123"
+    ~access_token:"test_token"
+    ~image_url:"https://example.com/image.jpg"
+    ~caption:"Escaping test"
+    ~alt_text:None
+    ~is_carousel_item:false
+    ~user_tags:[({|quo"te|}, 0.5, 0.5)]
+    ~collaborators:[{|back\slash|}]
+    (handle_result
+      (fun container_id ->
+        assert (container_id = "container_escaped");
+        let requests = !Mock_http.requests in
+        (* The JSON escape for '"' is '\"'; form-urlencoded that is %5C%22.
+           An unescaped quote would terminate the JSON string early and the
+           body would carry quo%22te with no %5C. *)
+        let has_escaped_quote = List.exists (fun (_, _, _, body) ->
+          string_contains body "quo%5C%22te"
+        ) requests in
+        assert has_escaped_quote;
+        let has_escaped_backslash = List.exists (fun (_, _, _, body) ->
+          string_contains body "back%5C%5Cslash"
+        ) requests in
+        assert has_escaped_backslash;
+        print_endline "PASS Tagging params escape JSON-special characters")
+      (fun err -> failwith ("Tagging params escaping failed: " ^ err)))
+
 (** {1 Reel Parameters Tests (H5)} *)
 
 (** Test: Reel with share_to_feed, cover_url, thumb_offset, audio_name *)
@@ -1519,6 +1557,7 @@ let () =
   test_video_container_with_location ();
   test_story_container_with_user_tags ();
   test_story_container_without_user_tags ();
+  test_tagging_params_escape_json_special_chars ();
 
   print_endline "\n--- Reel Parameters Tests (H5) ---";
   test_reel_with_extra_params ();
