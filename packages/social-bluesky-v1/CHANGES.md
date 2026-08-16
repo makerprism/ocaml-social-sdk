@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A network error during session refresh is no longer recorded as a
+  credential failure.** `ensure_valid_token` funnelled every non-auth refresh
+  failure through an `on_other_refresh_failure` helper that wrote the health
+  status `refresh_failed` and rewrapped the error as
+  `Auth_error (Refresh_failed _)`. A PDS that was briefly unreachable or
+  answering 5xx therefore looked exactly like a revoked session: the account
+  got a credential-failure status, and consumers routing on
+  `Error_types.classify_error` saw `Auth_failure`. Refresh failures are now
+  classified with `Health_status.of_error`. Confirmed auth failures still write
+  `token_revoked`; everything else leaves the stored status alone and surfaces
+  the underlying error unchanged, so a connectivity blip stays transient.
+
 ### Changed
 
 - **Security: stop persisting the Bluesky app password long-term.**

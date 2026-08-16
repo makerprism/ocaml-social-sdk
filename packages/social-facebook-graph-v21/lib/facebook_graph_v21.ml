@@ -758,13 +758,15 @@ module Make (Config : CONFIG) = struct
         (* Check if token needs refresh (24 hour buffer) *)
         if is_token_expired_buffer ~buffer_seconds:86400 creds.expires_at then
           (* Token expiring soon - Facebook requires re-authentication *)
-          Config.update_health_status ~account_id ~status:"token_expired" 
+          Config.update_health_status ~account_id
+            ~status:Health_status.(to_string Token_expired)
             ~error_message:(Some "Access token expired - please reconnect")
             (fun () -> on_error (Error_types.Auth_error Error_types.Token_expired))
             (fun _ -> on_error (Error_types.Auth_error Error_types.Token_expired))
         else
           (* Token still valid *)
-          Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
+          Config.update_health_status ~account_id
+            ~status:Health_status.(to_string Healthy) ~error_message:None
             (fun () -> on_success creds.access_token)
             (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
@@ -846,14 +848,16 @@ module Make (Config : CONFIG) = struct
                 | Some e -> e
                 | None -> Error_types.Auth_error Error_types.Token_invalid
               in
-              report_recovery_status "token_recovery_failed"
+              (* Every candidate user token was rejected by Facebook, so the
+                 stored credentials really are dead. *)
+              report_recovery_status Health_status.(to_string Token_revoked)
                 "Failed to recover Page token from /me/accounts for configured page_id"
                 (fun () -> on_error final_error)
           | candidate_user_token :: rest ->
               fetch_pages_with_user_token ~user_token:candidate_user_token
                 (fun (user_token_used, page_access_token) ->
                   let complete_success () =
-                    report_recovery_status "token_recovered"
+                    report_recovery_status Health_status.(to_string Healthy)
                       "Recovered Page access token from /me/accounts after posting auth failure"
                       (fun () -> on_success page_id page_access_token)
                   in
@@ -878,13 +882,11 @@ module Make (Config : CONFIG) = struct
                   if should_try_next_recovery_token err then
                     try_candidate_tokens ~stored_creds ~last_error:(Some err) rest
                   else
-                    let stop_reason =
-                      "Stopped token recovery due to non-auth failure: " ^
-                      Error_types.error_to_string err
-                    in
-                    report_recovery_status "token_recovery_failed"
-                      stop_reason
-                      (fun () -> on_error err))
+                    (* Recovery stopped on a non-auth failure, which by
+                       definition says nothing about the stored credentials.
+                       Leave the health status as it was and let the caller
+                       surface the error. *)
+                    on_error err)
         in
         Config.get_credentials ~account_id
           (fun creds ->

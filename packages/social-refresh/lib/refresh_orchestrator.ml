@@ -31,9 +31,9 @@ let ensure_valid_access_token
     ?(map_refresh_error_to_health = fun err ->
       match err with
       | Error_types.Auth_error Error_types.Missing_credentials ->
-          ("token_expired", "No refresh token available")
+          (Health_status.(to_string Token_expired), "No refresh token available")
       | _ ->
-          ("refresh_failed", Error_types.error_to_string err))
+          (Health_status.(to_string Refresh_failed), Error_types.error_to_string err))
     ?(on_refresh_attempt = fun ~attempt:_ -> ())
     ?(on_refresh_success = fun ~attempt:_ _credentials -> ())
     ?(on_refresh_failure = fun ~attempt:_ _error -> ())
@@ -56,13 +56,13 @@ let ensure_valid_access_token
       perform_refresh ~credentials
         (fun refreshed_credentials ->
            if is_blank refreshed_credentials.Social_core.access_token then
-             fail_health "refresh_failed" "Refresh response missing access token"
+             fail_health Health_status.(to_string Refresh_failed) "Refresh response missing access token"
                (Error_types.Auth_error (Error_types.Refresh_failed "Refresh response missing access token"))
            else
              let merged = merge_refreshed_credentials ~current:credentials ~refreshed:refreshed_credentials in
              persist_credentials ~account_id ~credentials:merged
                (fun () ->
-                  update_health ~account_id ~status:"healthy" ~error_message:None
+                  update_health ~account_id ~status:Health_status.(to_string Healthy) ~error_message:None
                     (fun () ->
                       on_refresh_success ~attempt merged;
                       on_success merged)
@@ -82,7 +82,7 @@ let ensure_valid_access_token
   let run_with_loaded_credentials credentials =
     match Refresh_decision.decide ~policy credentials with
     | Refresh_types.Skip ->
-        update_health ~account_id ~status:"healthy" ~error_message:None
+        update_health ~account_id ~status:Health_status.(to_string Healthy) ~error_message:None
           (fun () -> on_success credentials)
           (fun err -> on_error (map_health_error err))
     | Refresh_types.Refresh_required ->
@@ -93,7 +93,7 @@ let ensure_valid_access_token
                (fun latest_credentials ->
                   match Refresh_decision.decide ~policy latest_credentials with
                   | Refresh_types.Skip ->
-                      update_health ~account_id ~status:"healthy" ~error_message:None
+                      update_health ~account_id ~status:Health_status.(to_string Healthy) ~error_message:None
                         (fun () -> on_success latest_credentials)
                         (fun err -> on_error (map_health_error err))
                   | Refresh_types.Refresh_required ->

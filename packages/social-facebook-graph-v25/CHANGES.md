@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- **Page-token recovery no longer reports unrecognised health statuses.**
+  `recover_page_access_token` wrote the literals `"token_recovered"` and
+  `"token_recovery_failed"`, neither of which any consumer recognises. A
+  *successful* recovery could therefore land the account in the consumer's
+  default state. Recovery now writes `healthy` when it succeeds and
+  `token_revoked` when every candidate user token was rejected.
+- **A non-auth failure during recovery no longer changes account health.** The
+  branch that stops recovery on a rate limit or server error used to write a
+  failure status on the way out, even though its own message said the failure
+  was not an auth problem. It now leaves the stored status alone.
+
 ### Changed
 
 - `parse_api_error_with_permissions` now preserves Facebook's verbatim

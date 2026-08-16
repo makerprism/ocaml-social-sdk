@@ -52,3 +52,8 @@
  (name test_mastodon_conversations_contract)
  (modules test_mastodon_conversations_contract)
  (libraries social_mastodon_v1 social-core str))
+
+(test
+ (name test_mastodon_health_contract)
+ (modules test_mastodon_health_contract)
+ (libraries social_mastodon_v1 social-core))

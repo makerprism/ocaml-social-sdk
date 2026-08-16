@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Added
+
+- `Health_status`: the closed set of account-health values providers may report
+  through `CONFIG.update_health_status`, with `to_string`, `of_string`, and
+  `of_error`. Providers now build the status string with `to_string` instead of
+  writing literals, so an unrecognised status can no longer reach a consumer.
+  `of_error` is the single source of truth for which errors are evidence about
+  stored credentials: it returns `None` for network, rate-limit and generic API
+  errors, meaning the caller must leave the stored status untouched.
+
 ### Changed
 
 - **Breaking**: `Insufficient_permissions` now carries an inline record

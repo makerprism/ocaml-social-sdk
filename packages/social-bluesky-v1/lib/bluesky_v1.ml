@@ -961,23 +961,40 @@ module Make (Config : CONFIG) = struct
     let module AuthMake = Auth.Make (Config.Http) in
     let cache_and_succeed ~did ~access_jwt =
       Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
-      Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
+      Config.update_health_status ~account_id
+        ~status:(Health_status.to_string Health_status.Healthy) ~error_message:None
         (fun () -> on_success access_jwt)
         (fun _ -> on_success access_jwt)
     in
     let on_token_revoked () =
       invalidate_session ~account_id;
-      Config.update_health_status ~account_id ~status:"token_revoked"
+      Config.update_health_status ~account_id
+        ~status:(Health_status.to_string Health_status.Token_revoked)
         ~error_message:(Some "Bluesky session no longer valid. Please reconnect this account.")
         (fun () -> on_error (Error_types.Auth_error Error_types.Token_expired))
         (fun _ -> on_error (Error_types.Auth_error Error_types.Token_expired))
     in
-    let on_other_refresh_failure msg =
+    (* A refresh that fails for a reason other than authentication tells us
+       nothing about the stored credentials. The PDS may be down, rate
+       limiting us, or unreachable. Recording that as a credential failure
+       turns a connectivity blip into a "reconnect this account" badge that no
+       probe can clear, so we leave the stored health status alone and hand
+       the caller the underlying error unchanged.
+
+       Passing [err] through rather than rewrapping it as
+       [Auth_error (Refresh_failed _)] matters just as much: consumers route
+       on [Error_types.classify_error], and the old wrapper made every network
+       error classify as [Auth_failure]. *)
+    let on_refresh_error ~context err =
       invalidate_session ~account_id;
-      Config.update_health_status ~account_id ~status:"refresh_failed"
-        ~error_message:(Some msg)
-        (fun () -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
-        (fun _ -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
+      match Health_status.of_error err with
+      | None -> on_error err
+      | Some status ->
+          Config.update_health_status ~account_id
+            ~status:(Health_status.to_string status)
+            ~error_message:(Some (context ^ ": " ^ Error_types.error_to_string err))
+            (fun () -> on_error err)
+            (fun _ -> on_error err)
     in
     let now = Unix.gettimeofday () in
     match Hashtbl.find_opt session_cache account_id with
@@ -990,7 +1007,10 @@ module Make (Config : CONFIG) = struct
             let identifier = creds.access_token in
             match creds.refresh_token with
             | None ->
-                Config.update_health_status ~account_id ~status:"refresh_failed"
+                (* Genuine credential evidence: the row has nothing to refresh
+                   with, so no amount of retrying will help. *)
+                Config.update_health_status ~account_id
+                  ~status:(Health_status.to_string Health_status.Refresh_failed)
                   ~error_message:(Some "No Bluesky credentials available - reconnect the account")
                   (fun () -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
                   (fun _ -> on_error (Error_types.Auth_error Error_types.Missing_credentials))
@@ -1026,8 +1046,7 @@ module Make (Config : CONFIG) = struct
                            JWT itself has aged out. *)
                         on_token_revoked ()
                     | Error_types.Failure err ->
-                        on_other_refresh_failure
-                          ("Session refresh failed: " ^ Error_types.error_to_string err))
+                        on_refresh_error ~context:"Session refresh failed" err)
                 else
                   (* Legacy app_password row: exchange for a JWT pair and
                      rotate storage so the app password is forgotten. *)
@@ -1056,8 +1075,7 @@ module Make (Config : CONFIG) = struct
                       | Error_types.Failure (Error_types.Auth_error _) ->
                           on_token_revoked ()
                       | Error_types.Failure err ->
-                          on_other_refresh_failure
-                            ("Session creation failed: " ^ Error_types.error_to_string err)))
+                          on_refresh_error ~context:"Session creation failed" err))
           (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
   
   (** Ensure valid session token and also return the DID *)
