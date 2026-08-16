@@ -219,9 +219,21 @@ module type CONFIG = sig
     (string -> unit) -> 
     unit
 
-  (** Update account health status
+  (** Update account health status.
+
+      [status] is always one of the strings produced by
+      {!Health_status.to_string}; providers in this SDK build it with that
+      function rather than writing a literal. Implementors can therefore
+      parse it with {!Health_status.of_string} and treat [None] as a bug
+      report rather than as a status to guess at.
+
+      Providers only call this when they have evidence about the stored
+      credentials. An unreachable server produces no call at all, so a
+      connectivity blip never overwrites a healthy account. See
+      {!Health_status.of_error}.
+
       @param account_id The account identifier
-      @param status The health status (e.g., "healthy", "token_expired")
+      @param status The health status, from {!Health_status.to_string}
       @param error_message Optional error message
       @param on_success Success continuation
       @param on_error Error continuation receiving error message

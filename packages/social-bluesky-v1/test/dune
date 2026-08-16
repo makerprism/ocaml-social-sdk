@@ -5,3 +5,10 @@
   social-core
   social-bluesky-v1
   str))
+
+(test
+ (name test_bluesky_health_contract)
+ (modules test_bluesky_health_contract)
+ (libraries
+  social-core
+  social-bluesky-v1))

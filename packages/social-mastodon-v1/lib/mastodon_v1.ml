@@ -749,8 +749,15 @@ module Make (Config : CONFIG) = struct
       ((random_byte () land 0x3f) lor 0x80) (random_byte ())
       (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ())
   
-  (** Verify credentials are valid and return account information *)
-  let verify_credentials ~mastodon_creds on_success on_error =
+  (** Verify credentials are valid and return account information,
+      reporting failures as structured errors.
+
+      The string-returning {!verify_credentials} below cannot distinguish "the
+      instance said this token is invalid" from "the instance did not answer",
+      because both arrive as a message. Callers that act on the answer, such as
+      {!ensure_valid_token} writing account health, need that distinction and
+      must use this function. *)
+  let verify_credentials_result ~mastodon_creds on_result =
     let url = Printf.sprintf "%s/api/v1/accounts/verify_credentials" mastodon_creds.instance_url in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
@@ -787,13 +794,26 @@ module Make (Config : CONFIG) = struct
               bot = bool_field "bot";
               created_at = opt_str "created_at";
             } in
-            on_success info
+            on_result (Ok info)
           with e ->
-            on_error (Printf.sprintf "Failed to parse verify_credentials response: %s" (Printexc.to_string e))
+            on_result (Error (Error_types.Internal_error
+              (Printf.sprintf "Failed to parse verify_credentials response: %s"
+                 (Printexc.to_string e))))
         else
-          on_error (Printf.sprintf "Invalid credentials (%d): %s" response.status (redact_sensitive_text response.body)))
-      on_error
-  
+          on_result (Error (parse_api_error ~headers:response.headers
+            ~status_code:response.status ~response_body:response.body)))
+      (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+  (** Verify credentials, reporting failures as a human-readable message.
+
+      Retained for callers that only display the failure. Anything that
+      branches on {i why} verification failed must use
+      {!verify_credentials_result}. *)
+  let verify_credentials ~mastodon_creds on_success on_error =
+    verify_credentials_result ~mastodon_creds (function
+      | Ok info -> on_success info
+      | Error err -> on_error (Error_types.error_to_string err))
+
   (** Upload media to Mastodon *)
   let upload_media ~mastodon_creds ~media_data ~mime_type ~description ~focus on_success on_error =
     let url = Printf.sprintf "%s/api/v2/media" mastodon_creds.instance_url in
@@ -957,22 +977,35 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Media update failed (%d): %s" response.status response.body))
       on_error
   
-  (** Ensure valid token (Mastodon tokens don't expire unless revoked) *)
+  (** Ensure valid token (Mastodon tokens don't expire unless revoked).
+
+      Health is only written when the instance actually answered and its
+      answer said something about the token. A 5xx, a timeout, or a DNS
+      failure leaves the stored status untouched: a Mastodon instance being
+      briefly unreachable is not evidence that the user's token died, and
+      recording it as one leaves the account showing "needs reconnection"
+      with nothing able to clear it. *)
   let ensure_valid_token ~account_id on_success on_error =
     Config.get_credentials ~account_id
       (fun creds ->
         parse_mastodon_credentials creds
           (fun mastodon_creds ->
-            verify_credentials ~mastodon_creds
-              (fun _account_info ->
-                Config.update_health_status ~account_id ~status:"healthy" ~error_message:None
-                  (fun () -> on_success mastodon_creds)
-                  (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
-              (fun err ->
-                Config.update_health_status ~account_id ~status:"invalid_token"
-                  ~error_message:(Some err)
-                  (fun () -> on_error (Error_types.Auth_error Error_types.Token_invalid))
-                  (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))))
+            verify_credentials_result ~mastodon_creds (function
+              | Ok _account_info ->
+                  Config.update_health_status ~account_id
+                    ~status:(Health_status.to_string Health_status.Healthy)
+                    ~error_message:None
+                    (fun () -> on_success mastodon_creds)
+                    (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
+              | Error verify_err ->
+                  (match Health_status.of_error verify_err with
+                   | None -> on_error verify_err
+                   | Some status ->
+                       Config.update_health_status ~account_id
+                         ~status:(Health_status.to_string status)
+                         ~error_message:(Some (Error_types.error_to_string verify_err))
+                         (fun () -> on_error verify_err)
+                         (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))))
           (fun err -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err))))
       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
 

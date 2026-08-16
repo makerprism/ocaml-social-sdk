@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- Same page-token-recovery health-status fixes as `social-facebook-graph-v25`:
+  recovery writes `healthy` on success and `token_revoked` when every candidate
+  token was rejected, instead of the unrecognised literals `"token_recovered"`
+  and `"token_recovery_failed"`, and a non-auth failure during recovery leaves
+  the stored status alone.
+
 ### Changed
 
 - `parse_api_error_with_permissions` now preserves Facebook's verbatim

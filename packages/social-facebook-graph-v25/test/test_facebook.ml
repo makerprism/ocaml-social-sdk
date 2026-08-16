@@ -1542,10 +1542,13 @@ let test_post_recovers_page_token_from_user_token () =
         in
         assert used_resolved_token;
         (match Mock_config.get_health_status "test_account" with
-        | Some (_, "token_recovered", Some msg) ->
+        (* Recovery succeeded, so the account is healthy. This used to record
+           the literal "token_recovered", which no consumer recognises. *)
+        | Some (_, status, Some msg)
+          when status = Health_status.(to_string Healthy) ->
             assert (string_contains msg "Recovered Page access token")
         | Some (_, status, _) ->
-            failwith ("Expected token_recovered health status, got: " ^ status)
+            failwith ("Expected healthy health status, got: " ^ status)
         | None ->
             failwith "Expected health status update for token recovery");
         (match List.assoc_opt "test_account" !Mock_config.credentials_store with
@@ -1678,10 +1681,14 @@ let test_post_recovery_stops_on_rate_limit () =
           List.filter (fun (m, u, _, _) -> m = "GET" && string_contains u "/me/accounts") !Mock_http.requests
         in
         assert (List.length me_accounts_requests = 1);
-        (match Mock_config.get_health_status "test_account" with
-        | Some (_, "token_recovery_failed", Some msg) ->
-            assert (string_contains msg "Stopped token recovery")
-        | _ -> failwith "Expected token_recovery_failed stop status");
+        (* Being rate limited says nothing about the stored credentials, so
+           recovery must stop without downgrading account health. Every status
+           recorded during this run stays "healthy". *)
+        List.iter
+          (fun (_, status, _) ->
+            if status <> Health_status.(to_string Healthy) then
+              failwith ("Rate-limited recovery must not change health, got: " ^ status))
+          !Mock_config.health_statuses;
         print_endline "✓ Recovery stops on rate limit without fallback"))
 
 (** Test: Cleans up uploaded photos if feed publish fails *)

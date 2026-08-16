@@ -12,3 +12,8 @@
  (name test_form_urlencode)
  (modules test_form_urlencode)
  (libraries social-core))
+
+(test
+ (name test_health_status)
+ (modules test_health_status)
+ (libraries social-core))

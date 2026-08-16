@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- **`ensure_valid_token` no longer reports a credential failure when the
+  instance is unreachable.** It used to write the health status
+  `"invalid_token"` on any `verify_credentials` failure. That literal is not a
+  value any consumer recognises, so it got coerced into whatever the consumer's
+  default branch happened to be, and it was written even when the instance never
+  answered. An instance being down for a minute therefore marked the account as
+  needing reconnection. Health is now only written when the instance actually
+  answered about the token: `token_revoked` on a 401 or a missing scope,
+  `healthy` on success, and nothing at all on a timeout, DNS failure, or 5xx.
+
+### Added
+
+- `verify_credentials_result`, which reports failures as a structured
+  `Error_types.error` instead of a string. The existing string-returning
+  `verify_credentials` is unchanged and now delegates to it. Callers that branch
+  on *why* verification failed must use the new function; a string cannot
+  distinguish "the instance rejected this token" from "the instance did not
+  answer".
+
 ### Changed
 
 - 403 responses now carry the Mastodon instance's verbatim `error` text

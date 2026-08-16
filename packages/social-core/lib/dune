@@ -10,7 +10,8 @@
   social_capabilities
   content_validator
   url_extractor
-  error_types)
+  error_types
+  health_status)
  (libraries
   yojson
   re))
