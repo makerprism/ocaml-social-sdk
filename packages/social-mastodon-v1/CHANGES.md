@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needing reconnection. Health is now only written when the instance actually
   answered about the token: `token_revoked` on a 401 or a missing scope,
   `healthy` on success, and nothing at all on a timeout, DNS failure, or 5xx.
+- **A rejected health write no longer fails the operation it was reporting
+  on.** If the consumer's `update_health_status` called its error
+  continuation, `ensure_valid_token` turned that into a
+  `Network_error (Connection_failed _)`. On the success path that aborted a
+  publish for a token that had *just* verified; on the failure path it replaced
+  the real reason with a network error that never happened. Recording health is
+  a side effect, never a gate: the outcome of `verify_credentials` decides what
+  happens either way. This matters because consumers do reject writes on
+  purpose, for instance when they refuse to store a status string they do not
+  recognise. `Bluesky.ensure_valid_token` and Facebook's
+  `report_recovery_status` already behaved this way.
 
 ### Added
 

@@ -320,6 +320,115 @@ let test_orchestrator_uses_account_lock_hook () =
   assert (!lock_calls = 1);
   print_endline "✓ orchestrator account lock hook"
 
+(* Drive one failed refresh through the orchestrator with the stock defaults,
+   and report every health status the run wrote plus the error it surfaced.
+
+   The stock defaults are what matters: all eleven provider packages that use
+   this orchestrator take [map_refresh_error_to_health] as it comes. *)
+let run_refresh_failure refresh_error =
+  let statuses = ref [] in
+  let result = ref None in
+  let load_credentials ~account_id:_ on_success _on_error =
+    on_success
+      (make_credentials ~expires_at:(rfc3339_in_seconds 5) ~refresh_token:"stored" "expired")
+  in
+  let perform_refresh ~credentials:_ _on_success on_error = on_error refresh_error in
+  let persist_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success () in
+  let update_health ~account_id:_ ~status ~error_message:_ on_success _on_error =
+    statuses := !statuses @ [ status ];
+    on_success ()
+  in
+  Social_refresh.Orchestrator.ensure_valid_access_token
+    ~account_id:"acct"
+    ~load_credentials
+    ~perform_refresh
+    ~persist_credentials
+    ~update_health
+    (fun _ -> result := Some (Ok ()))
+    (fun err -> result := Some (Error err));
+  (!statuses, !result)
+
+(* A refresh that failed because the platform was unreachable, overloaded or
+   rate limiting us says nothing about the stored credentials. The default
+   mapping used to write [refresh_failed] for all of these, so a platform
+   outage painted every account on that platform as needing reconnection while
+   the scheduler was still retrying it with backoff. Consumers treat
+   [refresh_failed] as terminal, so a blip disconnected accounts for good. *)
+let test_orchestrator_non_credential_failures_write_no_health () =
+  let cases =
+    [
+      ("connection refused",
+       Error_types.Network_error (Error_types.Connection_failed "connection refused"));
+      ("timeout", Error_types.Network_error Error_types.Timeout);
+      ("upstream 503",
+       Error_types.make_api_error ~platform:Platform_types.Twitter ~status_code:503
+         ~message:"Service Unavailable" ());
+      ("rate limited", Error_types.make_rate_limited ());
+      ("unparsable refresh response",
+       Error_types.Internal_error "Failed to parse refresh response");
+    ]
+  in
+  List.iter
+    (fun (label, err) ->
+      let statuses, result = run_refresh_failure err in
+      if statuses <> [] then
+        failwith
+          (Printf.sprintf "%s wrote health status(es): %s" label
+             (String.concat ", " statuses));
+      match result with
+      | Some (Error observed) when observed = err -> ()
+      | _ ->
+          failwith (Printf.sprintf "%s did not surface the original error" label))
+    cases;
+  print_endline "✓ orchestrator leaves health alone on non-credential refresh failures"
+
+(* The other half of the contract: a refresh the platform actually rejected is
+   still recorded, and recorded as the status that error implies. *)
+let test_orchestrator_credential_failures_still_write_health () =
+  List.iter
+    (fun (err, expected) ->
+      let statuses, _ = run_refresh_failure err in
+      if statuses <> [ expected ] then
+        failwith
+          (Printf.sprintf "expected [%s], got [%s]" expected
+             (String.concat ", " statuses)))
+    [
+      (Error_types.Auth_error (Error_types.Refresh_failed "invalid refresh token"),
+       "refresh_failed");
+      (Error_types.Auth_error Error_types.Token_expired, "token_expired");
+      (Error_types.Auth_error Error_types.Token_revoked, "token_revoked");
+      (Error_types.Auth_error Error_types.Token_invalid, "token_revoked");
+    ];
+  print_endline "✓ orchestrator still records genuine credential failures"
+
+(* A caller that supplies its own mapping keeps full control, including the
+   ability to say "write nothing" for an error the default would record. *)
+let test_orchestrator_custom_health_mapping_can_write_nothing () =
+  let statuses = ref [] in
+  let load_credentials ~account_id:_ on_success _on_error =
+    on_success
+      (make_credentials ~expires_at:(rfc3339_in_seconds 5) ~refresh_token:"stored" "expired")
+  in
+  let perform_refresh ~credentials:_ _on_success on_error =
+    on_error (Error_types.Auth_error (Error_types.Refresh_failed "invalid refresh token"))
+  in
+  let persist_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success () in
+  let update_health ~account_id:_ ~status ~error_message:_ on_success _on_error =
+    statuses := status :: !statuses;
+    on_success ()
+  in
+  Social_refresh.Orchestrator.ensure_valid_access_token
+    ~account_id:"acct"
+    ~map_refresh_error_to_health:(fun _ -> None)
+    ~load_credentials
+    ~perform_refresh
+    ~persist_credentials
+    ~update_health
+    (fun _ -> ())
+    (fun _ -> ());
+  assert (!statuses = []);
+  print_endline "✓ orchestrator honours a custom mapping that writes nothing"
+
 let () =
   test_refresh_time_boundaries ();
   test_refresh_time_malformed_timestamp ();
@@ -333,4 +442,7 @@ let () =
   test_orchestrator_retries_transient_errors ();
   test_orchestrator_reloads_latest_credentials_before_refresh ();
   test_orchestrator_uses_account_lock_hook ();
+  test_orchestrator_non_credential_failures_write_no_health ();
+  test_orchestrator_credential_failures_still_write_health ();
+  test_orchestrator_custom_health_mapping_can_write_nothing ();
   print_endline "social-refresh tests passed"

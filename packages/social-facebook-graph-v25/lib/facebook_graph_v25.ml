@@ -929,8 +929,26 @@ module Make (Config : CONFIG) = struct
                 | None -> Error_types.Auth_error Error_types.Token_invalid
               in
               (* Every candidate user token was rejected by Facebook, so the
-                 stored credentials really are dead. *)
-              report_recovery_status Health_status.(to_string Token_revoked)
+                 stored credentials really are dead. Which kind of dead is
+                 [final_error]'s business, not this branch's: an expired user
+                 token is [token_expired], which automatic refresh can still
+                 recover, and only a revoked or scope-stripped one is
+                 [token_revoked]. Hardcoding [token_revoked] agreed with
+                 [of_error] for most auth errors, but only because
+                 [should_try_next_recovery_token] recurses solely on
+                 [Auth_error]; nothing pins that invariant.
+
+                 [of_error] returns [None] only for errors that are not
+                 credential evidence, which this loop cannot currently produce.
+                 Reaching this branch at all means Facebook answered and
+                 rejected every token, so [token_revoked] is the honest
+                 fallback if that ever changes. *)
+              let recovery_status =
+                match Health_status.of_error final_error with
+                | Some status -> status
+                | None -> Health_status.Token_revoked
+              in
+              report_recovery_status (Health_status.to_string recovery_status)
                 "Failed to recover Page token from /me/accounts for configured page_id"
                 (fun () -> on_error final_error)
           | candidate_user_token :: rest ->

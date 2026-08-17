@@ -328,6 +328,23 @@ module Make (Config : CONFIG) = struct
       | _ -> false
     with _ -> false
   
+  (** The atproto error [name] from an XRPC error body, e.g. "ExpiredToken".
+
+      atproto puts the machine-readable name in [error] and the human-readable
+      text in [message]. {!parse_api_error} keeps only the text, so callers
+      that need to tell one 400 from another read the name with this. A body
+      that is not an XRPC error envelope (an HTML page from a proxy, an empty
+      body) yields [None]. *)
+  let atproto_error_name body =
+    try
+      match Yojson.Basic.from_string body with
+      | `Assoc fields ->
+          (match List.assoc_opt "error" fields with
+           | Some (`String name) -> Some name
+           | Some _ | None -> None)
+      | _ -> None
+    with _ -> None
+
   (** Parse API error from response *)
   let parse_api_error ~status_code ~body =
     let parse_error_message () =
@@ -940,6 +957,25 @@ module Make (Config : CONFIG) = struct
           (Printf.sprintf "Network error: %s" err) :: !warnings;
         on_success (None, !warnings))
   
+  (** Does a 400 from [com.atproto.server.refreshSession] mean the stored
+      refresh JWT is dead?
+
+      Only for the two atproto error names below. atproto also answers 400 for
+      [InvalidRequest] (a malformed call, which is our bug, not the user's),
+      and a reverse proxy or WAF in front of a struggling PDS can emit a 400
+      of its own with no XRPC envelope at all. Treating those as a revoked
+      session hands the user a "reconnect this account" badge for an outage
+      they cannot fix. Everything else falls through to [on_refresh_error],
+      which consults {!Health_status.of_error} and leaves the stored status
+      alone when the error is not credential evidence. *)
+  let refresh_session_400_is_terminal raw_response =
+    match raw_response with
+    | None -> false
+    | Some body ->
+        (match atproto_error_name body with
+         | Some ("ExpiredToken" | "InvalidToken") -> true
+         | Some _ | None -> false)
+
   (** Ensure valid session token, reusing cached session when available.
 
       Auth model:
@@ -1041,9 +1077,9 @@ module Make (Config : CONFIG) = struct
                     | Error_types.Failure (Error_types.Auth_error _) ->
                         on_token_revoked ()
                     | Error_types.Failure (Error_types.Api_error api_err)
-                      when api_err.Error_types.status_code = 400 ->
-                        (* Bluesky returns 400 ExpiredToken when the refresh
-                           JWT itself has aged out. *)
+                      when api_err.Error_types.status_code = 400
+                           && refresh_session_400_is_terminal
+                                api_err.Error_types.raw_response ->
                         on_token_revoked ()
                     | Error_types.Failure err ->
                         on_refresh_error ~context:"Session refresh failed" err)

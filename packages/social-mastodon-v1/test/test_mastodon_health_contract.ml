@@ -20,11 +20,16 @@ type verify_mode =
 
 let verify_mode = ref Verify_ok
 
+(** Make the consumer reject every health write, the way a consumer that
+    refuses to store a status it does not recognise does. *)
+let reject_health_writes = ref false
+
 (** Every ~status handed to [update_health_status], oldest first. *)
 let health_writes = ref []
 
-let reset mode =
+let reset ?(reject_health = false) mode =
   verify_mode := mode;
+  reject_health_writes := reject_health;
   health_writes := []
 
 module Mock_http : Social_core.HTTP_CLIENT = struct
@@ -91,9 +96,10 @@ module Mock_config = struct
   let decrypt data on_success _on_error = on_success data
   let sleep ~seconds:_ on_success _on_error = on_success ()
 
-  let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
+  let update_health_status ~account_id:_ ~status ~error_message:_ on_success on_error =
     health_writes := !health_writes @ [ status ];
-    on_success ()
+    if !reject_health_writes then on_error "consumer refused the status"
+    else on_success ()
 end
 
 module Mastodon = Social_mastodon_v1.Make (Mock_config)
@@ -180,6 +186,32 @@ let test_every_written_status_is_recognised () =
         !health_writes)
     [ Verify_ok; Verify_transport_error; Verify_server_error; Verify_unauthorized ]
 
+(* Recording health is a side effect, never a gate on the operation. A
+   consumer that refuses the write, which the one in feedmansion does for any
+   status string it does not recognise, must not turn a token that just
+   verified into a failed publish. This path used to hand the caller a
+   synthetic [Network_error] built from the consumer's rejection message. *)
+let test_rejected_health_write_does_not_fail_a_verified_token () =
+  Printf.printf "Test: a rejected health write does not fail a verified token\n";
+  reset ~reject_health:true Verify_ok;
+  let succeeded, err = run_ensure_valid_token () in
+  check "ensure_valid_token still succeeded" succeeded;
+  check "no error was surfaced" (err = None);
+  check
+    (Printf.sprintf "the write was still attempted (got: %s)" (describe_writes ()))
+    (!health_writes = [ Health_status.to_string Health_status.Healthy ])
+
+(* And on the failure path, a rejected write must not replace the real reason
+   the token failed with a network error that never happened. *)
+let test_rejected_health_write_keeps_the_real_error () =
+  Printf.printf "Test: a rejected health write keeps the real verify error\n";
+  reset ~reject_health:true Verify_unauthorized;
+  let _, err = run_ensure_valid_token () in
+  check "error still classifies as an auth failure"
+    (match err with
+     | Some e -> Error_types.classify_error e = Error_types.Auth_failure
+     | None -> false)
+
 let () =
   Printf.printf "Running Mastodon account-health contract tests\n\n";
   test_unreachable_instance_writes_no_health_status ();
@@ -187,6 +219,8 @@ let () =
   test_rejected_token_marks_token_revoked ();
   test_success_marks_healthy ();
   test_every_written_status_is_recognised ();
+  test_rejected_health_write_does_not_fail_a_verified_token ();
+  test_rejected_health_write_keeps_the_real_error ();
   Printf.printf "\n";
   if !failures > 0 then begin
     Printf.printf "%d check(s) failed\n" !failures;

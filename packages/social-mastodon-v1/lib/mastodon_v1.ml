@@ -984,7 +984,16 @@ module Make (Config : CONFIG) = struct
       failure leaves the stored status untouched: a Mastodon instance being
       briefly unreachable is not evidence that the user's token died, and
       recording it as one leaves the account showing "needs reconnection"
-      with nothing able to clear it. *)
+      with nothing able to clear it.
+
+      Recording health is a side effect, never a gate on the operation. If the
+      consumer rejects the write, the outcome of [verify_credentials] still
+      decides what happens: a token that just verified goes on to succeed, and
+      a token that failed reports the failure it actually had. Consumers do
+      reject writes - one rejects any status string it does not recognise, on
+      purpose - and a rejected write must not abort an in-flight publish. This
+      matches how [Bluesky.ensure_valid_token] and Facebook's
+      [report_recovery_status] already treat their health callbacks. *)
   let ensure_valid_token ~account_id on_success on_error =
     Config.get_credentials ~account_id
       (fun creds ->
@@ -996,7 +1005,7 @@ module Make (Config : CONFIG) = struct
                     ~status:(Health_status.to_string Health_status.Healthy)
                     ~error_message:None
                     (fun () -> on_success mastodon_creds)
-                    (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
+                    (fun _ -> on_success mastodon_creds)
               | Error verify_err ->
                   (match Health_status.of_error verify_err with
                    | None -> on_error verify_err
@@ -1005,7 +1014,7 @@ module Make (Config : CONFIG) = struct
                          ~status:(Health_status.to_string status)
                          ~error_message:(Some (Error_types.error_to_string verify_err))
                          (fun () -> on_error verify_err)
-                         (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))))
+                         (fun _ -> on_error verify_err))))
           (fun err -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err))))
       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
 
