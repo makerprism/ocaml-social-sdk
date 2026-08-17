@@ -13,8 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recover_page_access_token` wrote the literals `"token_recovered"` and
   `"token_recovery_failed"`, neither of which any consumer recognises. A
   *successful* recovery could therefore land the account in the consumer's
-  default state. Recovery now writes `healthy` when it succeeds and
-  `token_revoked` when every candidate user token was rejected.
+  default state. Recovery now writes `healthy` when it succeeds and a status
+  derived from the failure when every candidate user token was rejected.
+- **The exhausted-candidates branch now derives its status from the error
+  instead of hardcoding `token_revoked`.** It asks `Health_status.of_error`,
+  falling back to `token_revoked`. The visible difference today: an expired
+  user token (Facebook error 190 with subcode 463 or 467) now records
+  `token_expired`, which automatic refresh can still recover, rather than the
+  terminal `token_revoked`. The hardcoded value was only ever correct because
+  `should_try_next_recovery_token` recurses solely on `Auth_error`, and nothing
+  pinned that invariant.
 - **A non-auth failure during recovery no longer changes account health.** The
   branch that stops recovery on a rate limit or server error used to write a
   failure status on the way out, even though its own message said the failure

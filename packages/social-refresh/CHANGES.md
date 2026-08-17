@@ -9,17 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `ensure_valid_access_token` builds its health-status strings with
-  `Health_status.to_string` rather than string literals. The values written are
-  unchanged.
+- **Breaking**: `ensure_valid_access_token`'s `map_refresh_error_to_health`
+  now returns `(string * string) option` instead of `string * string`. `None`
+  means "write nothing": the refresh failed for a reason that is not evidence
+  about the stored credentials, so the last successful health check stands.
+  Callers that pass their own mapping must wrap their result in `Some`.
 
-  Note: the default `map_refresh_error_to_health` still maps every non
-  `Missing_credentials` error to `refresh_failed`, including network errors.
-  That is the same class of bug fixed in `social-bluesky-v1` and
-  `social-mastodon-v1`, but it affects the eleven providers that use this
-  orchestrator, and correcting it needs the argument to become optional
-  (`... option`) so a caller can express "write nothing". Tracked separately
-  rather than folded into a bug-fix release.
+  This fixes the bug the previous release documented instead of fixing. The
+  default mapping sent every error that was not `Missing_credentials` to
+  `refresh_failed`, including network errors, timeouts, 5xx responses and rate
+  limits. All eleven provider packages that use this orchestrator
+  (`social-google-business-v4`, `social-instagram-graph-v21`,
+  `social-instagram-standalone-v21`, `social-instagram-standalone-v25`,
+  `social-linkedin-v2`, `social-pinterest-v5`, `social-reddit-v1`,
+  `social-threads-v1`, `social-tiktok-v1`, `social-twitter-v2`,
+  `social-youtube-data-v3`) take that default as it comes, so a platform
+  outage marked every account on that platform as needing reconnection while
+  the caller's scheduler was still retrying it with backoff. Consumers treat
+  `refresh_failed` as terminal, so a transient blip disconnected accounts with
+  no path back to healthy.
+
+  The default now mirrors `Health_status.of_error`, the same rule
+  `social-bluesky-v1` and `social-mastodon-v1` already follow. Genuine
+  credential failures are still recorded, and `Missing_credentials` still maps
+  to `token_expired` with its own message.
 
 ### Added
 

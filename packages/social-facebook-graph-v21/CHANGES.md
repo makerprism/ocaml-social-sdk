@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Same page-token-recovery health-status fixes as `social-facebook-graph-v25`:
-  recovery writes `healthy` on success and `token_revoked` when every candidate
-  token was rejected, instead of the unrecognised literals `"token_recovered"`
-  and `"token_recovery_failed"`, and a non-auth failure during recovery leaves
-  the stored status alone.
+  recovery writes `healthy` on success instead of the unrecognised literals
+  `"token_recovered"` and `"token_recovery_failed"`, a non-auth failure during
+  recovery leaves the stored status alone, and the exhausted-candidates branch
+  derives its status from `Health_status.of_error` (falling back to
+  `token_revoked`) rather than hardcoding `token_revoked`. An expired user
+  token now records `token_expired`.
 
 ### Changed
 

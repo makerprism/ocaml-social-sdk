@@ -7,3 +7,10 @@
   ptime
   ptime.clock.os
   str))
+
+(test
+ (name test_facebook_health_contract)
+ (modules test_facebook_health_contract)
+ (libraries
+  social-facebook-graph-v21
+  social-core))

@@ -29,7 +29,13 @@ jobs:
       - name: Setup Dune
         uses: ocaml-dune/setup-dune@v1
         with:
-          version: latest
+          # Pinned, not "latest". "latest" resolves to the newest *binary
+          # release*, which is 3.21.0, and 3.21.0 does not understand the
+          # "build-id" opam variable that ocaml-compiler.5.5.0 uses. Every run
+          # since 2026-05-12 died in "Lock dependencies" with
+          #   Error: Variable "build-id" is not supported.
+          # and never reached build or test. 3.23.0 handles it.
+          version: 3.23.0
 
       - name: Lock dependencies
         run: dune pkg lock

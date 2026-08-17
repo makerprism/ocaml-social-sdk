@@ -24,7 +24,10 @@ hooks to make delegation safer in production environments:
 - `max_refresh_attempts` + `should_retry_refresh_error` + `sleep_before_retry`:
   controlled retry for transient refresh failures.
 - `map_refresh_error_to_health`: customize health-state mapping on refresh
-  failures.
+  failures. Returns `(status, message) option`; `None` means "write nothing",
+  which is what a failure that says nothing about the stored credentials (a
+  timeout, a 5xx, a rate limit) should do. The default mirrors
+  `Health_status.of_error`.
 - `on_refresh_attempt` / `on_refresh_success` / `on_refresh_failure`:
   structured telemetry hooks.
 

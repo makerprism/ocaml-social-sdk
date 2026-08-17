@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored credentials: it returns `None` for network, rate-limit and generic API
   errors, meaning the caller must leave the stored status untouched.
 
+  Namespace note: `social-core` is `(wrapped false)`, so `health_status.ml`
+  claims the bare module name `Health_status` for every consumer that links
+  this library. A consumer with its own `Health_status` module will get a name
+  clash and has to rename one of them. This is the same trade-off the library
+  already makes for `Error_types`, `Platform_types` and `Social_core` itself.
+
 ### Changed
 
 - **Breaking**: `Insufficient_permissions` now carries an inline record

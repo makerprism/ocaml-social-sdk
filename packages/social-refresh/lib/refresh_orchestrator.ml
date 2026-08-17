@@ -18,6 +18,21 @@ let merge_refreshed_credentials ~(current : Social_core.credentials) ~(refreshed
 
 let is_blank value = String.trim value = ""
 
+(** Load, decide, refresh, persist, and record account health for one account.
+
+    [map_refresh_error_to_health] decides what a failed refresh says about the
+    stored credentials. It returns [None] to mean "write nothing": the refresh
+    failed for a reason that is not evidence about the credentials, so the last
+    successful health check should stand. The default mirrors
+    {!Health_status.of_error}, so network failures, rate limits and
+    uninterpreted API errors leave the stored status alone.
+
+    That default matters because no provider in this SDK overrides it. Before
+    it returned an option, every refresh failure that was not
+    [Missing_credentials] wrote [refresh_failed], so a platform outage marked
+    every account on that platform as needing reconnection while the scheduler
+    was still retrying it with backoff. Consumers treat [refresh_failed] as
+    terminal, so a transient blip disconnected accounts with no path back. *)
 let ensure_valid_access_token
     ?(policy = Refresh_types.default_policy)
     ?(map_load_error = fun err -> Error_types.Network_error (Error_types.Connection_failed err))
@@ -31,9 +46,20 @@ let ensure_valid_access_token
     ?(map_refresh_error_to_health = fun err ->
       match err with
       | Error_types.Auth_error Error_types.Missing_credentials ->
-          (Health_status.(to_string Token_expired), "No refresh token available")
-      | _ ->
-          (Health_status.(to_string Refresh_failed), Error_types.error_to_string err))
+          Some (Health_status.(to_string Token_expired), "No refresh token available")
+      | Error_types.Auth_error _
+      | Error_types.Validation_error _
+      | Error_types.Rate_limited _
+      | Error_types.Api_error _
+      | Error_types.Network_error _
+      | Error_types.Duplicate_content
+      | Error_types.Content_policy_violation _
+      | Error_types.Resource_not_found _
+      | Error_types.Internal_error _ ->
+          Option.map
+            (fun status ->
+               (Health_status.to_string status, Error_types.error_to_string err))
+            (Health_status.of_error err))
     ?(on_refresh_attempt = fun ~attempt:_ -> ())
     ?(on_refresh_success = fun ~attempt:_ _credentials -> ())
     ?(on_refresh_failure = fun ~attempt:_ _error -> ())
@@ -74,8 +100,9 @@ let ensure_valid_access_token
            if attempt < attempts && should_retry_refresh_error err then
              sleep_before_retry ~attempt (fun () -> loop (attempt + 1) credentials)
            else
-             let status, message = map_refresh_error_to_health err in
-             fail_health status message err)
+             match map_refresh_error_to_health err with
+             | None -> on_error err
+             | Some (status, message) -> fail_health status message err)
     in
     loop 1 current_credentials
   in
