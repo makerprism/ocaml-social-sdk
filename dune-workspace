@@ -1,2 +1,20 @@
 (lang dune 3.16)
 (context default)
+
+; Keep the resolver off ocaml-compiler 5.5.0.
+;
+; 5.5.0's opam file uses the "build-id" variable, which no dune with a binary
+; release understands yet. 3.21.0 is the newest binary release, so both CI and
+; anyone who installed dune from ocaml-dune/dune-bin hit
+;
+;   File "packages/ocaml-compiler/ocaml-compiler.5.5.0/opam", line 1:
+;   Error: Variable "build-id" is not supported.
+;
+; and "dune pkg lock" fails outright. That is what kept CI red from 2026-05-12
+; onward: every run died in "Lock dependencies" and never reached build or
+; test. Resolution picks 5.4.1 with or without this constraint; the constraint
+; only stops 5.5.0 being considered in the first place.
+;
+; Drop this once a dune with a binary release can read 5.5.0's opam file.
+(lock_dir
+ (constraints (ocaml (< 5.5.0))))

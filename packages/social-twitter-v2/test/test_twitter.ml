@@ -5162,6 +5162,19 @@ let test_video_codec_container_failure_mapping () =
   assert (!video_codec_tweet_posts = 0);
   print_endline "✓ Video codec/container failure mapping test passed"
 
+(* Mirrors [chunk_size] in twitter_v2.ml. Named rather than inlined so that
+   changing the provider's chunk size is one edit here instead of three stale
+   literals: the expectations below were left at the old 5 MiB value when
+   e7fa865 dropped the provider to 1 MiB, and CI could not catch it because CI
+   had been failing before it reached the test step. *)
+let contract_chunk_size = 1024 * 1024
+
+(* Just over ten chunks, so the last APPEND is a short one. *)
+let contract_video_size = (10 * contract_chunk_size) + 1024
+
+let contract_expected_chunks =
+  (contract_video_size + contract_chunk_size - 1) / contract_chunk_size
+
 let contract_seen_phases = ref []
 let contract_seen_segments = ref []
 let contract_init_total_bytes = ref None
@@ -5173,7 +5186,7 @@ let contract_tweet_post_count = ref 0
 module Mock_http_chunked_contract : Social_core.HTTP_CLIENT = struct
   let get ?headers:_ url on_success _on_error =
     if String.ends_with ~suffix:".mp4" url then
-      let big_video = String.make ((5 * 1024 * 1024 * 2) + 1024) 'v' in
+      let big_video = String.make contract_video_size 'v' in
       on_success {
         Social_core.status = 200;
         headers = [("content-type", "video/mp4")];
@@ -5250,7 +5263,7 @@ module Mock_http_chunked_contract : Social_core.HTTP_CLIENT = struct
       | None -> failwith "APPEND missing media part"
     in
     assert (media_part.Social_core.content_type = Some "application/octet-stream");
-    assert (String.length media_part.Social_core.content <= (5 * 1024 * 1024));
+    assert (String.length media_part.Social_core.content <= contract_chunk_size);
     contract_seen_segments := !contract_seen_segments @ [seg];
     contract_seen_append_media_chunks :=
       !contract_seen_append_media_chunks @ [String.length media_part.Social_core.content];
@@ -5315,12 +5328,15 @@ let test_chunked_upload_contract_init_append_finalize () =
    | Some (Error err) -> failwith ("Chunked contract test failed: " ^ err)
    | None -> failwith "No result in chunked contract test");
 
-  assert (!contract_seen_phases = ["INIT"; "APPEND"; "APPEND"; "APPEND"; "FINALIZE"]);
-  assert (!contract_seen_segments = [0; 1; 2]);
+  assert (
+    !contract_seen_phases
+    = ("INIT" :: List.init contract_expected_chunks (fun _ -> "APPEND"))
+      @ [ "FINALIZE" ]);
+  assert (!contract_seen_segments = List.init contract_expected_chunks (fun i -> i));
   assert (!contract_init_media_type = Some "video/mp4");
   assert (!contract_init_media_category = Some "tweet_video");
-  assert (!contract_init_total_bytes = Some ((5 * 1024 * 1024 * 2) + 1024));
-  assert (List.length !contract_seen_append_media_chunks = 3);
+  assert (!contract_init_total_bytes = Some contract_video_size);
+  assert (List.length !contract_seen_append_media_chunks = contract_expected_chunks);
   assert (!contract_tweet_post_count = 1);
   print_endline "✓ Chunked upload INIT/APPEND/FINALIZE contract test passed"
 
