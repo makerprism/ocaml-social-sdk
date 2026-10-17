@@ -105,6 +105,9 @@ Exchange authorization code for access token with PKCE.
 #### `post_single`
 Upload video to YouTube Shorts.
 
+Pass `~recording_location:{ YouTube.latitude = 52.52; longitude = 13.405 }` to
+set the video's recording location (`recordingDetails.location`).
+
 #### `refresh_access_token`
 Refresh expired access token.
 

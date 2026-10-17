@@ -162,7 +162,7 @@ The SDK follows a runtime-agnostic design:
 | Bluesky | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
 | LinkedIn | ✅ | ✅ | ✅ | - | - | - | ⚠️ | ⚠️ |
 | Mastodon | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
-| Facebook | ✅ | ✅ | ✅ | - | ⚠️ | ✅ | ⚠️ | ⚠️ |
+| Facebook | ✅ | ✅ | ✅ | - | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 | Instagram | ✅ | ✅ | ✅ | - | ⚠️ | ✅ | ⚠️ | ⚠️ |
 | Threads | ✅ | ✅ | ✅ | ✅ | - | - | ⚠️ | ⚠️ |
 | YouTube | ✅ | ✅ | ✅ | - | - | ✅ | ⚠️ | ⚠️ |

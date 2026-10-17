@@ -440,7 +440,11 @@ end
 
 (** Make functor to create Facebook provider with given configuration *)
 module Make (Config : CONFIG) = struct
-  let graph_api_base = "https://graph.facebook.com/v25.0"
+  let graph_api_version = "v25.0"
+  let graph_api_base = "https://graph.facebook.com/" ^ graph_api_version
+
+  (** Host for Reels hosted-file uploads; versioned in lockstep with the Graph API. *)
+  let rupload_base = "https://rupload.facebook.com/video-upload/" ^ graph_api_version
   module OAuth_http = OAuth.Make(Config.Http)
   
   (** {1 Platform Constants} *)
@@ -1220,36 +1224,31 @@ module Make (Config : CONFIG) = struct
         on_result
           (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
   
-  (** Upload video to Facebook Page as a Reel.
+  (** {1 Page video upload phases (video_reels, video_stories)} *)
 
-      Uses the /{page_id}/videos endpoint with file_url, which lets Facebook
-      download and process the video. The response includes the video ID and
-      permalink once processing completes.
+  (** Form params for one Page video upload phase: [params] followed by the
+      Page token and, when FACEBOOK_APP_SECRET is set, its appsecret_proof. *)
+  let page_token_form_params ~page_access_token params =
+    params
+    @ [("access_token", page_access_token)]
+    @ (match compute_app_secret_proof ~access_token:page_access_token with
+       | Some proof -> [("appsecret_proof", proof)]
+       | None -> [])
 
-      @see <https://developers.facebook.com/docs/video-api/guides/reels-publishing>
-  *)
-  let upload_video_reel_typed ~page_id ~page_access_token ~video_url ~description on_success on_error =
-    let url = Printf.sprintf "%s/%s/videos?fields=id,permalink_url" graph_api_base page_id in
-    let json_body = `Assoc [
-      ("file_url", `String video_url);
-      ("description", `String description);
-      ("published", `Bool true);
-    ] |> Yojson.Basic.to_string in
-    let headers = [
-      ("Content-Type", "application/json");
-      ("Authorization", Printf.sprintf "Bearer %s" page_access_token);
-    ] in
-    Config.Http.post ~headers ~body:json_body url
+  (** POST one upload phase to [/{page_id}/{edge}] as a urlencoded form.
+
+      A 2xx hands the raw response body to [on_success]; any other status is
+      mapped through [parse_api_error_with_permissions], because both edges
+      need [pages_manage_posts]. *)
+  let post_video_upload_phase ~page_id ~edge ~page_access_token ~params on_success on_error =
+    let url = Printf.sprintf "%s/%s/%s" graph_api_base page_id edge in
+    let body = Social_core.form_urlencode_kvs (page_token_form_params ~page_access_token params) in
+    let headers = [("Content-Type", "application/x-www-form-urlencoded")] in
+    Config.Http.post ~headers ~body url
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then
-          try
-            let open Yojson.Basic.Util in
-            let json = Yojson.Basic.from_string response.body in
-            let video_id = json |> member "id" |> to_string in
-            on_success video_id
-          with e ->
-            on_error (Error_types.Internal_error (Printf.sprintf "Failed to parse reel response: %s" (Printexc.to_string e)))
+          on_success response.body
         else
           on_error (parse_api_error_with_permissions
             ~required_permissions:["pages_manage_posts"]
@@ -1257,14 +1256,96 @@ module Make (Config : CONFIG) = struct
             ~response_body:response.body))
       (fun err -> on_error (Error_types.Internal_error err))
 
+  (** The Reels upload and finish phases answer [{"success": true}]. A 2xx
+      with [success: false], or with no such flag, means Facebook did not
+      accept the phase, so the reel must not be reported as published. *)
+  let require_reel_phase_success ~phase body on_success on_error =
+    let succeeded =
+      try Yojson.Basic.Util.(Yojson.Basic.from_string body |> member "success" |> to_bool) with
+      | Yojson.Json_error _ | Yojson.Basic.Util.Type_error _ -> false
+    in
+    if succeeded then on_success ()
+    else
+      on_error (Error_types.Internal_error
+        (Printf.sprintf "Facebook reel %s phase did not succeed: %s" phase body))
 
-  let upload_video_reel ~page_id ~page_access_token ~video_url ~description on_success on_error =
-    upload_video_reel_typed ~page_id ~page_access_token ~video_url ~description
+  (** Upload and publish a Reel on a Facebook Page.
+
+      Follows the Reels Publishing API with a hosted file:
+      + [POST /{page_id}/video_reels] with [upload_phase=start] returns a [video_id].
+      + [POST https://rupload.facebook.com/video-upload/{version}/{video_id}]
+        with headers [Authorization: OAuth {page_token}] and [file_url: {video_url}]
+        makes Facebook fetch the video itself.
+      + [POST /{page_id}/video_reels] with [upload_phase=finish],
+        [video_state=PUBLISHED], [description] and optional [place] publishes it.
+
+      Facebook processes the video after the finish phase, so the reel can take
+      a few minutes to appear on the Page.
+
+      @param place Facebook Page ID of a location to tag the reel with. Only sent when given.
+      @param on_success Receives the [video_id], which is also the reel's post id.
+      @see <https://developers.facebook.com/docs/video-api/guides/reels-publishing>
+  *)
+  let upload_video_reel_typed ~page_id ~page_access_token ~video_url ~description ?place on_success on_error =
+    let finish video_id =
+      let params =
+        [ ("upload_phase", "finish");
+          ("video_id", video_id);
+          ("video_state", "PUBLISHED");
+          ("description", description) ]
+        @ (match place with
+           | Some p -> [("place", p)]
+           | None -> [])
+      in
+      post_video_upload_phase ~page_id ~edge:"video_reels" ~page_access_token ~params
+        (fun body ->
+          require_reel_phase_success ~phase:"finish" body
+            (fun () -> on_success video_id)
+            on_error)
+        on_error
+    in
+    let upload video_id =
+      let url = Printf.sprintf "%s/%s" rupload_base video_id in
+      let headers = [
+        ("Authorization", Printf.sprintf "OAuth %s" page_access_token);
+        ("file_url", video_url);
+      ] in
+      Config.Http.post ~headers ~body:"" url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            require_reel_phase_success ~phase:"upload" response.body
+              (fun () -> finish video_id)
+              on_error
+          else
+            on_error (parse_api_error_with_permissions
+              ~required_permissions:["pages_manage_posts"]
+              ~status_code:response.status
+              ~response_body:response.body))
+        (fun err -> on_error (Error_types.Internal_error (redact_sensitive_text_if_needed err)))
+    in
+    post_video_upload_phase ~page_id ~edge:"video_reels" ~page_access_token
+      ~params:[("upload_phase", "start")]
+      (fun body ->
+        match Yojson.Basic.Util.(Yojson.Basic.from_string body |> member "video_id" |> to_string) with
+        | video_id -> upload video_id
+        | exception (Yojson.Json_error _ | Yojson.Basic.Util.Type_error _) ->
+            on_error (Error_types.Internal_error
+              (Printf.sprintf "Failed to parse reel start response: %s" body)))
+      on_error
+
+  let upload_video_reel ~page_id ~page_access_token ~video_url ~description ?place on_success on_error =
+    upload_video_reel_typed ~page_id ~page_access_token ~video_url ~description ?place
       on_success
       (fun err -> on_error (Error_types.error_to_string err))
-  
-  (** Post Reel (short-form video) to Facebook Page *)
-  let post_reel ~account_id ~text ~video_url on_result =
+
+  (** Post Reel (short-form video) to Facebook Page.
+
+      Runs {!upload_video_reel_typed}. An auth failure in any phase triggers
+      one Page-token recovery and a retry of the whole flow.
+
+      @param place Facebook Page ID of a location to tag the reel with.
+  *)
+  let post_reel ~account_id ~text ~video_url ?place on_result =
     (* Validate caption *)
     match validate_post ~text ~media_count:1 () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
@@ -1272,7 +1353,7 @@ module Make (Config : CONFIG) = struct
         with_posting_page_context ~account_id
           (fun page_id page_access_token ->
             let rec attempt_post ~can_recover token =
-              upload_video_reel_typed ~page_id ~page_access_token:token ~video_url ~description:text
+              upload_video_reel_typed ~page_id ~page_access_token:token ~video_url ~description:text ?place
                 (fun video_id -> on_result (Error_types.Success video_id))
                 (fun parsed ->
                   if can_recover && is_recoverable_posting_auth_error parsed then
@@ -1385,106 +1466,70 @@ module Make (Config : CONFIG) = struct
       @param on_result Continuation receiving api_result with story ID
   *)
   let upload_video_story ~page_id ~page_access_token ~video_url on_result =
+    let on_error err = on_result (Error err) in
     (* Download video first *)
     Config.Http.get ~headers:[] video_url
       (fun video_response ->
         if video_response.status >= 200 && video_response.status < 300 then
           let video_content = video_response.body in
           let video_size = String.length video_content in
-          
-          (* Step 1: Initialize the upload session for video story *)
-          let init_url = Printf.sprintf "%s/%s/video_stories" graph_api_base page_id in
-          
-          let init_params = [
-            ("upload_phase", "start");
-            ("access_token", page_access_token);
-          ] @
-          (match compute_app_secret_proof ~access_token:page_access_token with
-           | Some proof -> [("appsecret_proof", proof)]
-           | None -> [])
-          in
 
-          let init_body = Social_core.form_urlencode_kvs init_params in
-          let headers = [
-            ("Content-Type", "application/x-www-form-urlencoded");
-          ] in
-          
-          Config.Http.post ~headers ~body:init_body init_url
-            (fun init_response ->
-              update_rate_limits init_response;
-              if init_response.status >= 200 && init_response.status < 300 then
+          (* Step 3: Finish the upload and publish the story *)
+          let finish video_id =
+            post_video_upload_phase ~page_id ~edge:"video_stories" ~page_access_token
+              ~params:[("upload_phase", "finish"); ("video_id", video_id)]
+              (fun body ->
                 try
                   let open Yojson.Basic.Util in
-                  let json = Yojson.Basic.from_string init_response.body in
-                  let video_id = json |> member "video_id" |> to_string in
-                  let upload_url = json |> member "upload_url" |> to_string in
-                  
-                  (* Step 2: Upload video file to the upload_url *)
-                  let upload_headers = [
-                    ("Authorization", Printf.sprintf "OAuth %s" page_access_token);
-                    ("file_size", string_of_int video_size);
-                  ] in
-                  
-                  Config.Http.post ~headers:upload_headers ~body:video_content upload_url
-                    (fun upload_response ->
-                      if upload_response.status >= 200 && upload_response.status < 300 then
-                        (* Step 3: Finish the upload and publish the story *)
-                        let finish_url = Printf.sprintf "%s/%s/video_stories" graph_api_base page_id in
-                        
-                        let finish_params = [
-                          ("upload_phase", "finish");
-                          ("video_id", video_id);
-                          ("access_token", page_access_token);
-                        ] @
-                        (match compute_app_secret_proof ~access_token:page_access_token with
-                         | Some proof -> [("appsecret_proof", proof)]
-                         | None -> [])
-                        in
+                  let json = Yojson.Basic.from_string body in
+                  (* Check for success and extract post_id *)
+                  let success =
+                    try json |> member "success" |> to_bool
+                    with _ -> true
+                  in
+                  if success then
+                    let story_id =
+                      try json |> member "post_id" |> to_string
+                      with _ -> video_id
+                    in
+                    on_result (Ok story_id)
+                  else
+                    on_result (Error (Error_types.Internal_error "Facebook video story upload failed: success=false"))
+                with _e ->
+                  (* If we can't parse but got 2xx, consider it a success *)
+                  on_result (Ok video_id))
+              on_error
+          in
 
-                        let finish_body = Social_core.form_urlencode_kvs finish_params in
-                        Config.Http.post ~headers ~body:finish_body finish_url
-                          (fun finish_response ->
-                            update_rate_limits finish_response;
-                            if finish_response.status >= 200 && finish_response.status < 300 then
-                              try
-                                let open Yojson.Basic.Util in
-                                let json = Yojson.Basic.from_string finish_response.body in
-                                (* Check for success and extract post_id *)
-                                let success = 
-                                  try json |> member "success" |> to_bool 
-                                  with _ -> true
-                                in
-                                if success then
-                                  let story_id =
-                                    try json |> member "post_id" |> to_string
-                                    with _ -> video_id
-                                  in
-                                  on_result (Ok story_id)
-                                else
-                                  on_result (Error (Error_types.Internal_error "Facebook video story upload failed: success=false"))
-                              with _e ->
-                                (* If we can't parse but got 2xx, consider it a success *)
-                                on_result (Ok video_id)
-                            else
-                              on_result (Error (parse_api_error_with_permissions
-                                ~required_permissions:["pages_manage_posts"]
-                                ~status_code:finish_response.status
-                                ~response_body:finish_response.body)))
-                          (fun err -> on_result (Error (Error_types.Internal_error err)))
-                      else
-                        on_result (Error (parse_api_error_with_permissions
-                          ~required_permissions:["pages_manage_posts"]
-                          ~status_code:upload_response.status
-                          ~response_body:upload_response.body)))
-                    (fun err -> on_result (Error (Error_types.Internal_error err)))
-                with e ->
-                  on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse video story init response: %s" (Printexc.to_string e))))
-              else
-                on_result (Error (parse_api_error_with_permissions
-                  ~required_permissions:["pages_manage_posts"]
-                  ~status_code:init_response.status
-                  ~response_body:init_response.body)))
-            (fun err -> on_result (Error (Error_types.Internal_error err)))
+          (* Step 1: Initialize the upload session for video story *)
+          post_video_upload_phase ~page_id ~edge:"video_stories" ~page_access_token
+            ~params:[("upload_phase", "start")]
+            (fun body ->
+              try
+                let open Yojson.Basic.Util in
+                let json = Yojson.Basic.from_string body in
+                let video_id = json |> member "video_id" |> to_string in
+                let upload_url = json |> member "upload_url" |> to_string in
+
+                (* Step 2: Upload video file to the upload_url *)
+                let upload_headers = [
+                  ("Authorization", Printf.sprintf "OAuth %s" page_access_token);
+                  ("file_size", string_of_int video_size);
+                ] in
+
+                Config.Http.post ~headers:upload_headers ~body:video_content upload_url
+                  (fun upload_response ->
+                    if upload_response.status >= 200 && upload_response.status < 300 then
+                      finish video_id
+                    else
+                      on_error (parse_api_error_with_permissions
+                        ~required_permissions:["pages_manage_posts"]
+                        ~status_code:upload_response.status
+                        ~response_body:upload_response.body))
+                  (fun err -> on_error (Error_types.Internal_error err))
+              with e ->
+                on_error (Error_types.Internal_error (Printf.sprintf "Failed to parse video story init response: %s" (Printexc.to_string e))))
+            on_error
         else
           on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to download video from %s (%d)" video_url video_response.status))))
       (fun err ->

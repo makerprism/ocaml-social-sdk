@@ -1031,6 +1031,69 @@ let test_notify_subscribers_default () =
           failwith ("notify_subscribers default test failed: " ^ Error_types.error_to_string err)
       | _ -> failwith "Unexpected outcome for notify_subscribers default")
 
+(** Test: recording_location adds recordingDetails to the resource and to [part] *)
+let test_recording_location_included () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = "vid"; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/loc")] };
+    { status = 200; body = {|{"id":"loc_1"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Recorded in Berlin"
+    ~media_urls:["https://example.com/v.mp4"]
+    ~recording_location:{ YouTube.latitude = 52.52; longitude = 13.405 }
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid ->
+          assert (vid = "loc_1");
+          let requests = List.rev !Mock_http.requests in
+          let (_, init_url, _, init_body) = List.nth requests 1 in
+          assert (string_contains init_url "part=snippet,status,recordingDetails&");
+          let open Yojson.Basic.Util in
+          let recording_details = Yojson.Basic.from_string init_body |> member "recordingDetails" in
+          let location = recording_details |> member "location" in
+          assert (location |> member "latitude" |> to_number = 52.52);
+          assert (location |> member "longitude" |> to_number = 13.405);
+          assert (recording_details |> member "locationDescription" = `Null);
+          assert (not (string_contains init_body "locationDescription"));
+          print_endline "PASS recording_location adds recordingDetails and part"
+      | Error_types.Failure err ->
+          failwith ("recording_location test failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for recording_location")
+
+(** Test: without recording_location, neither recordingDetails nor its part is sent *)
+let test_recording_location_omitted () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+
+  Mock_http.set_responses [
+    { status = 200; body = "vid"; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/noloc")] };
+    { status = 200; body = {|{"id":"noloc_1"}|}; headers = [] };
+  ];
+
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"No location"
+    ~media_urls:["https://example.com/v.mp4"]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success _ ->
+          let requests = List.rev !Mock_http.requests in
+          let (_, init_url, _, init_body) = List.nth requests 1 in
+          assert (string_contains init_url "part=snippet,status&");
+          assert (not (string_contains init_url "recordingDetails"));
+          assert (not (string_contains init_body "recordingDetails"));
+          print_endline "PASS no recording_location sends no recordingDetails"
+      | Error_types.Failure err ->
+          failwith ("recording_location omitted test failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for recording_location omitted")
+
 (** Test: update_video sends PUT to /youtube/v3/videos *)
 let test_update_video () =
   Mock_config.reset ();
@@ -1376,6 +1439,11 @@ let () =
   test_notify_subscribers_default ();
 
   print_endline "";
+  print_endline "--- Recording Location Tests ---";
+  test_recording_location_included ();
+  test_recording_location_omitted ();
+
+  print_endline "";
   print_endline "--- Video Update Tests ---";
   test_update_video ();
   test_update_video_no_fields ();
@@ -1405,8 +1473,9 @@ let () =
   print_endline "  - Scopes (1 test)";
   print_endline "  - Scheduled publishing (1 test)";
   print_endline "  - Notify subscribers (2 tests)";
+  print_endline "  - Recording location (2 tests)";
   print_endline "  - Video update (4 tests)";
   print_endline "  - Playlist management (4 tests)";
   print_endline "  - Upload recovery (2 tests)";
   print_endline "";
-  print_endline "Total: 36 test functions"
+  print_endline "Total: 38 test functions"

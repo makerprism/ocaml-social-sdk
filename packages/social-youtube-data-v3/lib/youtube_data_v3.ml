@@ -1030,6 +1030,25 @@ module Make (Config : CONFIG) = struct
             (fun err -> on_result (Error (Error_types.Internal_error err))))
         (fun err -> on_result (Error err))
   
+  (** Where a video was recorded, in WGS 84 decimal degrees.
+
+      Sent as [recordingDetails.location]. YouTube rejects out-of-range values
+      (latitude outside [-90, 90], longitude outside [-180, 180]). *)
+  type recording_location = {
+    latitude : float;
+    longitude : float;
+  }
+
+  (** [recordingDetails] resource fragment for a recording location. The
+      deprecated [locationDescription] is deliberately never sent. *)
+  let recording_details_json { latitude; longitude } =
+    `Assoc [
+      ("location", `Assoc [
+        ("latitude", `Float latitude);
+        ("longitude", `Float longitude);
+      ]);
+    ]
+
   (** Upload video to YouTube Shorts
 
       @param validate_media_before_upload When true, validates video file size after
@@ -1039,8 +1058,11 @@ module Make (Config : CONFIG) = struct
              When set, privacy is automatically forced to "private".
       @param notify_subscribers When false, suppresses subscriber notifications.
              Default: true
+      @param recording_location Where the video was recorded. When given, the
+             upload adds [recordingDetails] to both the video resource and the
+             [part] parameter. Omitted by default.
   *)
-  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(title="") ?(description="") ?(privacy_status="public") ?(tags=[]) ?(made_for_kids=false) ?(category_id="22") ?(validate_media_before_upload=false) ?publish_at ?(notify_subscribers=true) on_result =
+  let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(title="") ?(description="") ?(privacy_status="public") ?(tags=[]) ?(made_for_kids=false) ?(category_id="22") ?(validate_media_before_upload=false) ?publish_at ?(notify_subscribers=true) ?recording_location on_result =
     let _ = alt_texts in (* YouTube doesn't support alt text for videos *)
     let media_count = List.length media_urls in
     match validate_post ~text ~media_count () with
@@ -1114,7 +1136,7 @@ module Make (Config : CONFIG) = struct
                   in
 
                   (* Step 1: Initialize resumable upload with metadata *)
-                  let video_metadata = `Assoc [
+                  let video_metadata = `Assoc ([
                     ("snippet", `Assoc [
                       ("title", `String resolved_title);
                       ("description", `String resolved_description);
@@ -1122,10 +1144,17 @@ module Make (Config : CONFIG) = struct
                       ("categoryId", `String category_id);
                     ]);
                     ("status", `Assoc status_fields);
-                  ] in
+                  ] @ (match recording_location with
+                       | Some location -> [("recordingDetails", recording_details_json location)]
+                       | None -> [])) in
 
+                  let parts =
+                    match recording_location with
+                    | Some _ -> "snippet,status,recordingDetails"
+                    | None -> "snippet,status"
+                  in
                   let notify_param = if notify_subscribers then "true" else "false" in
-                  let init_url = youtube_upload_base ^ "/videos?uploadType=resumable&part=snippet,status&notifySubscribers=" ^ notify_param in
+                  let init_url = youtube_upload_base ^ "/videos?uploadType=resumable&part=" ^ parts ^ "&notifySubscribers=" ^ notify_param in
                   let init_headers = [
                     ("Authorization", "Bearer " ^ access_token);
                     ("Content-Type", "application/json");

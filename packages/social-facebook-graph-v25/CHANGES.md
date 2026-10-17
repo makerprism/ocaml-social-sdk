@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reels publish through the documented Reels Publishing API.**
+  `upload_video_reel_typed` (and so `post_reel`) used to post `file_url` to
+  `/{page_id}/videos`, which is not the Reels flow and has no `place`
+  parameter. It now runs `upload_phase=start` on `/{page_id}/video_reels`, a
+  hosted-file upload to `rupload.facebook.com/video-upload/v25.0/{video_id}`
+  (`Authorization: OAuth`, `file_url` header), then `upload_phase=finish` with
+  `video_state=PUBLISHED`. A 2xx upload or finish response without
+  `"success": true` is now a failure instead of a silent success. Token
+  recovery still retries the whole flow once.
+
 - **Page-token recovery no longer reports unrecognised health statuses.**
   `recover_page_access_token` wrote the literals `"token_recovered"` and
   `"token_recovery_failed"`, neither of which any consumer recognises. A
@@ -42,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reason.
 
 ### Added
+
+- `post_reel`, `upload_video_reel_typed` and `upload_video_reel` take an
+  optional `?place` (a location Page ID), sent on the Reels finish phase.
 
 #### Authentication
 - OAuth 2.0 authentication flow

@@ -121,7 +121,11 @@ FACEBOOK_REDIRECT_URI=https://yourapp.com/callback
 
 ### Videos (Reels)
 - Facebook Reels supported via `post_reel` function
-- Uses three-step upload process: initialize, upload binary, publish
+- Uses the Reels Publishing API with a hosted file: `upload_phase=start` on
+  `/{page_id}/video_reels`, a `file_url` upload to `rupload.facebook.com`, then
+  `upload_phase=finish` with `video_state=PUBLISHED`. Facebook fetches the video
+  itself, so the SDK never downloads it
+- Optional `?place` (a location Page ID) tags the reel with a location
 - Maximum duration: 90 seconds
 - Recommended aspect ratio: 9:16 (vertical)
 - Supported formats: MP4, MOV
@@ -178,6 +182,7 @@ Post a Reel (short-form vertical video) to a Facebook Page.
 ```ocaml
 Facebook.post_reel ~account_id ~text:"Check out this video!" 
   ~video_url:"https://example.com/video.mp4"
+  ~place:"110843418940484" (* optional location Page ID *)
   (fun post_id -> Printf.printf "Reel posted: %s\n" post_id)
   (fun err -> Printf.eprintf "Error: %s\n" err)
 ```

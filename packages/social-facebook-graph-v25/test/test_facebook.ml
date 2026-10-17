@@ -2216,22 +2216,27 @@ let test_validate_story_invalid_format () =
 
 (** {1 Video Reel Tests} *)
 
-(** Test: Upload video reel (3-phase resumable upload)
-    
-    Tests the Facebook Reel upload flow which uses:
-    1. Initialize upload session (upload_phase=start)
-    2. Upload video binary to upload_url
-    3. Finish upload (upload_phase=finish)
-    
+(** Responses for one successful Reels flow: start, hosted upload, finish. *)
+let reel_success_responses ~video_id : response list = [
+  { status = 200;
+    body = Printf.sprintf {|{"video_id": "%s", "upload_url": "https://rupload.facebook.com/video-upload/v25.0/%s"}|} video_id video_id;
+    headers = [] };
+  { status = 200; body = {|{"success": true}|}; headers = [] };
+  { status = 200; body = {|{"success": true}|}; headers = [] };
+]
+
+(** Test: Upload video reel (Reels Publishing API, hosted file)
+
+    1. POST /{page_id}/video_reels with upload_phase=start
+    2. POST rupload.facebook.com/video-upload/v25.0/{video_id} with file_url header
+    3. POST /{page_id}/video_reels with upload_phase=finish, video_state=PUBLISHED
+
     @see <https://developers.facebook.com/docs/video-api/guides/reels-publishing>
 *)
 let test_upload_video_reel () =
   Mock_config.reset ();
 
-  Mock_http.set_responses [
-    (* POST to /{page_id}/videos with file_url - returns video ID *)
-    { status = 200; body = {|{"id": "reel_video_123"}|}; headers = [] };
-  ];
+  Mock_http.set_responses (reel_success_responses ~video_id:"reel_video_123");
 
   Facebook.upload_video_reel
     ~page_id:"page_123"
@@ -2240,14 +2245,91 @@ let test_upload_video_reel () =
     ~description:"My first Reel!"
     (fun video_id ->
       assert (video_id = "reel_video_123");
-      (* Verify the request was POST to /{page_id}/videos with file_url *)
-      let requests = !Mock_http.requests in
-      let has_video_post = List.exists (fun (_, url, _, body) ->
-        string_contains url "page_123/videos" && string_contains body "file_url"
-      ) requests in
-      assert has_video_post;
-      print_endline "✓ Upload video reel (file_url)")
+      (match List.rev !Mock_http.requests with
+       | [ ("POST", start_url, start_headers, start_body);
+           ("POST", upload_url, upload_headers, upload_body);
+           ("POST", finish_url, _, finish_body) ] ->
+           assert (start_url = "https://graph.facebook.com/v25.0/page_123/video_reels");
+           assert (List.assoc_opt "Content-Type" start_headers
+                   = Some "application/x-www-form-urlencoded");
+           assert (start_body = "upload_phase=start&access_token=test_token");
+
+           assert (upload_url = "https://rupload.facebook.com/video-upload/v25.0/reel_video_123");
+           assert (List.assoc_opt "Authorization" upload_headers = Some "OAuth test_token");
+           assert (List.assoc_opt "file_url" upload_headers = Some "https://example.com/reel.mp4");
+           assert (upload_body = "");
+
+           assert (finish_url = "https://graph.facebook.com/v25.0/page_123/video_reels");
+           assert (string_contains finish_body "upload_phase=finish");
+           assert (string_contains finish_body "video_id=reel_video_123");
+           assert (string_contains finish_body "video_state=PUBLISHED");
+           assert (string_contains finish_body "description=My");
+           assert (string_contains finish_body "access_token=test_token");
+           assert (not (string_contains finish_body "place="));
+           assert (not (string_contains finish_body "appsecret_proof"))
+       | _ -> failwith "Expected start, hosted upload and finish requests in order");
+      print_endline "✓ Upload video reel (start, hosted upload, finish)")
     (fun err -> failwith ("Upload video reel failed: " ^ err))
+
+(** Test: place and appsecret_proof reach the reel phases that take them *)
+let test_upload_video_reel_with_place () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "test_app_secret";
+
+  Mock_http.set_responses (reel_success_responses ~video_id:"reel_place_1");
+
+  Facebook.upload_video_reel
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~video_url:"https://example.com/reel.mp4"
+    ~description:"Reel at a place"
+    ~place:"place_98765"
+    (fun video_id ->
+      assert (video_id = "reel_place_1");
+      (match List.rev !Mock_http.requests with
+       | [ (_, _, _, start_body); _; (_, _, _, finish_body) ] ->
+           assert (not (string_contains start_body "place="));
+           assert (string_contains start_body "appsecret_proof=");
+           assert (string_contains finish_body "place=place_98765");
+           assert (string_contains finish_body "appsecret_proof=")
+       | _ -> failwith "Expected three reel requests");
+      print_endline "✓ Upload video reel sends place on finish only")
+    (fun err -> failwith ("Upload video reel with place failed: " ^ err))
+
+(** Run one reel upload against [responses] and expect a failure *)
+let expect_reel_upload_failure ~name ~responses ~expected_requests =
+  Mock_config.reset ();
+  Mock_http.set_responses responses;
+  Facebook.upload_video_reel_typed
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~video_url:"https://example.com/reel.mp4"
+    ~description:"Should fail"
+    (fun video_id -> failwith (Printf.sprintf "%s: expected failure, got video %s" name video_id))
+    (fun _err ->
+      assert (List.length !Mock_http.requests = expected_requests);
+      Printf.printf "✓ Upload video reel fails: %s\n" name)
+
+(** Test: success=false and non-2xx at each phase fail the reel *)
+let test_upload_video_reel_failures () =
+  let start = List.hd (reel_success_responses ~video_id:"vid_f") in
+  let ok = { status = 200; body = {|{"success": true}|}; headers = [] } in
+  let not_ok = { status = 200; body = {|{"success": false}|}; headers = [] } in
+  let server_error = { status = 500; body = {|{"error":{"message":"boom","type":"FacebookApiException","code":2}}|}; headers = [] } in
+  expect_reel_upload_failure ~name:"start non-2xx"
+    ~responses:[server_error] ~expected_requests:1;
+  expect_reel_upload_failure ~name:"start without video_id"
+    ~responses:[ok] ~expected_requests:1;
+  expect_reel_upload_failure ~name:"upload success=false"
+    ~responses:[start; not_ok] ~expected_requests:2;
+  expect_reel_upload_failure ~name:"upload non-2xx"
+    ~responses:[start; server_error] ~expected_requests:2;
+  expect_reel_upload_failure ~name:"finish success=false"
+    ~responses:[start; ok; not_ok] ~expected_requests:3;
+  expect_reel_upload_failure ~name:"finish without success flag"
+    ~responses:[start; ok; { status = 200; body = "{}"; headers = [] }] ~expected_requests:3;
+  expect_reel_upload_failure ~name:"finish non-2xx"
+    ~responses:[start; ok; server_error] ~expected_requests:3
 
 (** Test: Post reel (high-level) *)
 let test_post_reel () =
@@ -2271,10 +2353,7 @@ let test_post_reel () =
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
   
-  Mock_http.set_responses [
-    (* Single POST to /{page_id}/videos with file_url *)
-    { status = 200; body = {|{"id": "vid_456"}|}; headers = [] };
-  ];
+  Mock_http.set_responses (reel_success_responses ~video_id:"vid_456");
 
   Facebook.post_reel
     ~account_id:"test_account"
@@ -2285,6 +2364,63 @@ let test_post_reel () =
         assert (video_id = "vid_456");
         print_endline "✓ Post reel (high-level)")
       (fun err -> failwith ("Post reel failed: " ^ err)))
+
+(** Test: post_reel forwards place, and an auth error in the finish phase
+    recovers the Page token and reruns the whole flow *)
+let test_post_reel_with_place_recovers_on_finish_auth_error () =
+  Mock_config.reset ();
+
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+
+  let creds = {
+    access_token = "user_token_reel_place";
+    refresh_token = None;
+    expires_at = Some future_time;
+    auth_type = Bearer;
+    scope = None;
+  } in
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+
+  let permission_error = {|{"error":{"message":"(#200) Permissions error","type":"OAuthException","code":200}}|} in
+  let first_attempt =
+    match reel_success_responses ~video_id:"vid_first" with
+    | [start; upload; _finish] -> [start; upload; { status = 400; body = permission_error; headers = [] }]
+    | _ -> failwith "Expected three reel responses"
+  in
+  Mock_http.set_responses (
+    first_attempt
+    @ [ { status = 200; body = {|{"data":[{"id":"page_123","name":"My Page","access_token":"resolved_reel_place_token","category":"Brand"}]}|}; headers = [] } ]
+    @ reel_success_responses ~video_id:"vid_place");
+
+  Facebook.post_reel
+    ~account_id:"test_account"
+    ~text:"Reel with place"
+    ~video_url:"https://example.com/reel.mp4"
+    ~place:"place_98765"
+    (handle_outcome
+      (fun video_id ->
+        assert (video_id = "vid_place");
+        let requests = List.rev !Mock_http.requests in
+        let starts =
+          List.filter (fun (_, _, _, body) -> string_contains body "upload_phase=start") requests
+        in
+        assert (List.length starts = 2);
+        (match List.rev requests with
+         | (_, url, _, finish_body) :: _ ->
+             assert (string_contains url "page_123/video_reels");
+             assert (string_contains finish_body "upload_phase=finish");
+             assert (string_contains finish_body "place=place_98765");
+             assert (string_contains finish_body "access_token=resolved_reel_place_token")
+         | [] -> failwith "Expected reel requests");
+        print_endline "✓ Post reel forwards place and recovers on finish auth error")
+      (fun err -> failwith ("Post reel with place failed: " ^ err)))
 
 (** Test: Post reel does not attempt token recovery on non-auth errors *)
 let test_post_reel_no_recovery_on_non_auth_error () =
@@ -2361,14 +2497,13 @@ let test_post_reel_recovers_on_auth_error () =
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
-  Mock_http.set_responses [
+  Mock_http.set_responses ([
     (* First attempt: auth error *)
     { status = 400; body = permission_error; headers = [] };
     (* Token recovery: /me/accounts *)
     { status = 200; body = {|{"data":[{"id":"page_123","name":"My Page","access_token":"resolved_reel_page_token","category":"Brand"}]}|}; headers = [] };
-    (* Second attempt with recovered token: success *)
-    { status = 200; body = {|{"id": "vid_recovered"}|}; headers = [] };
-  ];
+    (* Second attempt with recovered token: full flow succeeds *)
+  ] @ reel_success_responses ~video_id:"vid_recovered");
 
   Facebook.post_reel
     ~account_id:"test_account"
@@ -2419,14 +2554,13 @@ let test_post_reel_recovers_on_upload_auth_error () =
   Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
-  Mock_http.set_responses [
+  Mock_http.set_responses ([
     (* First attempt: auth error *)
     { status = 400; body = permission_error; headers = [] };
     (* Token recovery: /me/accounts *)
     { status = 200; body = {|{"data":[{"id":"page_123","name":"My Page","access_token":"resolved_reel_upload_token","category":"Brand"}]}|}; headers = [] };
-    (* Second attempt with recovered token: success *)
-    { status = 200; body = {|{"id": "vid_up_2"}|}; headers = [] };
-  ];
+    (* Second attempt with recovered token: full flow succeeds *)
+  ] @ reel_success_responses ~video_id:"vid_up_2");
 
   Facebook.post_reel
     ~account_id:"test_account"
@@ -2481,7 +2615,7 @@ let test_post_reel_no_recovery_on_upload_rate_limit () =
   Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
 
   Mock_http.set_responses [
-    (* Single POST to /{page_id}/videos: rate-limit error *)
+    (* Start phase: rate-limit error *)
     { status = 400; body = rate_limit_error; headers = [] };
   ];
 
@@ -2986,7 +3120,10 @@ let () =
 
   print_endline "\n--- Video Reel Tests ---";
   test_upload_video_reel ();
+  test_upload_video_reel_with_place ();
+  test_upload_video_reel_failures ();
   test_post_reel ();
+  test_post_reel_with_place_recovers_on_finish_auth_error ();
   test_post_reel_no_recovery_on_non_auth_error ();
   test_post_reel_recovers_on_auth_error ();
   test_post_reel_recovers_on_upload_auth_error ();
