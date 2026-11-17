@@ -777,6 +777,27 @@ let test_pkce_generation () =
     assert false
   end
 
+(** Test: PKCE challenge is RFC 7636 S256 (appendix B known answer) *)
+let test_pkce_challenge_rfc7636 () =
+  Printf.printf "Test: PKCE challenge matches RFC 7636 appendix B... ";
+  assert (
+    Mastodon.generate_code_challenge "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+  Printf.printf "✓\n"
+
+(** Test: idempotency keys are random v4 UUIDs *)
+let test_idempotency_uuid () =
+  Printf.printf "Test: idempotency key UUIDs... ";
+  let keys = List.init 32 (fun _ -> Mastodon.generate_uuid ()) in
+  assert (List.length (List.sort_uniq String.compare keys) = 32);
+  List.iter
+    (fun key ->
+      assert (String.length key = 36);
+      assert (key.[14] = '4');
+      assert (String.contains "89ab" key.[19]))
+    keys;
+  Printf.printf "✓\n"
+
 (** Test: PKCE challenge generation *)
 let test_pkce_challenge () =
   Printf.printf "Test: PKCE code challenge generation... ";
@@ -1443,6 +1464,8 @@ let () =
   test_exchange_code_with_pkce ();
   test_exchange_code_missing_scopes ();
   test_pkce_generation ();
+  test_pkce_challenge_rfc7636 ();
+  test_idempotency_uuid ();
   test_pkce_challenge ();
   test_revoke_token ();
   

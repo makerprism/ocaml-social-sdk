@@ -19,15 +19,14 @@ let percent_encode s =
 
 (* ---------- Nonce / timestamp ---------- *)
 
-let () = Random.self_init ()
-
+(* 64 hex characters from 32 CSPRNG bytes. The nonce only has to be unique
+   per timestamp, but drawing it from the OS avoids reseeding the global
+   [Random] state as a side effect of linking this module. *)
 let generate_nonce () =
-  (* Combine timestamp, pid, and random values into a SHA-256 hash for uniqueness *)
-  let seed = Printf.sprintf "%f-%d-%d-%d-%d"
-    (Unix.gettimeofday ()) (Unix.getpid ())
-    (Random.bits ()) (Random.bits ()) (Random.bits ()) in
-  let hash = Digestif.SHA256.digest_string seed in
-  Digestif.SHA256.to_hex hash
+  Secure_random.bytes 32
+  |> String.to_seq
+  |> Seq.map (fun c -> Printf.sprintf "%02x" (Char.code c))
+  |> List.of_seq |> String.concat ""
 
 let generate_timestamp () =
   string_of_int (int_of_float (Unix.time ()))

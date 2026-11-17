@@ -17,3 +17,8 @@
  (name test_health_status)
  (modules test_health_status)
  (libraries social-core))
+
+(test
+ (name test_oauth_pkce)
+ (modules test_oauth_pkce)
+ (libraries social-core))

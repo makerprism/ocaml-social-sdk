@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Security
+
+- PKCE verifiers came from `Stdlib.Random`, which is predictable. They now
+  come from the OS CSPRNG via `Oauth_pkce` (still 64 characters).
+  `generate_code_challenge` delegates to `Oauth_pkce.challenge_s256`.
+- OAuth 1.0a nonces are drawn from `Secure_random` (still 64 hex characters).
+  Linking the package no longer calls `Random.self_init` as a module-init side
+  effect; programs that relied on that to seed their own `Random` must seed
+  it themselves.
+
 ### Changed
 
 - Forbidden 403 responses now carry Twitter's verbatim `detail` text via

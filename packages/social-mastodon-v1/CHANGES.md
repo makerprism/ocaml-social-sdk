@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Security
+
+- PKCE verifiers came from an unseeded `Stdlib.Random`, so every process
+  produced the same verifier sequence. They now come from the OS CSPRNG via
+  `Oauth_pkce` (still 128 characters, now base64url).
+- `Idempotency-Key` UUIDs used the same unseeded generator, so after a restart
+  the first post could reuse a key the instance still remembered and be
+  answered with an earlier status. They now come from `Secure_random`.
+
 ### Fixed
 
 - **Breaking: `revoke_token` now takes `~client_id ~client_secret` and

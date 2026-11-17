@@ -5,13 +5,9 @@
 *)
 
 module Pkce = struct
-  let generate_challenge code_verifier =
-    let digest = Digestif.SHA256.digest_string code_verifier in
-    let raw = Digestif.SHA256.to_raw_string digest in
-    Base64.encode_string ~pad:false raw
-    |> String.map (function '+' -> '-' | '/' -> '_' | c -> c)
-
-  let challenge_method = "S256"
+  let generate_verifier () = Oauth_pkce.generate_verifier ()
+  let generate_challenge = Oauth_pkce.challenge_s256
+  let challenge_method = Oauth_pkce.challenge_method
 end
 
 module Endpoints = struct

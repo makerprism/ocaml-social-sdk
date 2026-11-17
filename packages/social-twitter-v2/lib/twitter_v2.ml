@@ -104,33 +104,18 @@ module OAuth = struct
   
   (** PKCE helpers for OAuth 2.0 with Proof Key for Code Exchange *)
   module Pkce = struct
-    (** Generate a cryptographically random code verifier (43-128 chars)
-        
-        The code verifier is a high-entropy random string using characters
-        [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~" per RFC 7636.
-        
-        @return A 64-character random code verifier string
+    (** Generate a code verifier: 64 base64url characters from 48 bytes of
+        the OS CSPRNG ({!Oauth_pkce.generate_verifier}).
+
+        @raise Failure if the OS entropy source cannot be read
     *)
-    let generate_code_verifier () =
-      (* Use 48 random bytes -> 64 base64url chars *)
-      let random_bytes = Bytes.create 48 in
-      for i = 0 to 47 do
-        Bytes.set random_bytes i (Char.chr (Random.int 256))
-      done;
-      (* Base64-URL encode without padding *)
-      Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet (Bytes.to_string random_bytes)
-    
+    let generate_code_verifier () = Oauth_pkce.generate_verifier ~bytes:48 ()
+
     (** Generate code_challenge from code_verifier using SHA256 (S256 method)
-        
+
         code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
-        
-        @param verifier The code_verifier string
-        @return Base64-URL encoded SHA256 hash without padding
     *)
-    let generate_code_challenge verifier =
-      let hash = Digestif.SHA256.digest_string verifier in
-      let raw_hash = Digestif.SHA256.to_raw_string hash in
-      Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet raw_hash
+    let generate_code_challenge = Oauth_pkce.challenge_s256
   end
   
   (** Generate authorization URL for Twitter OAuth 2.0 flow
