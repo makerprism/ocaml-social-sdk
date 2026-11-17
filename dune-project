@@ -224,6 +224,7 @@
   (social-refresh (= :version))
   yojson
   uri
+  digestif
   ptime))
 
 (package

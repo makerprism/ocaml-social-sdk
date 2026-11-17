@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Make.get_oauth_url ?scopes ?pkce_method`** (S12): the requested scopes are a parameter (default unchanged: `default_oauth_scopes` = `user.info.basic`, `video.publish`, `video.upload`), so `user.info.profile`, `user.info.stats` and `video.list` can be requested. `?pkce_method:Pkce_s256_hex` sends TikTok's documented S256 challenge, which is the **hex** SHA-256 of the verifier (Login Kit for Desktop), not RFC 7636 base64url; `pkce_challenge_s256_hex` is exported. The default stays `Pkce_plain` (unchanged URL). Login Kit for Web does not document PKCE.
+- **`OAuth.Make(Http).exchange_code_full` / `refresh_token_full`** and **`Make.exchange_code_full`**: the token answer as `OAuth.token_response = {credentials; open_id; scopes; expires_in; refresh_expires_in; refresh_expires_at}`; `credentials.scope` is the granted scope string. An OAuth error delivered with HTTP 200 becomes `Api_error` (status 400, `request_id` = `log_id`, body kept). `exchange_code` / `refresh_token` are unchanged.
+- **`OAuth.Make(Http).get_user ~access_token ?fields`**: typed `/v2/user/info/` (`OAuth.user_info`, including `username`, `is_verified` and the stats counts) with `user_fields_basic` / `user_fields_profile` / `user_fields_stats`. `error.code` other than `"ok"` is an error even under HTTP 200: `access_token_invalid` is `Token_invalid`, `scope_not_authorized` / `scope_permission_missed` are `Insufficient_permissions` naming the scopes the requested fields need, `rate_limit_exceeded` is `Rate_limited`. `get_user_info` (raw JSON) is unchanged.
+- New direct dependency: `digestif` (already a dependency of `social-core`).
+
 - OAuth 2.0 authentication with PKCE support
 - Video posting via FILE_UPLOAD method
 - Video posting via PULL_FROM_URL method

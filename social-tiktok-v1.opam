@@ -16,6 +16,7 @@ depends: [
   "social-refresh" {= version}
   "yojson"
   "uri"
+  "digestif"
   "ptime"
   "odoc" {with-doc}
 ]

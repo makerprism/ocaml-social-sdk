@@ -7,5 +7,6 @@
   social-refresh
   yojson
   uri
+  digestif
   ptime
   ptime.clock.os))
