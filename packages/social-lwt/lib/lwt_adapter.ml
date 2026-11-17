@@ -97,6 +97,17 @@ let outcome_to_lwt_typed f =
    with e -> resolve_once (Error (Error_types.Internal_error (Printexc.to_string e))));
   promise
 
+(** {!Social_core.SLEEP} for Lwt: schedules [on_continue] on the Lwt event
+    loop after [seconds] instead of blocking the process. Exceptions raised
+    by [on_continue] itself are not routed to [on_error] (that would call a
+    second continuation); they reach [Lwt.async_exception_hook]. *)
+let sleep ~seconds on_continue on_error =
+  Lwt.async (fun () ->
+    Lwt.try_bind
+      (fun () -> Lwt_unix.sleep seconds)
+      (fun () -> on_continue (); Lwt.return_unit)
+      (fun exn -> on_error (Printexc.to_string exn); Lwt.return_unit))
+
 (** Adapt HTTP_CLIENT to Lwt *)
 module Http_to_lwt (Client : Social_core.HTTP_CLIENT) = struct
   let get ?headers url =

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (Config implementers):** `CONFIG` now requires
+  `sleep : seconds:float -> (unit -> unit) -> (string -> unit) -> unit`
+  (`Social_core.SLEEP`). `with_retry` backoff and the media-upload status poll
+  used to block the whole process with `Unix.select`; they now wait through
+  `Config.sleep`. If the timer cannot be scheduled, `with_retry` returns the
+  last transient response instead of retrying immediately. The package no
+  longer depends on `unix`. Lwt users: `let sleep = Social_lwt.Lwt_adapter.sleep`.
+
 - 403 responses now carry Pinterest's verbatim `message` text via the
   new `platform_message` field on `Insufficient_permissions`. See
   `social-core/CHANGES.md` for the breaking variant change.

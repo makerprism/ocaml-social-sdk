@@ -52,6 +52,12 @@ module MyConfig = struct
        | Some msg -> " - " ^ msg
        | None -> "");
     on_success ()
+
+  (* Synchronous example: blocking is fine here. Under Lwt use
+     Social_lwt.Lwt_adapter.sleep instead. *)
+  let sleep ~seconds on_continue _on_error =
+    Unix.sleepf seconds;
+    on_continue ()
   
   (* Enhanced logging *)
   let log level message =

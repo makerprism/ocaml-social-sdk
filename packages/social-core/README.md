@@ -48,6 +48,9 @@ end
 (* Use with a provider *)
 module Twitter = Social_twitter_v2.Make(struct
   module Http = My_http_client
+  (* Providers that back off or poll (Threads, Twitter, Pinterest, Mastodon)
+     also need a non-blocking timer, see [Social_core.SLEEP]. *)
+  let sleep = Social_lwt.Lwt_adapter.sleep
   (* ... other config ... *)
 end)
 ```

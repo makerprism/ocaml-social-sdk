@@ -717,7 +717,10 @@ let parse_thread_post json =
 module type CONFIG = sig
   include Social_core.CONFIG
   module Http : Social_core.HTTP_CLIENT
-  val sleep : float -> (unit -> 'a) -> 'a
+
+  (** Non-blocking timer used for read-retry backoff and container polling.
+      See {!Social_core.SLEEP}. *)
+  include Social_core.SLEEP
 end
 
 module Make (Config : CONFIG) = struct
@@ -826,14 +829,18 @@ module Make (Config : CONFIG) = struct
       Config.Http.get url
         (fun response ->
           if retry_status response.status && attempt < max_attempts then
-            let _ = Unix.select [] [] [] (backoff_seconds attempt) in
-            loop (attempt + 1)
+            (* If the backoff cannot be scheduled, hand back the transient
+               response as if retries were exhausted. *)
+            Config.sleep ~seconds:(backoff_seconds attempt)
+              (fun () -> loop (attempt + 1))
+              (fun _ -> on_success response)
           else
             on_success response)
         (fun err ->
           if retry_network && attempt < max_attempts then
-            let _ = Unix.select [] [] [] (backoff_seconds attempt) in
-            loop (attempt + 1)
+            Config.sleep ~seconds:(backoff_seconds attempt)
+              (fun () -> loop (attempt + 1))
+              (fun _ -> on_error err)
           else
             on_error err)
     in
@@ -1482,7 +1489,11 @@ module Make (Config : CONFIG) = struct
             | Ok Finished -> on_result (Ok container_id)
             | Ok In_progress ->
                 let delay = poll_interval *. (float_of_int (min attempt 5)) in
-                Config.sleep delay (fun () -> loop (attempt + 1))
+                Config.sleep ~seconds:delay
+                  (fun () -> loop (attempt + 1))
+                  (fun err ->
+                    on_result (Error (Error_types.Internal_error
+                      (Printf.sprintf "Container %s status poll interrupted: %s" container_id err))))
             | Ok Published -> on_result (Error Error_types.Duplicate_content)
             | Ok Expired ->
                 on_result (Error (Error_types.Internal_error

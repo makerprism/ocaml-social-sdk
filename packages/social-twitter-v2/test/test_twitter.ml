@@ -132,6 +132,7 @@ module Mock_config = struct
   
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
     on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 (** Create Twitter provider instance *)
@@ -487,6 +488,7 @@ module Mock_config_refresh_success = struct
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     refresh_success_statuses := status :: !refresh_success_statuses;
     on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_refresh_success = Social_twitter_v2.Make(Mock_config_refresh_success)
@@ -541,6 +543,7 @@ module Mock_config_refresh_missing = struct
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     refresh_missing_statuses := status :: !refresh_missing_statuses;
     on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_refresh_missing = Social_twitter_v2.Make(Mock_config_refresh_missing)
@@ -599,6 +602,7 @@ module Mock_config_refresh_failed = struct
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     refresh_failed_statuses := status :: !refresh_failed_statuses;
     on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_refresh_failed = Social_twitter_v2.Make(Mock_config_refresh_failed)
@@ -661,6 +665,7 @@ module Mock_config_refresh_preserve = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_refresh_preserve = Social_twitter_v2.Make(Mock_config_refresh_preserve)
@@ -712,6 +717,7 @@ module Mock_config_no_refresh = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_no_refresh = Social_twitter_v2.Make(Mock_config_no_refresh)
@@ -766,6 +772,7 @@ module Mock_config_missing_client = struct
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     missing_client_statuses := status :: !missing_client_statuses;
     on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_missing_client = Social_twitter_v2.Make(Mock_config_missing_client)
@@ -828,6 +835,7 @@ module Mock_config_mixed_payload = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_mixed_payload = Social_twitter_v2.Make(Mock_config_mixed_payload)
@@ -1197,6 +1205,7 @@ module Mock_config_reply_quote_contract = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_reply_quote_contract = Social_twitter_v2.Make(Mock_config_reply_quote_contract)
@@ -1355,6 +1364,7 @@ module Mock_config_request_contract = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_request_contract = Social_twitter_v2.Make(Mock_config_request_contract)
@@ -1544,6 +1554,7 @@ module Mock_config_analytics_contract = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_analytics_contract = Social_twitter_v2.Make(Mock_config_analytics_contract)
@@ -1954,6 +1965,7 @@ module Mock_config_invalid_media_post = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_invalid_media_post = Social_twitter_v2.Make(Mock_config_invalid_media_post)
@@ -2015,6 +2027,7 @@ module Mock_config_no_retry_post = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_no_retry_post = Social_twitter_v2.Make(Mock_config_no_retry_post)
@@ -2072,6 +2085,7 @@ module Mock_config_too_long_guard = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_too_long_guard = Social_twitter_v2.Make(Mock_config_too_long_guard)
@@ -2135,6 +2149,7 @@ module Mock_config_malformed_post_response = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_malformed_post_response = Social_twitter_v2.Make(Mock_config_malformed_post_response)
@@ -2202,6 +2217,7 @@ module Mock_config_boundary_validation = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_boundary_validation = Social_twitter_v2.Make(Mock_config_boundary_validation)
@@ -2279,6 +2295,7 @@ module Mock_config_alt_meta_contract = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_alt_meta_contract = Social_twitter_v2.Make(Mock_config_alt_meta_contract)
@@ -2354,6 +2371,7 @@ module Mock_config_unknown_fields = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_unknown_fields = Social_twitter_v2.Make(Mock_config_unknown_fields)
@@ -2414,6 +2432,7 @@ module Mock_config_partial_read = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_partial_read = Social_twitter_v2.Make(Mock_config_partial_read)
@@ -2470,6 +2489,7 @@ module Mock_config_read_no_retry = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_read_no_retry = Social_twitter_v2.Make(Mock_config_read_no_retry)
@@ -2545,6 +2565,7 @@ module Mock_config_refresh_rotation = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_refresh_rotation = Social_twitter_v2.Make(Mock_config_refresh_rotation)
@@ -3726,6 +3747,7 @@ module Mock_config_errors = struct
   
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
     on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_errors = Social_twitter_v2.Make(Mock_config_errors)
@@ -3771,6 +3793,7 @@ module Mock_config_rate_reset = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_rate_reset = Social_twitter_v2.Make(Mock_config_rate_reset)
@@ -4045,6 +4068,7 @@ module Mock_config_pagination_stop = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_pagination_stop = Social_twitter_v2.Make(Mock_config_pagination_stop)
@@ -4646,6 +4670,11 @@ module Mock_config_video_gate = struct
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+
+  let sleeps = ref []
+  let sleep ~seconds on_continue _on_error =
+    sleeps := seconds :: !sleeps;
+    on_continue ()
 end
 
 module Twitter_video_gate = Social_twitter_v2.Make(Mock_config_video_gate)
@@ -4653,8 +4682,8 @@ module Twitter_video_gate = Social_twitter_v2.Make(Mock_config_video_gate)
 let test_video_processing_pending_then_success_posts_once () =
   video_gate_status_calls := 0;
   video_gate_tweet_posts := 0;
+  Mock_config_video_gate.sleeps := [];
   let result = ref None in
-  let start_time = Ptime_clock.now () in
 
   Twitter_video_gate.post_single
     ~account_id:"test_account"
@@ -4673,11 +4702,9 @@ let test_video_processing_pending_then_success_posts_once () =
 
   assert (!video_gate_status_calls >= 1);
   assert (!video_gate_tweet_posts = 1);
-  let elapsed_seconds =
-    let stop_time = Ptime_clock.now () in
-    Ptime.diff stop_time start_time |> Ptime.Span.to_float_s
-  in
-  assert (elapsed_seconds >= 0.8);
+  (* The wait honours check_after_secs and goes through the runtime's
+     Config.sleep, never a blocking call inside the SDK. *)
+  assert (!Mock_config_video_gate.sleeps = [ 1.0 ]);
   print_endline "✓ Video pending->success gating test passed"
 
 let video_immediate_status_calls = ref 0
@@ -4768,6 +4795,7 @@ module Mock_config_video_immediate = struct
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_video_immediate = Social_twitter_v2.Make(Mock_config_video_immediate)
@@ -4845,6 +4873,7 @@ module Mock_config_video_fail = struct
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_video_fail = Social_twitter_v2.Make(Mock_config_video_fail)
@@ -4921,6 +4950,7 @@ module Mock_config_video_timeout = struct
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_video_timeout = Social_twitter_v2.Make(Mock_config_video_timeout)
@@ -5039,6 +5069,7 @@ module Mock_config_video_interrupt = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_video_interrupt = Social_twitter_v2.Make(Mock_config_video_interrupt)
@@ -5139,6 +5170,7 @@ module Mock_config_video_codec = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_video_codec = Social_twitter_v2.Make(Mock_config_video_codec)
@@ -5299,6 +5331,7 @@ module Mock_config_chunked_contract = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_chunked_contract = Social_twitter_v2.Make(Mock_config_chunked_contract)
@@ -5457,6 +5490,7 @@ module Mock_config_upload_mode = struct
   let encrypt _data on_success _on_error = on_success "encrypted_data"
   let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_upload_mode = Social_twitter_v2.Make(Mock_config_upload_mode)
@@ -5830,6 +5864,7 @@ module Mock_config_retry_401 = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_retry_401 = Social_twitter_v2.Make(Mock_config_retry_401)
@@ -5918,6 +5953,7 @@ module Mock_config_share_followers = struct
   let encrypt _data on_success _on_error = on_success "encrypted"
   let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Twitter_share_followers = Social_twitter_v2.Make(Mock_config_share_followers)

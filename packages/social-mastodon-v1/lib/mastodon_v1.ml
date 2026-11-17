@@ -488,7 +488,7 @@ module type CONFIG = sig
   val update_credentials : account_id:string -> credentials:credentials -> (unit -> unit) -> (string -> unit) -> unit
   val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
-  val sleep : seconds:float -> (unit -> unit) -> (string -> unit) -> unit
+  include Social_core.SLEEP
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
 end
 
