@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The PDS URL is configurable.** `Make` hard-coded `https://bsky.social`
+  for every XRPC call, so accounts on a self-hosted PDS and local mock
+  servers could not be targeted. The new `Make_with_options (Config)
+  (Options)` reads `Options.service_url ()` on every call (a trailing slash
+  is ignored); session refresh and creation inside `ensure_valid_token` use
+  it too. `Make (Config)` is `Make_with_options (Config) (Default_options)`
+  and behaves exactly as before. Define options with
+  `include Social_bluesky_v1.Default_options` so options added later do not
+  break you. `Make.pds_url` is kept for source compatibility but deprecated: it
+  never reflects the options; read `service_url ()`.
+- **`parse_api_error` reads the atproto error name.** atproto answers most
+  failures with HTTP 400 and names the reason in the body. `ExpiredToken`
+  and `InvalidToken` were reported as `Api_error`, and `NotFound` /
+  `RecordNotFound` too. They are now `Auth_error Token_expired`,
+  `Auth_error Token_invalid` and `Resource_not_found <message>`, so callers
+  routing on `Error_types.classify_error` can tell a dead session and a
+  deleted post from a malformed request. This applies to every read and
+  write that goes through `parse_api_error`.
+
 - **Only a genuinely dead refresh JWT gets bucketed as a revoked session.**
   `ensure_valid_token` treated *any* HTTP 400 from
   `com.atproto.server.refreshSession` as proof the session was gone. atproto

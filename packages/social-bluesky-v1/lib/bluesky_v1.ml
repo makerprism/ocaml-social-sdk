@@ -197,9 +197,35 @@ module type CONFIG = sig
   val resize_image : data:string -> mime_type:string -> max_bytes:int -> (string option -> unit) -> unit
 end
 
-(** Make functor to create Bluesky provider with given configuration *)
-module Make (Config : CONFIG) = struct
-  let pds_url = "https://bsky.social"
+(** Options that are not account- or storage-related.
+
+    Kept out of {!CONFIG} so adding one never breaks an existing configuration:
+    define yours with [include Default_options] and override what you need.
+
+    [service_url] is the base URL of the PDS (or entryway) every XRPC call goes
+    to, e.g. ["https://bsky.social"] or a self-hosted PDS. It is a function so
+    a consumer can read it from configuration loaded after the functor is
+    applied. A trailing slash is ignored. *)
+module type OPTIONS = sig
+  val service_url : unit -> string
+end
+
+(** Defaults: the Bluesky-hosted entryway. *)
+module Default_options = struct
+  let service_url () = Auth.Metadata.default_pds_url
+end
+
+(** Make functor with explicit {!OPTIONS} (e.g. a self-hosted PDS). *)
+module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
+  (** Base URL every XRPC call goes to, without a trailing slash. *)
+  let service_url () =
+    let url = String.trim (Options.service_url ()) in
+    let len = String.length url in
+    if len > 0 && url.[len - 1] = '/' then String.sub url 0 (len - 1) else url
+
+  (** Deprecated: the default entryway, kept for source compatibility. It
+      never reflects {!OPTIONS}; read {!service_url} instead. *)
+  let pds_url = Auth.Metadata.default_pds_url
   
   (** Platform-specific constants *)
   let max_text_length = 300
@@ -345,7 +371,16 @@ module Make (Config : CONFIG) = struct
       | _ -> None
     with _ -> None
 
-  (** Parse API error from response *)
+  (** Parse an XRPC error response into an {!Error_types.error}.
+
+      atproto answers most failures with HTTP 400 and puts the reason in the
+      error name, so the name decides first:
+      - [ExpiredToken] / [InvalidToken]: the access JWT is dead, an
+        [Auth_error] (consumers refresh or ask the user to reconnect).
+      - [NotFound] / [RecordNotFound]: the post, record or thread is gone,
+        [Resource_not_found] carrying the server's message.
+      Otherwise 401 is an [Auth_error], 429 [Rate_limited], and anything else
+      an [Api_error] with the server's message. *)
   let parse_api_error ~status_code ~body =
     let parse_error_message () =
       try
@@ -359,16 +394,22 @@ module Make (Config : CONFIG) = struct
           else "API error"
       with _ -> "API error"
     in
-    if status_code = 401 then
-      Error_types.Auth_error Error_types.Token_invalid
-    else if status_code = 429 then
-      Error_types.make_rate_limited ()
-    else
-      Error_types.make_api_error
-        ~platform:Platform_types.Bluesky
-        ~status_code
-        ~message:(parse_error_message ())
-        ~raw_response:body ()
+    match atproto_error_name body with
+    | Some "ExpiredToken" -> Error_types.Auth_error Error_types.Token_expired
+    | Some "InvalidToken" -> Error_types.Auth_error Error_types.Token_invalid
+    | Some ("NotFound" | "RecordNotFound") ->
+        Error_types.Resource_not_found (parse_error_message ())
+    | Some _ | None ->
+        if status_code = 401 then
+          Error_types.Auth_error Error_types.Token_invalid
+        else if status_code = 429 then
+          Error_types.make_rate_limited ()
+        else
+          Error_types.make_api_error
+            ~platform:Platform_types.Bluesky
+            ~status_code
+            ~message:(parse_error_message ())
+            ~raw_response:body ()
 
   let parse_json_object_or_error ~context ~body =
     try
@@ -391,7 +432,7 @@ module Make (Config : CONFIG) = struct
   (** Resolve handle to DID *)
   let resolve_handle ~handle on_result =
     let url = Printf.sprintf "%s/xrpc/com.atproto.identity.resolveHandle?handle=%s" 
-      pds_url (Uri.pct_encode handle) in
+      (service_url ()) (Uri.pct_encode handle) in
     Config.Http.get url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
@@ -504,7 +545,7 @@ module Make (Config : CONFIG) = struct
   
   (** Create session with Bluesky using app password *)
   let create_session ~identifier ~password on_success on_error =
-    let url = Printf.sprintf "%s/xrpc/com.atproto.server.createSession" pds_url in
+    let url = Printf.sprintf "%s/xrpc/com.atproto.server.createSession" (service_url ()) in
     let body = `Assoc [
       ("identifier", `String identifier);
       ("password", `String password);
@@ -541,14 +582,14 @@ module Make (Config : CONFIG) = struct
       blob to the user's PDS on their behalf.
 
       @param access_jwt Current session JWT for authenticating the request
-      @param did The user's DID (unused; the PDS DID is derived from pds_url)
+      @param did The user's DID (unused; the PDS DID is derived from [service_url ()])
       @param on_success Receives the service auth token
       @param on_error Receives error message
   *)
   let get_service_auth ~access_jwt ~did:_ on_success on_error =
     (* aud = PDS DID derived from the configured PDS URL host *)
     let pds_host =
-      match Uri.host (Uri.of_string pds_url) with
+      match Uri.host (Uri.of_string (service_url ())) with
       | Some h -> h
       | None -> "bsky.social"
     in
@@ -556,7 +597,7 @@ module Make (Config : CONFIG) = struct
     let lxm = "com.atproto.repo.uploadBlob" in
     let exp_seconds = int_of_float (Unix.gettimeofday () +. 1800.0) in (* 30 minutes *)
     let url = Printf.sprintf "%s/xrpc/com.atproto.server.getServiceAuth?aud=%s&lxm=%s&exp=%d"
-      pds_url (Uri.pct_encode aud) (Uri.pct_encode lxm) exp_seconds in
+      (service_url ()) (Uri.pct_encode aud) (Uri.pct_encode lxm) exp_seconds in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
     ] in
@@ -651,7 +692,7 @@ module Make (Config : CONFIG) = struct
            | None -> None)
     in
     let upload_via_blob () =
-      let url = Printf.sprintf "%s/xrpc/com.atproto.repo.uploadBlob" pds_url in
+      let url = Printf.sprintf "%s/xrpc/com.atproto.repo.uploadBlob" (service_url ()) in
       Config.Http.post ~headers ~body:blob_data url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
@@ -1062,7 +1103,7 @@ module Make (Config : CONFIG) = struct
                   && String.sub stored_secret 0 3 = "eyJ"
                 in
                 if is_jwt_mode then
-                  AuthMake.refresh_session ~refresh_jwt:stored_secret (function
+                  AuthMake.refresh_session ~pds_url:(service_url ()) ~refresh_jwt:stored_secret (function
                     | Error_types.Success session
                     | Error_types.Partial_success { result = session; _ } ->
                         let new_creds = { creds with
@@ -1086,7 +1127,7 @@ module Make (Config : CONFIG) = struct
                 else
                   (* Legacy app_password row: exchange for a JWT pair and
                      rotate storage so the app password is forgotten. *)
-                  AuthMake.create_session
+                  AuthMake.create_session ~pds_url:(service_url ())
                     ~identifier
                     ~app_password:stored_secret
                     (function
@@ -1366,7 +1407,7 @@ module Make (Config : CONFIG) = struct
                     (* Continue with post creation *)
                     post_record_cont
                       (fun post_record ->
-                        let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" pds_url in
+                        let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
                         let body = `Assoc [
                           ("repo", `String identifier);
                           ("collection", `String "app.bsky.feed.post");
@@ -1548,7 +1589,7 @@ module Make (Config : CONFIG) = struct
             let uri_parts = String.split_on_char '/' post_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.feed.post");
@@ -1584,7 +1625,7 @@ module Make (Config : CONFIG) = struct
             let identifier = creds.access_token in
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.feed.like");
@@ -1634,7 +1675,7 @@ module Make (Config : CONFIG) = struct
             let uri_parts = String.split_on_char '/' like_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.feed.like");
@@ -1668,7 +1709,7 @@ module Make (Config : CONFIG) = struct
             let identifier = creds.access_token in
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.feed.repost");
@@ -1718,7 +1759,7 @@ module Make (Config : CONFIG) = struct
             let uri_parts = String.split_on_char '/' repost_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.feed.repost");
@@ -1754,7 +1795,7 @@ module Make (Config : CONFIG) = struct
             let identifier = creds.access_token in
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.graph.follow");
@@ -1801,7 +1842,7 @@ module Make (Config : CONFIG) = struct
             let uri_parts = String.split_on_char '/' follow_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.graph.follow");
@@ -1833,7 +1874,7 @@ module Make (Config : CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_jwt ->
         let url = Printf.sprintf "%s/xrpc/app.bsky.actor.getProfile?actor=%s" 
-          pds_url (Uri.pct_encode actor) in
+          (service_url ()) (Uri.pct_encode actor) in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -1861,7 +1902,7 @@ module Make (Config : CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_jwt ->
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getPostThread?uri=%s" 
-          pds_url (Uri.pct_encode post_uri) in
+          (service_url ()) (Uri.pct_encode post_uri) in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -1907,7 +1948,7 @@ module Make (Config : CONFIG) = struct
             "?" ^ (String.concat "&" (List.map (fun (k, v) ->
               Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params))
         in
-        let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getTimeline%s" pds_url query_string in
+        let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getTimeline%s" (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2106,7 +2147,7 @@ module Make (Config : CONFIG) = struct
                             base_with_facets @ [("embed", quote_embed)]
                         in
                         
-                        let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" pds_url in
+                        let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
                         let body = `Assoc [
                           ("repo", `String identifier);
                           ("collection", `String "app.bsky.feed.post");
@@ -2163,7 +2204,7 @@ module Make (Config : CONFIG) = struct
               Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params))
         in
         let url = Printf.sprintf "%s/xrpc/app.bsky.notification.listNotifications%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2186,7 +2227,7 @@ module Make (Config : CONFIG) = struct
   let count_unread_notifications ~account_id on_result =
     ensure_valid_token ~account_id
       (fun access_jwt ->
-        let url = Printf.sprintf "%s/xrpc/app.bsky.notification.getUnreadCount" pds_url in
+        let url = Printf.sprintf "%s/xrpc/app.bsky.notification.getUnreadCount" (service_url ()) in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2213,7 +2254,7 @@ module Make (Config : CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_jwt ->
         let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
-        let url = Printf.sprintf "%s/xrpc/app.bsky.notification.updateSeen" pds_url in
+        let url = Printf.sprintf "%s/xrpc/app.bsky.notification.updateSeen" (service_url ()) in
         let body = `Assoc [("seenAt", `String now)] in
         let body_str = Yojson.Basic.to_string body in
         let headers = [
@@ -2250,7 +2291,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.actor.searchActors%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2285,7 +2326,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.searchPosts%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2310,7 +2351,7 @@ module Make (Config : CONFIG) = struct
   let mute_actor ~account_id ~actor on_result =
     ensure_valid_token ~account_id
       (fun access_jwt ->
-        let url = Printf.sprintf "%s/xrpc/app.bsky.graph.muteActor" pds_url in
+        let url = Printf.sprintf "%s/xrpc/app.bsky.graph.muteActor" (service_url ()) in
         let body = `Assoc [("actor", `String actor)] in
         let body_str = Yojson.Basic.to_string body in
         let headers = [
@@ -2333,7 +2374,7 @@ module Make (Config : CONFIG) = struct
   let unmute_actor ~account_id ~actor on_result =
     ensure_valid_token ~account_id
       (fun access_jwt ->
-        let url = Printf.sprintf "%s/xrpc/app.bsky.graph.unmuteActor" pds_url in
+        let url = Printf.sprintf "%s/xrpc/app.bsky.graph.unmuteActor" (service_url ()) in
         let body = `Assoc [("actor", `String actor)] in
         let body_str = Yojson.Basic.to_string body in
         let headers = [
@@ -2361,7 +2402,7 @@ module Make (Config : CONFIG) = struct
             let identifier = creds.access_token in
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.graph.block");
@@ -2408,7 +2449,7 @@ module Make (Config : CONFIG) = struct
             let uri_parts = String.split_on_char '/' block_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
-            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" pds_url in
+            let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
               ("repo", `String identifier);
               ("collection", `String "app.bsky.graph.block");
@@ -2451,7 +2492,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getAuthorFeed%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2486,7 +2527,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getLikes%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2521,7 +2562,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getRepostedBy%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2556,7 +2597,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.graph.getFollowers%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2591,7 +2632,7 @@ module Make (Config : CONFIG) = struct
         let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
           Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.graph.getFollows%s" 
-          pds_url query_string in
+          (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
         Config.Http.get ~headers url
@@ -2610,3 +2651,6 @@ module Make (Config : CONFIG) = struct
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
 end
+
+(** Make functor with {!Default_options} (the Bluesky-hosted entryway). *)
+module Make (Config : CONFIG) = Make_with_options (Config) (Default_options)

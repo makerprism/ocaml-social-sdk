@@ -2597,11 +2597,9 @@ let test_get_reposted_by_api_error_mapping () =
     (fun outcome -> result := Some outcome);
 
   (match !result with
-  | Some (Error (Error_types.Api_error api_err)) ->
-      assert (api_err.status_code = 404);
-      assert (api_err.message = "NotFound")
+  | Some (Error (Error_types.Resource_not_found _)) -> ()
   | Some (Error err) ->
-      failwith ("Expected reposted-by Api_error, got: " ^ Error_types.error_to_string err)
+      failwith ("Expected reposted-by Resource_not_found, got: " ^ Error_types.error_to_string err)
   | Some (Ok _) -> failwith "Expected reposted-by API failure"
   | None -> failwith "get_reposted_by did not complete");
   reposted_by_read_mode := Read_normal;
@@ -3715,11 +3713,10 @@ let test_get_post_thread_api_error_mapping () =
     (fun outcome -> result := Some outcome);
 
   (match !result with
-  | Some (Error (Error_types.Api_error api_err)) ->
-      assert (api_err.status_code = 404);
-      assert (api_err.message = "missing thread")
+  | Some (Error (Error_types.Resource_not_found message)) ->
+      assert (message = "missing thread")
   | Some (Error err) ->
-      failwith ("Expected Api_error for thread, got: " ^ Error_types.error_to_string err)
+      failwith ("Expected Resource_not_found for thread, got: " ^ Error_types.error_to_string err)
   | Some (Ok _) -> failwith "Expected post thread API failure"
   | None -> failwith "get_post_thread did not complete");
   thread_read_mode := Read_normal;

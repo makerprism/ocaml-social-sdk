@@ -12,3 +12,11 @@
  (libraries
   social-core
   social-bluesky-v1))
+
+(test
+ (name test_bluesky_service_contract)
+ (modules test_bluesky_service_contract)
+ (libraries
+  social-core
+  social-bluesky-v1
+  yojson))
