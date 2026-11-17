@@ -810,6 +810,8 @@ let test_revoke_token () =
   let success_called = ref false in
   Mastodon.revoke_token
     ~account_id:"test_account"
+    ~client_id:"test_client_id"
+    ~client_secret:"test_client_secret"
     (handle_api_result
       (fun () ->
         success_called := true;
