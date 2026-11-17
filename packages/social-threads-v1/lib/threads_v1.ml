@@ -438,6 +438,53 @@ type thread_user = {
   name : string option;
 }
 
+(** Moderation state of a reply ([hide_status] field). Documented values:
+    [NOT_HUSHED], [UNHUSHED], [HIDDEN], [COVERED], [BLOCKED], [RESTRICTED].
+    [Unknown_hide_status] keeps any value Meta adds later instead of failing
+    the whole page. *)
+type hide_status =
+  | Not_hushed
+  | Unhushed
+  | Hidden
+  | Covered
+  | Blocked
+  | Restricted
+  | Unknown_hide_status of string
+
+let hide_status_of_string raw =
+  match String.uppercase_ascii raw with
+  | "NOT_HUSHED" -> Not_hushed
+  | "UNHUSHED" -> Unhushed
+  | "HIDDEN" -> Hidden
+  | "COVERED" -> Covered
+  | "BLOCKED" -> Blocked
+  | "RESTRICTED" -> Restricted
+  | _ -> Unknown_hide_status raw
+
+(** Approval state of a reply held for approval ([reply_approval_status],
+    returned by the [pending_replies] edge). *)
+type reply_approval_status =
+  | Approval_pending
+  | Approval_ignored
+  | Unknown_approval_status of string
+
+let reply_approval_status_of_string raw =
+  match String.lowercase_ascii raw with
+  | "pending" -> Approval_pending
+  | "ignored" -> Approval_ignored
+  | _ -> Unknown_approval_status raw
+
+let string_of_reply_approval_status = function
+  | Approval_pending -> "pending"
+  | Approval_ignored -> "ignored"
+  | Unknown_approval_status raw -> raw
+
+(** A Threads media object: a post, or a reply read from the [replies],
+    [conversation] or [pending_replies] edges.
+
+    The reply-only fields ([username] aside) are [None]/[false] on top-level
+    posts. [owner_id] is only returned for top-level posts you own, never on
+    replies. *)
 type thread_post = {
   id : string;
   text : string option;
@@ -451,6 +498,15 @@ type thread_post = {
   has_replies : bool;
   reply_audience : string option;
   owner_id : string option;
+  username : string option;
+      (** Author username. Only returned for public users and yourself. *)
+  is_reply : bool;
+  root_post_id : string option;  (** Top-level post of the conversation. *)
+  replied_to_id : string option;  (** Direct parent of this reply. *)
+  is_reply_owned_by_me : bool option;
+  hide_status : hide_status option;
+  reply_approval_status : reply_approval_status option;
+      (** Only returned by the [pending_replies] edge. *)
 }
 
 type insight_metric =
@@ -586,6 +642,15 @@ type publishing_limit = {
 let post_fields =
   "id,text,timestamp,permalink,media_type,media_url,thumbnail_url,shortcode,is_quote_post,has_replies,reply_audience,owner"
 
+(** Fields requested on the [replies] and [conversation] edges, per
+    https://developers.facebook.com/docs/threads/retrieve-and-manage-replies/replies-and-conversations.
+    [owner] is left out: Meta only returns it on top-level posts you own. *)
+let reply_fields =
+  "id,text,username,permalink,timestamp,media_type,media_url,thumbnail_url,shortcode,is_quote_post,has_replies,reply_audience,root_post,replied_to,is_reply,is_reply_owned_by_me,hide_status"
+
+(** [reply_fields] plus [reply_approval_status], for the [pending_replies] edge. *)
+let pending_reply_fields = reply_fields ^ ",reply_approval_status"
+
 let parse_thread_post json =
   let open Yojson.Basic.Util in
   {
@@ -622,6 +687,30 @@ let parse_thread_post json =
        with _ -> None);
     owner_id =
       (try Some (json |> member "owner" |> member "id" |> to_string)
+       with _ -> None);
+    username =
+      (try Some (json |> member "username" |> to_string)
+       with _ -> None);
+    is_reply =
+      (try json |> member "is_reply" |> to_bool
+       with _ -> false);
+    root_post_id =
+      (try Some (json |> member "root_post" |> member "id" |> to_string)
+       with _ -> None);
+    replied_to_id =
+      (try Some (json |> member "replied_to" |> member "id" |> to_string)
+       with _ -> None);
+    is_reply_owned_by_me =
+      (try Some (json |> member "is_reply_owned_by_me" |> to_bool)
+       with _ -> None);
+    hide_status =
+      (try Some (json |> member "hide_status" |> to_string |> hide_status_of_string)
+       with _ -> None);
+    reply_approval_status =
+      (try
+         Some
+           (json |> member "reply_approval_status" |> to_string
+          |> reply_approval_status_of_string)
        with _ -> None);
   }
 
@@ -1640,7 +1729,10 @@ module Make (Config : CONFIG) = struct
     in
     (posts, next_after)
 
-  let get_replies ~account_id ~media_id ?after ?(limit = 20) on_result =
+  (* Shared reader for the reply edges of a media object. They take the same
+     paging parameters and return the same media-object page shape. *)
+  let get_reply_edge ~edge ~fields ~extra_params ~account_id ~media_id ?after
+      ?reverse ?(limit = 20) on_result =
     if String.trim media_id = "" then
       on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
     else
@@ -1648,17 +1740,19 @@ module Make (Config : CONFIG) = struct
       (fun creds ->
         let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
         let params =
-          let normalized_after = normalize_optional_non_empty after in
-          [ ("fields", [post_fields]);
-            ("limit", [string_of_int limit]);
-            ("access_token", [creds.access_token]) ]
-          @
-          (match normalized_after with
-           | Some cursor -> [ ("after", [cursor]) ]
-           | None -> [])
+          [ ("fields", [fields]);
+            ("limit", [string_of_int limit]) ]
+          @ (match reverse with
+             | Some reverse -> [ ("reverse", [string_of_bool reverse]) ]
+             | None -> [])
+          @ extra_params
+          @ [ ("access_token", [creds.access_token]) ]
+          @ (match normalize_optional_non_empty after with
+             | Some cursor -> [ ("after", [cursor]) ]
+             | None -> [])
         in
         let query = Uri.encoded_of_query params in
-        let url = Printf.sprintf "%s/%s/replies?%s" threads_api_base (String.trim media_id) query in
+        let url = Printf.sprintf "%s/%s/%s?%s" threads_api_base (String.trim media_id) edge query in
         http_get_with_retry url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
@@ -1669,7 +1763,7 @@ module Make (Config : CONFIG) = struct
                 on_result
                   (Error
                      (Error_types.Internal_error
-                        (Printf.sprintf "Failed to parse replies response: %s" (Printexc.to_string exn)))))
+                        (Printf.sprintf "Failed to parse %s response: %s" edge (Printexc.to_string exn)))))
             else
               on_result
                 (Error
@@ -1680,85 +1774,33 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (network_error err))))
       (fun err -> on_result (Error err))
 
-  let get_conversation ~account_id ~media_id ?after ?(limit = 20) on_result =
-    if String.trim media_id = "" then
-      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
-    else
-    with_valid_credentials ~account_id
-      (fun creds ->
-        let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
-        let params =
-          let normalized_after = normalize_optional_non_empty after in
-          [ ("fields", [post_fields]);
-            ("limit", [string_of_int limit]);
-            ("access_token", [creds.access_token]) ]
-          @
-          (match normalized_after with
-           | Some cursor -> [ ("after", [cursor]) ]
-           | None -> [])
-        in
-        let query = Uri.encoded_of_query params in
-        let url = Printf.sprintf "%s/%s/conversation?%s" threads_api_base (String.trim media_id) query in
-        http_get_with_retry url
-          (fun response ->
-            if response.status >= 200 && response.status < 300 then
-              (try
-                let posts, next_after = parse_posts_response response.body in
-                on_result (Ok (posts, next_after))
-              with exn ->
-                on_result
-                  (Error
-                     (Error_types.Internal_error
-                        (Printf.sprintf "Failed to parse conversation response: %s" (Printexc.to_string exn)))))
-            else
-              on_result
-                (Error
-                   (parse_api_error
-                      ~status_code:response.status
-                      ~headers:response.headers
-                      ~response_body:response.body)))
-          (fun err -> on_result (Error (network_error err))))
-      (fun err -> on_result (Error err))
+  (** Immediate replies to a post or reply ([GET /{media_id}/replies]).
+      [reverse] (API default [true]) sorts newest first. Use [has_replies]
+      to decide whether to descend further. *)
+  let get_replies ~account_id ~media_id ?after ?reverse ?limit on_result =
+    get_reply_edge ~edge:"replies" ~fields:reply_fields ~extra_params:[]
+      ~account_id ~media_id ?after ?reverse ?limit on_result
 
-  let get_pending_replies ~account_id ~media_id ?after ?(limit = 20) on_result =
-    if String.trim media_id = "" then
-      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
-    else
-    with_valid_credentials ~account_id
-      (fun creds ->
-        let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
-        let params =
-          let normalized_after = normalize_optional_non_empty after in
-          [ ("fields", [post_fields]);
-            ("limit", [string_of_int limit]);
-            ("access_token", [creds.access_token]) ]
-          @
-          (match normalized_after with
-           | Some cursor -> [ ("after", [cursor]) ]
-           | None -> [])
-        in
-        let query = Uri.encoded_of_query params in
-        let url = Printf.sprintf "%s/%s/pending_replies?%s" threads_api_base (String.trim media_id) query in
-        http_get_with_retry url
-          (fun response ->
-            if response.status >= 200 && response.status < 300 then
-              (try
-                let posts, next_after = parse_posts_response response.body in
-                on_result (Ok (posts, next_after))
-              with exn ->
-                on_result
-                  (Error
-                     (Error_types.Internal_error
-                        (Printf.sprintf "Failed to parse pending replies response: %s" (Printexc.to_string exn)))))
-            else
-              on_result
-                (Error
-                   (parse_api_error
-                      ~status_code:response.status
-                      ~headers:response.headers
-                      ~response_body:response.body)))
-          (fun err -> on_result (Error (network_error err))))
-      (fun err -> on_result (Error err))
+  (** All replies under a top-level post at any depth, flattened
+      ([GET /{media_id}/conversation]). Use [replied_to_id] to rebuild the
+      tree. *)
+  let get_conversation ~account_id ~media_id ?after ?reverse ?limit on_result =
+    get_reply_edge ~edge:"conversation" ~fields:reply_fields ~extra_params:[]
+      ~account_id ~media_id ?after ?reverse ?limit on_result
+
+  (** Replies held for approval ([GET /{media_id}/pending_replies]).
+      [approval_status] filters to pending or ignored replies; omitted, both
+      are returned. *)
+  let get_pending_replies ~account_id ~media_id ?after ?reverse ?approval_status
+      ?limit on_result =
+    let extra_params =
+      match approval_status with
+      | Some status ->
+          [ ("approval_status", [string_of_reply_approval_status status]) ]
+      | None -> []
+    in
+    get_reply_edge ~edge:"pending_replies" ~fields:pending_reply_fields
+      ~extra_params ~account_id ~media_id ?after ?reverse ?limit on_result
 
   let get_publishing_limit ~account_id on_result =
     with_valid_credentials ~account_id

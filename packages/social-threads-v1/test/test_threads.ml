@@ -4520,6 +4520,129 @@ let test_get_pending_replies_success () =
           print_endline "ok: get pending replies"
       | Error _ -> failwith "expected successful get_pending_replies")
 
+let query_param url key =
+  match Uri.get_query_param (Uri.of_string url) key with
+  | Some value -> value
+  | None -> failwith (Printf.sprintf "missing query parameter %s" key)
+
+let field_set url = String.split_on_char ',' (query_param url "fields")
+
+let with_reply_account () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+          scope = None;
+        } );
+    ]
+
+(* Shape from Meta's replies-and-conversations reference: root_post and
+   replied_to are objects carrying an id; hide_status is an enum string. *)
+let documented_reply_body =
+  "{\"data\":[{\"id\":\"reply-1\",\"text\":\"First Reply\",\"username\":\"alice\",\
+   \"permalink\":\"https://www.threads.com/@alice/post/abc\",\
+   \"timestamp\":\"2024-01-01T18:20:00+0000\",\"media_type\":\"TEXT_POST\",\
+   \"shortcode\":\"abc\",\"has_replies\":true,\"root_post\":{\"id\":\"root-1\"},\
+   \"replied_to\":{\"id\":\"root-1\"},\"is_reply\":true,\
+   \"is_reply_owned_by_me\":false,\"hide_status\":\"NOT_HUSHED\"},\
+   {\"id\":\"reply-2\",\"is_reply\":true,\"root_post\":{\"id\":\"root-1\"},\
+   \"replied_to\":{\"id\":\"reply-1\"},\"hide_status\":\"HIDDEN\"},\
+   {\"id\":\"reply-3\",\"hide_status\":\"SOMETHING_NEW\"}],\
+   \"paging\":{\"cursors\":{\"before\":\"b\",\"after\":\"a\"}}}"
+
+let assert_reply_fields_requested url =
+  let fields = field_set url in
+  List.iter
+    (fun field ->
+      if not (List.mem field fields) then
+        failwith (Printf.sprintf "reply field %s not requested" field))
+    [ "id"; "text"; "username"; "permalink"; "timestamp"; "replied_to";
+      "root_post"; "is_reply"; "is_reply_owned_by_me"; "hide_status";
+      "has_replies" ];
+  (* owner is only returned for top-level posts you own *)
+  assert (not (List.mem "owner" fields))
+
+let test_get_conversation_parses_reply_fields () =
+  with_reply_account ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = documented_reply_body } ];
+  Threads.get_conversation ~account_id:"acct-1" ~media_id:"root-1" ~reverse:false
+    (function
+      | Ok ([ first; second; third ], next_after) ->
+          assert (first.username = Some "alice");
+          assert (first.permalink = Some "https://www.threads.com/@alice/post/abc");
+          assert (first.timestamp = Some "2024-01-01T18:20:00+0000");
+          assert first.is_reply;
+          assert first.has_replies;
+          assert (first.root_post_id = Some "root-1");
+          assert (first.replied_to_id = Some "root-1");
+          assert (first.is_reply_owned_by_me = Some false);
+          assert (first.hide_status = Some Social_threads_v1.Not_hushed);
+          assert (first.reply_approval_status = None);
+          assert (second.replied_to_id = Some "reply-1");
+          assert (second.hide_status = Some Social_threads_v1.Hidden);
+          assert (second.username = None);
+          assert (third.hide_status
+                  = Some (Social_threads_v1.Unknown_hide_status "SOMETHING_NEW"));
+          assert (not third.is_reply);
+          assert (next_after = Some "a");
+          (match List.rev !Mock_http.requests with
+           | [ ("GET", url, _, _) ] ->
+               assert_reply_fields_requested url;
+               assert (query_param url "reverse" = "false")
+           | _ -> failwith "unexpected request for get_conversation");
+          print_endline "ok: get conversation parses reply fields"
+      | Ok _ -> failwith "expected three replies"
+      | Error _ -> failwith "expected successful get_conversation")
+
+let test_get_replies_requests_reply_fields () =
+  with_reply_account ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = documented_reply_body } ];
+  Threads.get_replies ~account_id:"acct-1" ~media_id:"root-1"
+    (function
+      | Ok (replies, _) ->
+          assert (List.length replies = 3);
+          (match List.rev !Mock_http.requests with
+           | [ ("GET", url, _, _) ] ->
+               assert_reply_fields_requested url;
+               (* reverse is only sent when the caller asks for it *)
+               assert (Uri.get_query_param (Uri.of_string url) "reverse" = None)
+           | _ -> failwith "unexpected request for get_replies");
+          print_endline "ok: get replies requests reply fields"
+      | Error _ -> failwith "expected successful get_replies")
+
+let test_get_pending_replies_approval_status () =
+  with_reply_account ();
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"data\":[{\"id\":\"p-1\",\"text\":\"pending reply\",\"hide_status\":\"NOT_HUSHED\",\"reply_approval_status\":\"pending\"},\
+           {\"id\":\"p-2\",\"reply_approval_status\":\"ignored\"}]}";
+      };
+    ];
+  Threads.get_pending_replies ~account_id:"acct-1" ~media_id:"root-1"
+    ~approval_status:Social_threads_v1.Approval_ignored
+    (function
+      | Ok ([ first; second ], _) ->
+          assert (first.reply_approval_status = Some Social_threads_v1.Approval_pending);
+          assert (second.reply_approval_status = Some Social_threads_v1.Approval_ignored);
+          (match List.rev !Mock_http.requests with
+           | [ ("GET", url, _, _) ] ->
+               assert_reply_fields_requested url;
+               assert (List.mem "reply_approval_status" (field_set url));
+               assert (query_param url "approval_status" = "ignored")
+           | _ -> failwith "unexpected request for get_pending_replies");
+          print_endline "ok: get pending replies approval status"
+      | Ok _ -> failwith "expected two pending replies"
+      | Error _ -> failwith "expected successful get_pending_replies")
+
 let () =
   test_oauth_url ();
   test_oauth_url_encodes_special_characters ();
@@ -4690,4 +4813,7 @@ let () =
   test_unhide_reply_success ();
   test_reply_action_rejects_empty_id ();
   test_get_pending_replies_success ();
+  test_get_conversation_parses_reply_fields ();
+  test_get_replies_requests_reply_fields ();
+  test_get_pending_replies_approval_status ();
   print_endline "Threads tests passed"
