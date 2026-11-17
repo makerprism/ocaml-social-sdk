@@ -1983,6 +1983,142 @@ let test_comments_page_for_account () =
        assert (List.assoc_opt "Authorization" headers = Some "Bearer stored-token")
    | _ -> failwith "expected one GET");
   print_endline "✓ get_comments_page_for_account"
+let ig_insights_account () =
+  Mock_config.reset ();
+  Mock_config.set_credentials ~account_id:"acct"
+    ~credentials:{ access_token = "ig_tok"; refresh_token = None; expires_at = None;
+                   auth_type = Bearer; scope = None };
+  Mock_config.set_ig_user_id ~account_id:"acct" ~ig_user_id:"17841400000000000"
+
+let single_get_uri () =
+  match !Mock_http.requests with
+  | [ ("GET", url, _, _) ] -> Uri.of_string url
+  | _ -> failwith "expected one GET"
+
+(* Per-product metric sets from
+   https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights:
+   stories have no likes/comments/saved, reels no follows/profile_visits.
+   Response: values[{value}] (lifetime), some metrics with total_value. *)
+let test_media_metrics_per_product () =
+  let module I = Insights in
+  List.iter
+    (fun product ->
+      assert (I.unsupported_media_metrics product (I.default_media_metrics product) = []))
+    [ I.Feed; I.Reels; I.Story ];
+  assert (not (List.mem I.Follows (I.supported_media_metrics I.Reels)));
+  assert (not (List.mem I.Likes (I.supported_media_metrics I.Story)));
+  assert (I.media_product_of_string "reels" = Some I.Reels);
+  assert (I.media_product_of_string "AD" = None);
+  ig_insights_account ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"data":[
+        {"name":"views","period":"lifetime","values":[{"value":812}],"title":"Views",
+         "description":"Total number of times IG Media has been played.","id":"m1/insights/views/lifetime"},
+        {"name":"replies","period":"lifetime","values":[{"value":3}],"id":"m1/insights/replies/lifetime"},
+        {"name":"profile_visits","period":"lifetime","total_value":{"value":9},"id":"m1/insights/profile_visits/lifetime"}]}|} };
+  Instagram.get_media_metrics_for_account ~account_id:"acct" ~post_id:"m1" ~media_product:I.Story
+    (function
+    | Ok insights ->
+        assert (List.mem { I.metric = I.Views; value = 812 } insights);
+        assert (List.mem { I.metric = I.Replies; value = 3 } insights);
+        assert (List.mem { I.metric = I.Profile_visits; value = 9 } insights)
+    | Error e -> failwith (Error_types.error_to_string e));
+  let uri = single_get_uri () in
+  assert (Uri.path uri = "/v25.0/m1/insights");
+  assert (Uri.get_query_param uri "metric"
+          = Some "views,reach,shares,total_interactions,follows,profile_visits,replies");
+  assert (Uri.get_query_param uri "access_token" = Some "ig_tok");
+  (* An unsupported metric fails before any request. *)
+  ig_insights_account ();
+  Instagram.get_media_metrics ~post_id:"m2" ~access_token:"t" ~media_product:I.Reels
+    ~metrics:[ I.Views; I.Follows ] (function
+    | Error (Error_types.Validation_error [ Error_types.Option_conflict msg ]) ->
+        assert (string_contains msg "follows")
+    | _ -> failwith "follows on a reel must be a validation error");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ Media metrics per product (story, reels validation)"
+
+(* Regression: get_media_insights asked stories for saved/likes/comments,
+   which Meta rejects for STORY media. *)
+let test_media_insights_story_subset () =
+  ig_insights_account ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"data":[{"name":"views","period":"lifetime","values":[{"value":40}]}]}|} };
+  Instagram.get_media_insights ~media_product:Insights.Story ~post_id:"s1" ~access_token:"t"
+    (function
+    | Ok insights -> assert (insights.views = Some 40 && insights.likes = None)
+    | Error e -> failwith (Error_types.error_to_string e));
+  assert (Uri.get_query_param (single_get_uri ()) "metric" = Some "views,reach,shares");
+  ig_insights_account ();
+  Mock_http.set_response { status = 200; headers = []; body = {|{"data":[]}|} };
+  Instagram.get_media_insights ~post_id:"p1" ~access_token:"t" (fun _ -> ());
+  assert (Uri.get_query_param (single_get_uri ()) "metric"
+          = Some "views,reach,saved,likes,comments,shares");
+  print_endline "✓ get_media_insights ~media_product:Story asks only story metrics"
+
+(* User insights with metric_type=total_value, shape from
+   https://developers.facebook.com/docs/instagram-platform/api-reference/instagram-user/insights *)
+let test_account_totals_total_value () =
+  ig_insights_account ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"data":[
+        {"name":"views","period":"day","title":"Views","description":"views",
+         "total_value":{"value":5120},"id":"17841400000000000/insights/views/day"},
+        {"name":"reach","period":"day","title":"Accounts reached","description":"reach",
+         "total_value":{"value":224,"breakdowns":[{"dimension_keys":["media_product_type"],
+           "results":[{"dimension_values":["POST"],"value":200},{"dimension_values":["CAROUSEL_CONTAINER"],"value":24}]}]},
+         "id":"17841400000000000/insights/reach/day"}],
+        "paging":{"previous":"https://graph.instagram.com/v25.0/x","next":"https://graph.instagram.com/v25.0/y"}}|} };
+  Instagram.get_account_totals_for_account ~account_id:"acct" ~since:"1763164800"
+    ~until:"1763337600" (function
+    | Ok totals ->
+        assert (totals = [ { Insights.metric = Insights.Account_views; total = 5120 };
+                           { Insights.metric = Insights.Account_reach; total = 224 } ])
+    | Error e -> failwith (Error_types.error_to_string e));
+  let uri = single_get_uri () in
+  assert (Uri.path uri = "/v25.0/17841400000000000/insights");
+  assert (Uri.get_query_param uri "metric_type" = Some "total_value");
+  assert (Uri.get_query_param uri "period" = Some "day");
+  assert (Uri.get_query_param uri "metric"
+          = Some "views,reach,accounts_engaged,total_interactions,likes,comments,shares,saves,replies");
+  assert (Uri.get_query_param uri "since" = Some "1763164800");
+  print_endline "✓ Account totals use metric_type=total_value"
+
+(* The follower_count insight is a per-day change; followers_count on the
+   profile is the total. The two must come out typed apart. *)
+let test_follower_change_vs_followers_count () =
+  ig_insights_account ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"data":[{"name":"follower_count","period":"day","values":[
+        {"value":4,"end_time":"2026-11-15T08:00:00+0000"},
+        {"value":-1,"end_time":"2026-11-16T08:00:00+0000"}],
+        "title":"Follower Count","id":"17841400000000000/insights/follower_count/day"}]}|} };
+  Instagram.get_daily_follower_changes_for_account ~account_id:"acct" ~since:"1" ~until:"2"
+    (function
+    | Ok [ { Insights.change = 4; end_time = Some _ }; { Insights.change = -1; _ } ] -> ()
+    | Ok _ -> failwith "expected two daily changes"
+    | Error e -> failwith (Error_types.error_to_string e));
+  let uri = single_get_uri () in
+  assert (Uri.get_query_param uri "metric" = Some "follower_count");
+  assert (Uri.get_query_param uri "period" = Some "day");
+  ig_insights_account ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"id":"17841400000000000","followers_count":1503,"follows_count":120,"media_count":87}|} };
+  Instagram.get_account_counts_for_account ~account_id:"acct" (function
+    | Ok { Insights.followers_count = Some 1503; follows_count = Some 120; media_count = Some 87 } -> ()
+    | Ok _ -> failwith "unexpected counts"
+    | Error e -> failwith (Error_types.error_to_string e));
+  let uri = single_get_uri () in
+  assert (Uri.path uri = "/v25.0/17841400000000000");
+  assert (Uri.get_query_param uri "fields" = Some "id,followers_count,follows_count,media_count");
+  assert (Analytics_normalization.instagram_metric_to_canonical "follower_count"
+          = Some Analytics_types.Follows);
+  print_endline "✓ follower_count changes vs followers_count total"
 
 let () =
   print_endline "\n=== Instagram Standalone Provider Tests ===\n";
@@ -1993,6 +2129,10 @@ let () =
   test_standalone_authorize_url ();
   test_exchange_code_full_shapes ();
   test_get_me_profile ();
+  test_media_metrics_per_product ();
+  test_media_insights_story_subset ();
+  test_account_totals_total_value ();
+  test_follower_change_vs_followers_count ();
   test_standalone_auth_url_enable_fb_login ();
   test_standalone_auth_url_scopes_comma_separated ();
   test_standalone_auth_url_response_type ();

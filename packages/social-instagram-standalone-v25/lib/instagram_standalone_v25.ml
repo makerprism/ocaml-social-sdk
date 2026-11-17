@@ -30,6 +30,11 @@ open Social_core
 (** Graph API version, e.g. ["v25.0"]. *)
 let api_version = "v25.0"
 
+(** Typed insights metrics per media product, account totals, the daily
+    [follower_count] insight and the absolute profile counts; see
+    {!Instagram_standalone_v25_insights}. *)
+module Insights = Instagram_standalone_v25_insights
+
 (** Unversioned host of the Instagram API with Instagram Login. *)
 let graph_api_host = "https://graph.instagram.com"
 
@@ -1092,6 +1097,10 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
     since : string;
     until : string;
     follower_count : insight_point list;
+        (** The daily [follower_count] insight: each point is that day's
+            change, not the follower total (that is
+            {!Insights.account_counts.followers_count}). Its canonical series
+            is [Follows], like Facebook's [page_daily_follows]. *)
     reach : insight_point list;
   }
 
@@ -1379,10 +1388,25 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
             on_result (Ok (to_canonical_account_engagement_insights_series insights))
         | Error err -> on_result (Error err))
 
-  let get_media_insights ~post_id ~access_token on_result =
+  (** Media insights as a fixed record. Without [?media_product] it asks for
+      [views,reach,saved,likes,comments,shares], which Meta rejects for
+      stories ([saved], [likes], [comments] are FEED/REELS metrics); pass
+      [~media_product:Story] to ask only for the supported ones. New code
+      should use {!get_media_metrics}, which covers every product's
+      metrics. *)
+  let get_media_insights ?media_product ~post_id ~access_token on_result =
+    let metric_names =
+      match media_product with
+      | None -> media_insight_metric_names
+      | Some product ->
+          let supported =
+            List.map Insights.media_metric_to_string (Insights.supported_media_metrics product)
+          in
+          List.filter (fun name -> List.mem name supported) media_insight_metric_names
+    in
     let params =
       [
-        ("metric", [ String.concat "," media_insight_metric_names ]);
+        ("metric", [ String.concat "," metric_names ]);
         ("access_token", [ access_token ]);
       ]
     in
@@ -1396,8 +1420,8 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
         else on_result (Error (api_error_of_response response)))
       (fun err -> on_result (Error (network_error_of_string err)))
 
-  let get_media_insights_canonical ~post_id ~access_token on_result =
-    get_media_insights ~post_id ~access_token
+  let get_media_insights_canonical ?media_product ~post_id ~access_token on_result =
+    get_media_insights ?media_product ~post_id ~access_token
       (function
         | Ok insights -> on_result (Ok (to_canonical_media_insights_series insights))
         | Error err -> on_result (Error err))
@@ -1424,9 +1448,137 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
               (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
 
-  let get_media_insights_for_account ~account_id ~post_id on_result =
+  let get_media_insights_for_account ?media_product ~account_id ~post_id on_result =
     ensure_valid_token ~account_id
-      (fun access_token -> get_media_insights ~post_id ~access_token on_result)
+      (fun access_token -> get_media_insights ?media_product ~post_id ~access_token on_result)
+      (fun err -> on_result (Error err))
+
+  (** {1 Typed insights}
+
+      Requests for {!Insights}. Token in the query, as the other insights
+      reads of this package. *)
+
+  let get_parsed ~what url parse on_result =
+    Config.Http.get url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          match parse response.body with
+          | Stdlib.Ok value -> on_result (Stdlib.Ok value)
+          | Stdlib.Error msg ->
+              on_result
+                (Stdlib.Error
+                   (Error_types.Internal_error (Printf.sprintf "Failed to parse %s: %s" what msg)))
+        else on_result (Stdlib.Error (api_error_of_response response)))
+      (fun err -> on_result (Stdlib.Error (network_error_of_string err)))
+
+  let insights_url ~id params =
+    Printf.sprintf "%s/%s/insights?%s" graph_api_base (Uri.pct_encode id) (Uri.encoded_of_query params)
+
+  (** Lifetime media insights for one media product
+      ([GET /{media_id}/insights]), {!Insights.default_media_metrics} by
+      default. Read the product from the media's [media_product_type]. A
+      metric the product does not support is a [Validation_error] before
+      any request, since Meta would fail the whole call.
+      {{:https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights}} *)
+  let get_media_metrics ~post_id ~access_token ~media_product ?metrics on_result =
+    let metrics = Option.value metrics ~default:(Insights.default_media_metrics media_product) in
+    match Insights.unsupported_media_metrics media_product metrics with
+    | _ :: _ as unsupported ->
+        on_result
+          (Stdlib.Error
+             (Error_types.Validation_error
+                (List.map
+                   (fun metric ->
+                     Error_types.Option_conflict
+                       (Printf.sprintf "%s is not a %s media metric"
+                          (Insights.media_metric_to_string metric)
+                          (Insights.media_product_to_string media_product)))
+                   unsupported)))
+    | [] ->
+        get_parsed ~what:"media insights"
+          (insights_url ~id:post_id
+             [ ("metric", [ String.concat "," (List.map Insights.media_metric_to_string metrics) ]);
+               ("access_token", [ access_token ]) ])
+          Insights.parse_media_insights on_result
+
+  (** {!get_media_metrics} with the account's stored token. *)
+  let get_media_metrics_for_account ~account_id ~post_id ~media_product ?metrics on_result =
+    ensure_valid_token ~account_id
+      (fun access_token -> get_media_metrics ~post_id ~access_token ~media_product ?metrics on_result)
+      (fun err -> on_result (Stdlib.Error err))
+
+  (** Account totals over [since]..[until] (Unix timestamps):
+      [GET /{id}/insights?metric_type=total_value&period=day],
+      {!Insights.default_account_metrics} by default. [views] requires
+      [metric_type=total_value].
+      {{:https://developers.facebook.com/docs/instagram-platform/api-reference/instagram-user/insights}} *)
+  let get_account_totals ~id ~access_token ~since ~until ?(metrics = Insights.default_account_metrics)
+      on_result =
+    get_parsed ~what:"account insights"
+      (insights_url ~id
+         [ ("metric", [ String.concat "," (List.map Insights.account_metric_to_string metrics) ]);
+           ("metric_type", [ "total_value" ]);
+           ("period", [ "day" ]);
+           ("since", [ since ]);
+           ("until", [ until ]);
+           ("access_token", [ access_token ]) ])
+      Insights.parse_account_totals on_result
+
+  (** {!get_account_totals} for the stored account's IG user. *)
+  let get_account_totals_for_account ~account_id ~since ~until ?metrics on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_ig_user_id ~account_id
+          (fun id -> get_account_totals ~id ~access_token ~since ~until ?metrics on_result)
+          (fun err ->
+            on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+      (fun err -> on_result (Stdlib.Error err))
+
+  (** The daily [follower_count] insight ([period=day], time series): one
+      {!Insights.follower_change} per day, never the follower total (that is
+      {!get_account_counts}). Meta keeps 30 days of it and returns nothing
+      below 100 followers. Verify live: Meta's current reference no longer
+      lists this metric in its table. *)
+  let get_daily_follower_changes ~id ~access_token ~since ~until on_result =
+    get_parsed ~what:"follower_count insights"
+      (insights_url ~id
+         [ ("metric", [ "follower_count" ]);
+           ("period", [ "day" ]);
+           ("since", [ since ]);
+           ("until", [ until ]);
+           ("access_token", [ access_token ]) ])
+      Insights.parse_follower_changes on_result
+
+  (** {!get_daily_follower_changes} for the stored account's IG user. *)
+  let get_daily_follower_changes_for_account ~account_id ~since ~until on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_ig_user_id ~account_id
+          (fun id -> get_daily_follower_changes ~id ~access_token ~since ~until on_result)
+          (fun err ->
+            on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err)))))
+      (fun err -> on_result (Stdlib.Error err))
+
+  (** Absolute profile counts: [GET /{id}?fields=id,followers_count,follows_count,media_count].
+      [id] may be ["me"].
+      {{:https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user}} *)
+  let get_account_counts ~id ~access_token on_result =
+    get_parsed ~what:"account counts"
+      (Printf.sprintf "%s/%s?%s" graph_api_base (Uri.pct_encode id)
+         (Uri.encoded_of_query
+            [ ("fields", [ String.concat "," Insights.account_count_fields ]);
+              ("access_token", [ access_token ]) ]))
+      Insights.parse_account_counts on_result
+
+  (** {!get_account_counts} for the stored account's IG user. *)
+  let get_account_counts_for_account ~account_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_ig_user_id ~account_id
+          (fun id -> get_account_counts ~id ~access_token on_result)
+          (fun err ->
+            on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
 
   (** Media type detection from URL.
