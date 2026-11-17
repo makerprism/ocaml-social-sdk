@@ -621,6 +621,222 @@ type organization_access_info = {
   state: string option;
 }
 
+(** {1 Media kinds}
+
+    LinkedIn uploads images, videos and documents through three different
+    APIs, so the SDK must know what each media URL points at. Callers that
+    already know (from their own media records or a MIME type) pass it to
+    {!Make_with_options.post_single} as [?media_kinds]; otherwise the kind is
+    read from the downloaded file's [Content-Type] and, failing that, from
+    the URL path. *)
+
+type media_kind =
+  | Image
+  | Video
+  | Document
+
+let string_of_media_kind = function
+  | Image -> "image"
+  | Video -> "video"
+  | Document -> "document"
+
+(** [media_kind_of_content_type "video/mp4; codecs=avc1"] is [Some Video].
+    Only [image/*] and [video/*] are recognised: anything else (including
+    [application/octet-stream], which storage services send for unknown
+    files) is [None], so the caller falls back to the URL. Documents are
+    never inferred; pass [Document] explicitly. *)
+let media_kind_of_content_type content_type =
+  let mime =
+    match String.index_opt content_type ';' with
+    | Some i -> String.sub content_type 0 i
+    | None -> content_type
+  in
+  let mime = String.lowercase_ascii (String.trim mime) in
+  if String.starts_with ~prefix:"video/" mime then Some Video
+  else if String.starts_with ~prefix:"image/" mime then Some Image
+  else None
+
+let video_path_suffixes = [ ".mp4"; ".mov"; ".mpeg"; ".avi" ]
+
+(** The kind a URL's path suggests: [Video] for a video file extension,
+    otherwise [Image]. The query string and fragment are ignored, so a
+    presigned URL such as [https://bucket.s3.amazonaws.com/a.mp4?X-Amz-...]
+    is a video. *)
+let media_kind_of_url url =
+  let path = String.lowercase_ascii (Uri.path (Uri.of_string (String.trim url))) in
+  if List.exists (fun suffix -> Filename.check_suffix path suffix) video_path_suffixes
+  then Video
+  else Image
+
+(** The kind to upload a media item as: the caller's [declared] kind if
+    given, else the downloaded file's [Content-Type], else the URL path. *)
+let resolve_media_kind ~declared ~content_type ~url =
+  match declared with
+  | Some kind -> kind
+  | None ->
+      (match Option.bind content_type media_kind_of_content_type with
+       | Some kind -> kind
+       | None -> media_kind_of_url url)
+
+(** Case-insensitive response header lookup (HTTP header names are
+    case-insensitive and clients differ in how they report them). *)
+let find_response_header headers name =
+  let name = String.lowercase_ascii name in
+  List.find_map
+    (fun (key, value) ->
+      if String.lowercase_ascii key = name then Some value else None)
+    headers
+
+(** {1 Video upload (Videos API)}
+
+    @see <https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api>
+
+    [initializeUpload] declares the file size and answers with one upload
+    instruction per part (4 MiB each, the last one shorter). Each part is
+    PUT to its own URL and answers with an [ETag]; [finalizeUpload] then
+    joins the parts, given the ETags in instruction order and the upload
+    token. Only after that does the video leave [WAITING_UPLOAD]. *)
+
+(** One part of a multi-part video upload: the bytes
+    [first_byte..last_byte] (both inclusive) go to [upload_url]. *)
+type video_upload_part = {
+  upload_url : string;
+  first_byte : int;
+  last_byte : int;
+}
+
+(** The [initializeUpload] response. [upload_token] is opaque and may be
+    the empty string; it is sent back unchanged in [finalizeUpload]. *)
+type video_upload_session = {
+  video_urn : string;
+  upload_token : string;
+  parts : video_upload_part list;
+}
+
+(** Processing state of an uploaded video ([GET /rest/videos/{urn}]). *)
+type video_status =
+  | Video_waiting_upload
+  | Video_processing
+  | Video_available
+  | Video_processing_failed of string option
+      (** [processingFailureReason], when LinkedIn gives one. *)
+  | Video_status_other of string
+      (** A status this SDK does not know yet. *)
+
+let parse_json_result ~what body f =
+  match Yojson.Basic.from_string body with
+  | json ->
+      (try Ok (f json) with
+       | Yojson.Basic.Util.Type_error (msg, _) ->
+           Error (Printf.sprintf "Failed to parse %s: %s" what msg))
+  | exception Yojson.Json_error msg ->
+      Error (Printf.sprintf "Failed to parse %s: %s" what msg)
+
+(** Parse an [initializeUpload] response:
+    [{"value": {"video": urn, "uploadToken": t,
+    "uploadInstructions": [{"uploadUrl", "firstByte", "lastByte"}, ...]}}]. *)
+let parse_video_upload_session body =
+  let open Yojson.Basic.Util in
+  let parsed =
+    parse_json_result ~what:"video initializeUpload response" body (fun json ->
+        let value = member "value" json in
+        let part instruction =
+          {
+            upload_url = instruction |> member "uploadUrl" |> to_string;
+            first_byte = instruction |> member "firstByte" |> to_number |> Float.to_int;
+            last_byte = instruction |> member "lastByte" |> to_number |> Float.to_int;
+          }
+        in
+        {
+          video_urn = value |> member "video" |> to_string;
+          upload_token =
+            value |> member "uploadToken" |> to_string_option
+            |> Option.value ~default:"";
+          parts = value |> member "uploadInstructions" |> to_list |> List.map part;
+        })
+  in
+  match parsed with
+  | Ok { parts = []; _ } ->
+      Error "LinkedIn video initializeUpload returned no upload instructions"
+  | (Ok _ | Error _) as result -> result
+
+(** Byte offset and length of [part] within a file of [file_size] bytes.
+    The last part's [lastByte] may point past the end of the file, so it is
+    clamped; a part that starts outside the file is an error. *)
+let video_part_slice ~file_size part =
+  if part.first_byte < 0 || part.first_byte >= file_size
+     || part.last_byte < part.first_byte
+  then
+    Error
+      (Printf.sprintf
+         "LinkedIn video upload instruction %d-%d does not fit a %d-byte file"
+         part.first_byte part.last_byte file_size)
+  else
+    let last = min part.last_byte (file_size - 1) in
+    Ok (part.first_byte, last - part.first_byte + 1)
+
+(** The part id [finalizeUpload] expects: the part PUT's [ETag] header,
+    without the quotes HTTP puts around entity tags. *)
+let video_part_id_of_headers headers =
+  match find_response_header headers "etag" with
+  | None -> None
+  | Some raw ->
+      let tag = String.trim raw in
+      let len = String.length tag in
+      let unquoted =
+        if len >= 2 && tag.[0] = '"' && tag.[len - 1] = '"' then
+          String.sub tag 1 (len - 2)
+        else tag
+      in
+      if unquoted = "" then None else Some unquoted
+
+(** The [finalizeUpload] request body. *)
+let video_finalize_body ~(session : video_upload_session) ~part_ids =
+  Yojson.Basic.to_string
+    (`Assoc
+       [
+         ( "finalizeUploadRequest",
+           `Assoc
+             [
+               ("video", `String session.video_urn);
+               ("uploadToken", `String session.upload_token);
+               ("uploadedPartIds", `List (List.map (fun id -> `String id) part_ids));
+             ] );
+       ])
+
+let video_status_of_string ~failure_reason = function
+  | "WAITING_UPLOAD" -> Video_waiting_upload
+  | "PROCESSING" -> Video_processing
+  | "AVAILABLE" -> Video_available
+  | "PROCESSING_FAILED" -> Video_processing_failed failure_reason
+  | other -> Video_status_other other
+
+(** Parse a [GET /rest/videos/{urn}] response's [status]. *)
+let parse_video_status body =
+  let open Yojson.Basic.Util in
+  parse_json_result ~what:"video status response" body (fun json ->
+      let failure_reason = json |> member "processingFailureReason" |> to_string_option in
+      json |> member "status" |> to_string |> video_status_of_string ~failure_reason)
+
+(** A non-blocking wait in the consumer's runtime; see {!Social_core.SLEEP}.
+    With Lwt: [Social_lwt.Lwt_adapter.sleep]. *)
+type sleep = seconds:float -> (unit -> unit) -> (string -> unit) -> unit
+
+(** Options for {!Make_with_options}. Start from {!Default_options}. *)
+module type OPTIONS = sig
+  (** Wait between checks of a finalized video's processing status.
+      With [Some sleep], {!Make_with_options.post_single} waits (without
+      blocking) until LinkedIn reports the video [AVAILABLE] before creating
+      the post. [None] creates the post right after [finalizeUpload]; the
+      SDK never blocks a thread, so it cannot wait without a timer. *)
+  val sleep : sleep option
+end
+
+(** Defaults: no timer, so a video post is created right after upload. *)
+module Default_options = struct
+  let sleep : sleep option = None
+end
+
 (** Configuration module type for LinkedIn provider *)
 module type CONFIG = sig
   module Http : HTTP_CLIENT
@@ -633,8 +849,9 @@ module type CONFIG = sig
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
 end
 
-(** Make functor to create LinkedIn provider with given configuration *)
-module Make (Config : CONFIG) = struct
+(** LinkedIn provider with explicit {!OPTIONS} (e.g. a timer, so video
+    posts wait until LinkedIn has processed the video). *)
+module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   let linkedin_api_base = "https://api.linkedin.com/v2"
   let linkedin_rest_base = "https://api.linkedin.com/rest"
   let linkedin_auth_url = "https://www.linkedin.com/oauth/v2"
@@ -1223,117 +1440,325 @@ module Make (Config : CONFIG) = struct
           on_error message)
       on_error
   
-  (** Register media upload with LinkedIn using modern per-asset-type REST APIs
-
-      Uses /rest/images for images, /rest/videos for videos, /rest/documents for documents.
-      Returns (asset_urn, upload_url) for subsequent binary upload.
-  *)
-  let register_upload ~access_token ~owner_urn ~media_type on_success on_error =
-    let endpoint = match media_type with
-      | "video" -> Printf.sprintf "%s/videos?action=initializeUpload" linkedin_rest_base
-      | "document" -> Printf.sprintf "%s/documents?action=initializeUpload" linkedin_rest_base
-      | _ -> Printf.sprintf "%s/images?action=initializeUpload" linkedin_rest_base
-    in
-
-    let register_body = `Assoc [
-      ("initializeUploadRequest", `Assoc [
-        ("owner", `String owner_urn);
-      ])
-    ] in
-
-    let body = Yojson.Basic.to_string register_body in
-    let headers = [
+  let rest_json_headers ~access_token =
+    [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
       ("Content-Type", "application/json");
       ("X-Restli-Protocol-Version", "2.0.0");
       ("LinkedIn-Version", linkedin_version_header ());
-    ] in
+    ]
 
-    Config.Http.post ~headers ~body endpoint
-      (fun response ->
-        if response.status >= 200 && response.status < 300 then
-          try
-            let open Yojson.Basic.Util in
-            let json = Yojson.Basic.from_string response.body in
-            let value = json |> member "value" in
-            let asset_urn = match media_type with
-              | "video" -> value |> member "video" |> to_string
-              | "document" -> value |> member "document" |> to_string
-              | _ -> value |> member "image" |> to_string
-            in
-            let upload_url = value |> member "uploadUrl" |> to_string in
-            on_success (asset_urn, upload_url)
-          with e ->
-            on_error (Printf.sprintf "Failed to parse register response: %s" (Printexc.to_string e))
-        else
-          on_error (Printf.sprintf "Failed to register upload (%d): %s" response.status response.body))
-      on_error
-  
-  (** Upload binary media data to LinkedIn *)
-  let upload_binary ~access_token ~upload_url ~media_data on_success on_error =
-    let headers = [
+  let binary_upload_headers ~access_token =
+    [
       ("Authorization", Printf.sprintf "Bearer %s" access_token);
       ("Content-Type", "application/octet-stream");
       ("LinkedIn-Version", linkedin_version_header ());
-    ] in
-    
-    Config.Http.put ~headers ~body:media_data upload_url
+    ]
+
+  let is_success_status status = status >= 200 && status < 300
+
+  (* A URN as one path segment: Rest.li wants its colons encoded too
+     ([/rest/videos/urn%3Ali%3Avideo%3A...]), which path encoding keeps. *)
+  let encode_urn_path_segment urn =
+    String.concat "%3A" (String.split_on_char ':' (Uri.pct_encode urn))
+
+  (** Register a single-part image or document upload ([/rest/images] or
+      [/rest/documents] [initializeUpload]); answers [(asset_urn, upload_url)]
+      for {!upload_binary}. Videos are multi-part and go through
+      {!upload_video} instead. *)
+  let register_single_part_upload ~access_token ~owner_urn ~kind on_success on_error =
+    let endpoint_and_field =
+      match kind with
+      | Image -> Ok ("images", "image")
+      | Document -> Ok ("documents", "document")
+      | Video ->
+          Error
+            "LinkedIn videos are uploaded in parts after declaring their size; use upload_video"
+    in
+    match endpoint_and_field with
+    | Error msg -> on_error msg
+    | Ok (endpoint, urn_field) ->
+        let body =
+          Yojson.Basic.to_string
+            (`Assoc [ ("initializeUploadRequest", `Assoc [ ("owner", `String owner_urn) ]) ])
+        in
+        let url = Printf.sprintf "%s/%s?action=initializeUpload" linkedin_rest_base endpoint in
+        Config.Http.post ~headers:(rest_json_headers ~access_token) ~body url
+          (fun response ->
+            if is_success_status response.status then
+              let parsed =
+                parse_json_result ~what:"register response" response.body (fun json ->
+                    let open Yojson.Basic.Util in
+                    let value = member "value" json in
+                    ( value |> member urn_field |> to_string,
+                      value |> member "uploadUrl" |> to_string ))
+              in
+              match parsed with
+              | Ok asset -> on_success asset
+              | Error msg -> on_error msg
+            else
+              on_error
+                (Printf.sprintf "Failed to register upload (%d): %s" response.status
+                   (redact_sensitive_payload response.body)))
+          on_error
+
+  (** Register an image or document upload with LinkedIn's per-asset-type
+      REST APIs ([/rest/images], [/rest/documents]). Returns
+      [(asset_urn, upload_url)] for {!upload_binary}.
+
+      [~media_type:"video"] is an error: the Videos API needs the file size
+      up front and a multi-part upload, see {!upload_video}. Any other value
+      registers an image. *)
+  let register_upload ~access_token ~owner_urn ~media_type on_success on_error =
+    let kind =
+      match media_type with
+      | "video" -> Video
+      | "document" -> Document
+      | _ -> Image
+    in
+    register_single_part_upload ~access_token ~owner_urn ~kind on_success on_error
+
+  (** Upload binary media data to LinkedIn *)
+  let upload_binary ~access_token ~upload_url ~media_data on_success on_error =
+    Config.Http.put ~headers:(binary_upload_headers ~access_token) ~body:media_data upload_url
       (fun response ->
-        if response.status >= 200 && response.status < 300 then
-          on_success ()
-        else
-          on_error (Printf.sprintf "Failed to upload media binary (%d)" response.status))
+        if is_success_status response.status then on_success ()
+        else on_error (Printf.sprintf "Failed to upload media binary (%d)" response.status))
       on_error
-  
-  (** Upload image or video to LinkedIn with optional alt text *)
-  let upload_media ~access_token ~owner_urn ~media_url ~media_type ~alt_text ?(validate_before_upload=false) ~on_validation_error on_success on_error =
+
+  (** {2 Videos API} *)
+
+  (** Seconds between video status checks while waiting for [AVAILABLE]. *)
+  let video_status_poll_interval_seconds = 5.0
+
+  (** Status checks before the post is created anyway (5 minutes at the
+      default interval). LinkedIn publishes a post whose video is still
+      processing once processing completes. *)
+  let video_status_max_polls = 60
+
+  (** [POST /rest/videos?action=initializeUpload] declaring
+      [file_size_bytes]; answers the upload session (video URN, upload token
+      and one instruction per part). *)
+  let initialize_video_upload ~access_token ~owner_urn ~file_size_bytes on_success on_error =
+    let body =
+      Yojson.Basic.to_string
+        (`Assoc
+           [
+             ( "initializeUploadRequest",
+               `Assoc
+                 [
+                   ("owner", `String owner_urn);
+                   ("fileSizeBytes", `Int file_size_bytes);
+                   ("uploadCaptions", `Bool false);
+                   ("uploadThumbnail", `Bool false);
+                 ] );
+           ])
+    in
+    let url = Printf.sprintf "%s/videos?action=initializeUpload" linkedin_rest_base in
+    Config.Http.post ~headers:(rest_json_headers ~access_token) ~body url
+      (fun response ->
+        if is_success_status response.status then
+          match parse_video_upload_session response.body with
+          | Ok session -> on_success session
+          | Error msg -> on_error msg
+        else
+          on_error
+            (Printf.sprintf "Failed to initialize video upload (%d): %s" response.status
+               (redact_sensitive_payload response.body)))
+      on_error
+
+  (** PUT every part of [media_data] to its instruction's URL, in order;
+      answers the part ids (ETags) in the same order. *)
+  let upload_video_parts ~access_token ~(session : video_upload_session) ~media_data on_success
+      on_error =
+    let file_size = String.length media_data in
+    let rec upload_parts parts part_ids =
+      match parts with
+      | [] -> on_success (List.rev part_ids)
+      | part :: rest ->
+          (match video_part_slice ~file_size part with
+           | Error msg -> on_error msg
+           | Ok (offset, length) ->
+               Config.Http.put ~headers:(binary_upload_headers ~access_token)
+                 ~body:(String.sub media_data offset length) part.upload_url
+                 (fun response ->
+                   if not (is_success_status response.status) then
+                     on_error
+                       (Printf.sprintf "Failed to upload video part %d-%d (%d)" part.first_byte
+                          part.last_byte response.status)
+                   else
+                     match video_part_id_of_headers response.headers with
+                     | Some part_id -> upload_parts rest (part_id :: part_ids)
+                     | None ->
+                         on_error
+                           (Printf.sprintf
+                              "LinkedIn returned no ETag for video part %d-%d; cannot finalize the upload"
+                              part.first_byte part.last_byte))
+                 on_error)
+    in
+    upload_parts session.parts []
+
+  (** [POST /rest/videos?action=finalizeUpload] with the upload token and
+      the part ids in instruction order. *)
+  let finalize_video_upload ~access_token ~(session : video_upload_session) ~part_ids on_success
+      on_error =
+    let url = Printf.sprintf "%s/videos?action=finalizeUpload" linkedin_rest_base in
+    Config.Http.post ~headers:(rest_json_headers ~access_token)
+      ~body:(video_finalize_body ~session ~part_ids) url
+      (fun response ->
+        if is_success_status response.status then on_success ()
+        else
+          on_error
+            (Printf.sprintf "Failed to finalize video upload (%d): %s" response.status
+               (redact_sensitive_payload response.body)))
+      on_error
+
+  (** [GET /rest/videos/{urn}]: the video's processing status. *)
+  let get_video_status ~access_token ~video_urn on_success on_error =
+    let url = Printf.sprintf "%s/videos/%s" linkedin_rest_base (encode_urn_path_segment video_urn) in
+    let headers =
+      [
+        ("Authorization", Printf.sprintf "Bearer %s" access_token);
+        ("X-Restli-Protocol-Version", "2.0.0");
+        ("LinkedIn-Version", linkedin_version_header ());
+      ]
+    in
+    Config.Http.get ~headers url
+      (fun response ->
+        if is_success_status response.status then
+          match parse_video_status response.body with
+          | Ok status -> on_success status
+          | Error msg -> on_error msg
+        else
+          on_error
+            (Printf.sprintf "Failed to read video status (%d): %s" response.status
+               (redact_sensitive_payload response.body)))
+      on_error
+
+  (** With {!OPTIONS.sleep}, wait until the video is [AVAILABLE], checking
+      every {!video_status_poll_interval_seconds}. [PROCESSING_FAILED] is an
+      error. After {!video_status_max_polls} checks (or without a timer) it
+      continues anyway and lets the Posts API decide. A failed status read
+      only costs one check. *)
+  let wait_for_video_available ~access_token ~video_urn on_ready on_error =
+    match Options.sleep with
+    | None -> on_ready ()
+    | Some sleep ->
+        let rec check polls_left =
+          get_video_status ~access_token ~video_urn
+            (function
+              | Video_available -> on_ready ()
+              | Video_processing_failed reason ->
+                  on_error
+                    (Printf.sprintf "LinkedIn could not process the video%s"
+                       (match reason with Some r -> ": " ^ r | None -> ""))
+              | Video_waiting_upload | Video_processing | Video_status_other _ ->
+                  wait_and_check polls_left)
+            (fun _status_error -> wait_and_check polls_left)
+        and wait_and_check polls_left =
+          if polls_left <= 1 then on_ready ()
+          else
+            sleep ~seconds:video_status_poll_interval_seconds
+              (fun () -> check (polls_left - 1))
+              on_error
+        in
+        check video_status_max_polls
+
+  (** Upload a video through the Videos API: initialize with the file size,
+      PUT each part, finalize with the part ETags, then (with a timer) wait
+      until it is [AVAILABLE]. Answers the video URN. *)
+  let upload_video ~access_token ~owner_urn ~media_data on_success on_error =
+    initialize_video_upload ~access_token ~owner_urn
+      ~file_size_bytes:(String.length media_data)
+      (fun session ->
+        upload_video_parts ~access_token ~session ~media_data
+          (fun part_ids ->
+            finalize_video_upload ~access_token ~session ~part_ids
+              (fun () ->
+                wait_for_video_available ~access_token ~video_urn:session.video_urn
+                  (fun () -> on_success session.video_urn)
+                  on_error)
+              on_error)
+          on_error)
+      on_error
+
+  (** Upload already-downloaded bytes as [kind]; answers the asset URN. *)
+  let upload_media_data ~access_token ~owner_urn ~kind ~media_data on_success on_error =
+    match kind with
+    | Video -> upload_video ~access_token ~owner_urn ~media_data on_success on_error
+    | Image | Document ->
+        register_single_part_upload ~access_token ~owner_urn ~kind
+          (fun (asset_urn, upload_url) ->
+            upload_binary ~access_token ~upload_url ~media_data
+              (fun () -> on_success asset_urn)
+              on_error)
+          on_error
+
+  let validate_downloaded_media ~kind ~content_type ~file_size ~alt_text =
+    let check media_type ~default_mime =
+      validate_media
+        ~media:
+          {
+            Platform_types.media_type;
+            mime_type = Option.value content_type ~default:default_mime;
+            file_size_bytes = file_size;
+            width = None;
+            height = None;
+            duration_seconds = None;
+            alt_text;
+          }
+    in
+    match kind with
+    | Video -> check Platform_types.Video ~default_mime:"video/mp4"
+    | Image -> check Platform_types.Image ~default_mime:"image/jpeg"
+    | Document -> Ok ()
+
+  (** Download [media_url] and upload it to LinkedIn. The kind is
+      [declared_kind] if given, else the response's [Content-Type], else the
+      URL path (see {!resolve_media_kind}). Answers
+      [(asset_urn, kind, alt_text)]. *)
+  let upload_media_from_url ~access_token ~owner_urn ~media_url ~declared_kind ~alt_text
+      ~validate_before_upload ~on_validation_error on_success on_error =
     if not (OAuth.is_safe_remote_media_url media_url) then
       on_error "Unsafe media URL; only public http(s) URLs are allowed"
     else
-      (* Download media from URL *)
       Config.Http.get ~headers:[] media_url
-      (fun media_response ->
-        if media_response.status >= 200 && media_response.status < 300 then
-          let file_size = String.length media_response.body in
-          
-          (* Validate media if requested *)
-          let validation_result =
-            if validate_before_upload then
-              let mime_type = 
-                List.assoc_opt "content-type" media_response.headers 
-                |> Option.value ~default:(if media_type = "video" then "video/mp4" else "image/jpeg")
-              in
-              let media_type_enum = 
-                if media_type = "video" then Platform_types.Video 
-                else Platform_types.Image 
-              in
-              let media : Platform_types.post_media = {
-                media_type = media_type_enum;
-                mime_type = mime_type;
-                file_size_bytes = file_size;
-                width = None;
-                height = None;
-                duration_seconds = None;
-                alt_text = alt_text;
-              } in
-              validate_media ~media
-            else
-              Ok ()
-          in
-          
-          (match validation_result with
-          | Error errs -> on_validation_error errs
-          | Ok () ->
-              register_upload ~access_token ~owner_urn ~media_type
-                (fun (asset_urn, upload_url) ->
-                  upload_binary ~access_token ~upload_url ~media_data:media_response.body
-                    (fun () -> on_success (asset_urn, alt_text))
-                    on_error)
-                on_error)
-        else
-          on_error (Printf.sprintf "Failed to download media (%d)" media_response.status))
+        (fun media_response ->
+          if not (is_success_status media_response.status) then
+            on_error (Printf.sprintf "Failed to download media (%d)" media_response.status)
+          else
+            let content_type = find_response_header media_response.headers "content-type" in
+            let kind = resolve_media_kind ~declared:declared_kind ~content_type ~url:media_url in
+            let validation =
+              if validate_before_upload then
+                validate_downloaded_media ~kind ~content_type
+                  ~file_size:(String.length media_response.body) ~alt_text
+              else Ok ()
+            in
+            match validation with
+            | Error errs -> on_validation_error errs
+            | Ok () ->
+                upload_media_data ~access_token ~owner_urn ~kind ~media_data:media_response.body
+                  (fun asset_urn -> on_success (asset_urn, kind, alt_text))
+                  on_error)
+        on_error
+
+  (** Upload image, video or document to LinkedIn with optional alt text.
+      [~media_type] is ["image"], ["video"] or ["document"]; any other value
+      is treated as an image. *)
+  let upload_media ~access_token ~owner_urn ~media_url ~media_type ~alt_text
+      ?(validate_before_upload = false) ~on_validation_error on_success on_error =
+    let declared_kind =
+      match media_type with
+      | "video" -> Video
+      | "document" -> Document
+      | _ -> Image
+    in
+    upload_media_from_url ~access_token ~owner_urn ~media_url ~declared_kind:(Some declared_kind)
+      ~alt_text ~validate_before_upload ~on_validation_error
+      (fun (asset_urn, _kind, alt_text) -> on_success (asset_urn, alt_text))
       on_error
-  
+
   (** Extract first URL from text for link preview *)
   let extract_first_url text =
     try
@@ -1386,6 +1811,10 @@ module Make (Config : CONFIG) = struct
       @param author_urn Optional explicit author URN. When omitted, uses current person URN.
              Supported formats: urn:li:person:*, urn:li:organization:*, urn:li:organizationBrand:*
       @param alt_texts Optional alt text for each media item
+      @param media_kinds What each media item is ([Image], [Video] or [Document]),
+             by position in [media_urls]. Pass it when you know: a missing or [None]
+             entry is detected from the download's [Content-Type], then from the URL
+             path (query string ignored), defaulting to [Image].
       @param title Optional article title. Only used when text contains a URL and no media
              is attached (LinkedIn article payload). Falls back to the first line of text
              truncated to 200 chars when omitted.
@@ -1398,7 +1827,7 @@ module Make (Config : CONFIG) = struct
              Default: false
       @param on_result Callback receiving the outcome with post ID
   *)
-  let post_single ~account_id ~text ~media_urls ?author_urn ?(alt_texts=[]) ?title ?(link_preview=true) ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?author_urn ?(alt_texts=[]) ?(media_kinds=[]) ?title ?(link_preview=true) ?(validate_media_before_upload=false) on_result =
     (* Validate before making any API calls *)
     let media_count = List.length media_urls in
     let author_validation =
@@ -1425,42 +1854,31 @@ module Make (Config : CONFIG) = struct
             resolve_author_urn
               (fun resolved_author_urn ->
                 (* Upload all media items first *)
-                let rec upload_all_media urls_with_alt acc on_complete on_err =
-                  match urls_with_alt with
+                let rec upload_all_media items acc on_complete on_err =
+                  match items with
                   | [] -> on_complete (List.rev acc)
-                  | (url, alt_text) :: rest ->
-                      (* Determine media type from URL or default to image *)
-                      let is_video_url url =
-                        let lower = String.lowercase_ascii url in
-                        Filename.check_suffix lower ".mp4" ||
-                        Filename.check_suffix lower ".mov" ||
-                        Filename.check_suffix lower ".mpeg" ||
-                        Filename.check_suffix lower ".avi"
-                      in
-                      let media_type = if is_video_url url then "video" else "image" in
-                      upload_media ~access_token ~owner_urn:resolved_author_urn
-                        ~media_url:url 
-                        ~media_type
-                        ~alt_text
+                  | (url, declared_kind, alt_text) :: rest ->
+                      upload_media_from_url ~access_token ~owner_urn:resolved_author_urn
+                        ~media_url:url ~declared_kind ~alt_text
                         ~validate_before_upload:validate_media_before_upload
-                        ~on_validation_error:(fun errs -> 
+                        ~on_validation_error:(fun errs ->
                           on_result (Error_types.Failure (Error_types.Validation_error errs)))
-                        (fun (asset_urn, alt_text) ->
-                          let uploaded = { 
-                            asset_urn; 
-                            media_type; 
-                            alt_text 
-                          } in
+                        (fun (asset_urn, kind, alt_text) ->
+                          let uploaded =
+                            { asset_urn; media_type = string_of_media_kind kind; alt_text }
+                          in
                           upload_all_media rest (uploaded :: acc) on_complete on_err)
                         on_err
                 in
-                
-                (* Pair URLs with alt text *)
-                let urls_with_alt = List.mapi (fun i url ->
-                  let alt_text = try List.nth alt_texts i with _ -> None in
-                  (url, alt_text)
-                ) media_urls in
-                
+
+                (* Pair each URL with its declared kind and alt text *)
+                let nth_or_none items i = Option.join (List.nth_opt items i) in
+                let urls_with_alt =
+                  List.mapi
+                    (fun i url -> (url, nth_or_none media_kinds i, nth_or_none alt_texts i))
+                    media_urls
+                in
+
                 upload_all_media urls_with_alt []
                   (fun uploaded_media ->
                     (* Extract URL from text for link preview, unless the caller
@@ -1572,9 +1990,8 @@ module Make (Config : CONFIG) = struct
                               json |> Yojson.Basic.Util.member "id" |> Yojson.Basic.Util.to_string
                             with _ ->
                               (* Try x-restli-id header *)
-                              (try
-                                List.assoc "x-restli-id" response.headers
-                              with Not_found -> "unknown")
+                              (find_response_header response.headers "x-restli-id"
+                               |> Option.value ~default:"unknown")
                           in
                           on_result (Error_types.Success post_id)
                         else
@@ -1606,22 +2023,26 @@ module Make (Config : CONFIG) = struct
       @param media_urls_per_post Media URLs for each post
       @param author_urn Optional explicit author URN forwarded to post_single
       @param alt_texts_per_post Alt texts for each post's media
+      @param media_kinds_per_post Media kinds for each post's media, forwarded to
+             post_single as [?media_kinds]
       @param title Optional article title forwarded to post_single (used only when the
              first post is a link-preview article with no media).
       @param link_preview Forwarded to post_single. Default: true
       @param validate_media_before_upload When true, validates media after download. Default: false
       @param on_result Callback receiving the outcome with thread_result
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?author_urn ?(alt_texts_per_post=[]) ?title ?link_preview ?(validate_media_before_upload=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?author_urn ?(alt_texts_per_post=[]) ?(media_kinds_per_post=[]) ?title ?link_preview ?(validate_media_before_upload=false) on_result =
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
     | Error errs ->
         on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
         let first_text = List.hd texts in
-        let first_media = if List.length media_urls_per_post > 0 then List.hd media_urls_per_post else [] in
-        let first_alt_texts = if List.length alt_texts_per_post > 0 then List.hd alt_texts_per_post else [] in
-        post_single ~account_id ~text:first_text ~media_urls:first_media ?author_urn ~alt_texts:first_alt_texts ?title ?link_preview ~validate_media_before_upload
+        let first_or_empty = function [] -> [] | first :: _ -> first in
+        let first_media = first_or_empty media_urls_per_post in
+        let first_alt_texts = first_or_empty alt_texts_per_post in
+        let first_media_kinds = first_or_empty media_kinds_per_post in
+        post_single ~account_id ~text:first_text ~media_urls:first_media ?author_urn ~alt_texts:first_alt_texts ~media_kinds:first_media_kinds ?title ?link_preview ~validate_media_before_upload
           (fun outcome ->
             match outcome with
             | Error_types.Success post_id ->
@@ -2915,3 +3336,6 @@ module Make (Config : CONFIG) = struct
           )
           (fun err -> on_result (Error_types.Failure err))
 end
+
+(** LinkedIn provider with {!Default_options}. *)
+module Make (Config : CONFIG) = Make_with_options (Config) (Default_options)

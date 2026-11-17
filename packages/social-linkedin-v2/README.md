@@ -9,7 +9,7 @@ OCaml library for LinkedIn API v2 integration with runtime-agnostic design.
 - **OAuth 2.0 Authentication**: Full OAuth flow support (authorization_code grant)
 - **Personal Posting**: Post text, images, and videos to personal profiles
 - **OpenID Connect**: Uses OpenID Connect for user identification
-- **Media Upload**: Support for images (up to 8 MB) and videos (up to 200 MB)
+- **Media Upload**: Images (up to 8 MB) and videos (up to 200 MB) through the Images and Videos APIs. Videos use multi-part upload with `finalizeUpload`. With a timer (`Make_with_options`) the SDK waits until the video is `AVAILABLE` before posting
 - **Alt Text Support**: Accessibility support for media descriptions
 - **Token Refresh**: Optional programmatic refresh (Partner Program only)
 - **Profile Fetching**: Get current user's profile information
@@ -714,10 +714,19 @@ val post_single :
   text:string -> 
   media_urls:string list ->
   ?author_urn:string ->
-  ?alt_texts:string list ->
+  ?alt_texts:string option list ->
+  ?media_kinds:media_kind option list ->  (* Image | Video | Document, by position *)
+  ?title:string ->
+  ?link_preview:bool ->
+  ?validate_media_before_upload:bool ->
   (string Social_core.Error_types.outcome -> unit) ->  (* on_result *)
   unit
 ```
+
+Pass `~media_kinds` when you know what each URL is. A missing or `None` entry is
+detected from the download's `Content-Type` (`video/*`, `image/*`), then from the
+URL path, ignoring the query string so presigned `...mp4?X-Amz-...` URLs work.
+Anything else is uploaded as an image. Documents are never inferred.
 
 #### `post_thread`
 Post multiple items (LinkedIn only supports single posts, so this posts just the first item).
@@ -962,6 +971,16 @@ Returns metrics including:
 - Maximum count: 9 images per post
 
 ### Videos
+- Upload follows the [Videos API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api): `initializeUpload` with `fileSizeBytes`, one PUT per 4 MiB part, `finalizeUpload` with the part ETags
+- `Make (Config)` posts right after `finalizeUpload`. To wait until LinkedIn reports the video `AVAILABLE` (checked every 5 s, at most 60 times, without blocking), use a timer:
+
+```ocaml
+module LinkedIn = Social_linkedin_v2.Make_with_options (Config) (struct
+  let sleep = Some Social_lwt.Lwt_adapter.sleep
+end)
+```
+
+  `PROCESSING_FAILED` fails the post with LinkedIn's reason. If the video is still processing after the last check, the post is created anyway, and LinkedIn publishes it once processing completes.
 - Maximum file size: 200 MB
 - Supported formats: MP4, MOV, MPEG
 - Duration: 3 seconds to 10 minutes

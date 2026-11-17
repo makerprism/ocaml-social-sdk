@@ -7,10 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- Video upload follows the Videos API. `initializeUpload` now declares
+  `fileSizeBytes`. Each part in `value.uploadInstructions` is PUT with its own
+  `firstByte..lastByte` slice, so multi-part uploads over 4 MiB work. The
+  parts' `ETag`s and the `uploadToken` then go to `finalizeUpload`.
+  Before this fix the SDK read a `value.uploadUrl` that the Videos API never
+  returns and never finalized, so every video post failed.
+- Video detection ignores the query string and fragment. A presigned URL such
+  as `.../clip.mp4?X-Amz-Signature=...` used to be uploaded as an image.
+  The downloaded file's `Content-Type` (`video/*`, `image/*`) now decides
+  before the URL path does.
+- The post id is read from the `x-restli-id` header case-insensitively.
+
 ### Added
 
 - **`OAuth.Make(Http).get_userinfo ~access_token`**: token-based `GET /v2/userinfo` (OpenID Connect) returning `profile_info`, for OAuth callbacks before an account is stored. Errors: 401 `Token_expired`, 403 `Insufficient_permissions ["openid"; "profile"]`, 429 `Rate_limited`, else `Api_error` with the body. Pure `parse_userinfo` and `userinfo_error` are exported.
-
+- `media_kind` (`Image | Video | Document`) with `media_kind_of_content_type`,
+  `media_kind_of_url` and `resolve_media_kind`. `post_single ?media_kinds` and
+  `post_thread ?media_kinds_per_post` take each item's kind by position when
+  the caller knows it. A missing or `None` entry is detected from the
+  download's `Content-Type`, then from the URL path, and otherwise defaults
+  to image.
+- `Make_with_options (Config) (Options)` with `OPTIONS.sleep`
+  (`Social_core.SLEEP` shape; `Social_lwt.Lwt_adapter.sleep` under Lwt).
+  With a timer, a video post polls `GET /rest/videos/{urn}` every
+  `video_status_poll_interval_seconds` (5 s) until `AVAILABLE`, for at most
+  `video_status_max_polls` (60) checks. `PROCESSING_FAILED` fails the post
+  with LinkedIn's `processingFailureReason`. When the checks run out, the
+  post is created anyway. `Make (Config)` is
+  `Make_with_options (Config) (Default_options)` and has no timer, so it
+  creates the post right after `finalizeUpload`.
+- Videos API primitives: `initialize_video_upload`, `upload_video_parts`,
+  `finalize_video_upload`, `get_video_status`, `upload_video`, and the pure
+  `parse_video_upload_session`, `video_part_slice`,
+  `video_part_id_of_headers`, `parse_video_status`.
 - `post_single` / `post_thread` take `?link_preview` (default `true`, the
   existing behaviour). With `~link_preview:false` a text-only post sends no
   `article` content block, so no link card is generated from the first URL.
@@ -20,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `register_upload ~media_type:"video"` returns an error and sends no
+  request. A video needs its size declared and a multi-part upload, so use
+  `upload_video` (`upload_media ~media_type:"video"` and `post_single` do).
+  Image and document registration are unchanged.
+- `post_single` gains `?media_kinds` and `post_thread` gains
+  `?media_kinds_per_post`. Calls compile unchanged, but code that restates
+  the function type (for example a module type for a first-class module) must
+  add the new optional argument.
 - 403 responses now carry LinkedIn's verbatim `message` text via the new
   `platform_message` field on `Insufficient_permissions`. See
   `social-core/CHANGES.md` for the breaking variant change.
