@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.Make(Http).exchange_code_full`**: the code exchange keeping the whole answer, `OAuth.token_exchange = {credentials; user_id; permissions : string list option; expires_in}`. Reads both the documented `{"data":[{...}]}` shape and the flat one, with `permissions` as a comma-joined string or an array; `credentials.scope` carries the granted permissions. Replaces the `?on_response` side channel for recovering `permissions`. `exchange_code` is unchanged.
+- **`OAuth.Make(Http).get_me ~access_token ?fields ?app_secret`**: token-based typed profile (`OAuth.profile`: `id`, `user_id`, `username`, `name`, `account_type`, `profile_picture_url`, `followers_count`, `follows_count`, `media_count`, `biography`, `website`), flat or data-wrapped answer. Defaults to the fields the Instagram Login guide documents (`OAuth.profile_fields`); `biography`/`website` must be requested explicitly. Pure parsers `OAuth.parse_token_exchange` / `OAuth.parse_profile`.
 - **`OAuth.authorize_url ~client_id ~redirect_uri ~state ~scopes ?enable_fb_login ?force_reauth ?extra_params ()`**: the one documented Business Login builder (plain comma-separated `scope`). `enable_fb_login` and `force_reauth` are sent only when given. Host unchanged (`api.instagram.com`).
 - **Deprecated**: `OAuth.get_authorization_url` and `Make.get_oauth_url` (both send the undocumented `params[scope]=[...]`); use `OAuth.authorize_url`. Both unchanged.
 - **`Make_nonblocking (Config : NONBLOCKING_CONFIG)`**: the provider with
