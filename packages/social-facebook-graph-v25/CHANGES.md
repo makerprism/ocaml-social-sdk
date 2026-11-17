@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Login discovery in `OAuth.Make(Http)`**, token-based (no `Config`), each with optional `?app_secret` for `appsecret_proof`:
+  - `get_me_id ~access_token`: `GET /me?fields=id`.
+  - `get_managed_pages ~access_token ?fields ?max_pages`: `GET /me/accounts`, following `paging.cursors.after` while `paging.next` is present, returning typed `OAuth.page {id; name; access_token; category; about; picture_url; tasks}`. Successor of `get_user_pages`, which reads only the first page and stays.
+  - `get_businesses`: `GET /me/businesses` (`OAuth.business`).
+  - `get_business_pages ~business_id ~edge:(Owned_pages | Client_pages)`.
+  - `get_all_business_pages`: both edges of every Business, deduplicated by Page id; returns `{pages; failures}` so one unreadable Business edge does not hide the others.
+  - Pure: `OAuth.default_page_fields`, `OAuth.page_of_json`, `OAuth.parse_graph_list`.
 - **`OAuth.Make(Http).debug_token_info ~app_access_token ~input_token`**: typed `GET /debug_token`, returning `Meta_debug_token.t api_result` (scopes, granular per-Page scopes, validity, expiry, user id). Graph failures go through `Meta_graph_error`, transport failures are `Network_error`. The JSON-returning `debug_token` stays for compatibility.
 - **`OAuth.Make(Http).get_permissions ~access_token ?app_secret`**: typed `GET /me/permissions`, returning `{permission; status = Granted | Declined | Expired | Unknown_status _}` list; `OAuth.granted_permissions` / `declined_permissions` split it. `?app_secret` adds `appsecret_proof`.
 - `OAuth.app_secret_proof ~app_secret ~access_token` (lowercase-hex HMAC-SHA256), `OAuth.token_query`, `OAuth.parse_permissions`, usable without a `Config`.

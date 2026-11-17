@@ -499,6 +499,88 @@ let test_app_secret_proof_known_answer () =
     = "e941110e3d2bfe82621f0e3e1434730d7305d106c5f68c87165d0b27a4611a4a");
   print_endline "✓ app_secret_proof matches HMAC-SHA256 known answer"
 
+let ok_response body = { status = 200; body; headers = [] }
+
+let test_get_me_id () =
+  Mock_http.reset ();
+  Mock_http.set_response (ok_response {|{"id":"10101"}|});
+  OAuth_http.get_me_id ~access_token:tricky_token (function
+    | Stdlib.Ok id ->
+        assert (id = "10101");
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] ->
+             assert (query_param url "fields" = "id");
+             assert (query_param url "access_token" = tricky_token);
+             assert (Uri.get_query_param (Uri.of_string url) "appsecret_proof" = None)
+         | _ -> failwith "expected one GET");
+        print_endline "✓ get_me_id reads /me?fields=id"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err))
+
+let test_get_managed_pages_follows_paging () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ ok_response
+        {|{"data":[{"id":"1","name":"One","access_token":"p1","category":"Cafe",
+                    "about":"","picture":{"data":{"url":"https://x/1.jpg"}},"tasks":["MANAGE"]}],
+           "paging":{"cursors":{"before":"b","after":"c1"},"next":"https://graph.facebook.com/next"}}|};
+      ok_response
+        {|{"data":[{"id":"2","name":"Two"},{"name":"no id"}],
+           "paging":{"cursors":{"before":"c1","after":"c2"}}}|} ];
+  OAuth_http.get_managed_pages ~access_token:"tok" ~app_secret:"sec"
+    ~fields:(OAuth.default_page_fields @ [ "tasks" ]) (function
+    | Stdlib.Ok pages ->
+        (match List.rev !Mock_http.requests with
+         | [ ("GET", first, _, _); ("GET", second, _, _) ] ->
+             assert (string_contains first "https://graph.facebook.com/v25.0/me/accounts?");
+             assert (query_param first "fields" = "id,name,access_token,category,about,picture{url},tasks");
+             assert (Uri.get_query_param (Uri.of_string first) "after" = None);
+             assert (query_param first "appsecret_proof"
+                     = OAuth.app_secret_proof ~app_secret:"sec" ~access_token:"tok");
+             assert (query_param second "after" = "c1")
+         | _ -> failwith "expected two GETs");
+        (match pages with
+         | [ one; two ] ->
+             assert (one.OAuth.id = "1" && one.access_token = Some "p1");
+             assert (one.about = None);
+             assert (one.picture_url = Some "https://x/1.jpg");
+             assert (one.tasks = [ "MANAGE" ]);
+             assert (two.OAuth.id = "2" && two.access_token = None && two.tasks = [])
+         | _ -> failwith "expected two pages");
+        print_endline "✓ get_managed_pages follows paging.next via the after cursor"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err))
+
+let test_get_all_business_pages () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ ok_response {|{"data":[{"id":"b1","name":"Biz"},{"id":"b2"}]}|};
+      ok_response {|{"data":[{"id":"1","name":"One","access_token":"p1"}]}|};
+      ok_response {|{"data":[{"id":"1","name":"One again"},{"id":"3","name":"Three","access_token":"p3"}]}|};
+      { status = 403;
+        body = {|{"error":{"message":"(#200) Permissions error","type":"OAuthException","code":200}}|};
+        headers = [] };
+      ok_response {|{"data":[]}|} ];
+  OAuth_http.get_all_business_pages ~access_token:"tok" (function
+    | Stdlib.Ok { OAuth.pages; failures } ->
+        let paths =
+          List.rev_map (fun (_, url, _, _) -> Uri.path (Uri.of_string url)) !Mock_http.requests
+        in
+        assert (paths = [ "/v25.0/me/businesses"; "/v25.0/b1/owned_pages"; "/v25.0/b1/client_pages";
+                          "/v25.0/b2/owned_pages"; "/v25.0/b2/client_pages" ]);
+        assert (List.map (fun p -> p.OAuth.id) pages = [ "1"; "3" ]);
+        assert ((List.hd pages).OAuth.name = "One");
+        (match failures with
+         | [ { OAuth.failed_business_id = "b2"; failed_edge = OAuth.Owned_pages;
+               failure = Error_types.Auth_error (Error_types.Insufficient_permissions _) } ] -> ()
+         | _ -> failwith "expected one owned_pages failure for b2");
+        print_endline "✓ get_all_business_pages dedups and reports failing edges"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 400; body = {|{"error":{"message":"bad","type":"OAuthException","code":190}}|}; headers = [] };
+  OAuth_http.get_all_business_pages ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Auth_error _) -> print_endline "✓ business list failure is an error"
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected an auth error")
+
 (** Test: Field selection *)
 let test_field_selection () =
   Mock_config.reset ();
@@ -3472,4 +3554,9 @@ let () =
   test_get_permissions ();
   test_app_secret_proof_known_answer ();
 
-  print_endline "\n=== All 84 tests passed! ===\n"
+  print_endline "\n--- Login Discovery Tests ---";
+  test_get_me_id ();
+  test_get_managed_pages_follows_paging ();
+  test_get_all_business_pages ();
+
+  print_endline "\n=== All 87 tests passed! ===\n"
