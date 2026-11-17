@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`get_permalink ~post_id ~access_token`** and **`get_permalink_for_account ~account_id ~post_id`**: fetch an object's `permalink_url` by id (`GET /{id}?fields=permalink_url`, with `appsecret_proof` when an app secret is configured). The result is `string option api_result`: `Ok None` when Meta returns no permalink for an object that exists. The pure parser is exported as `parse_permalink_response`.
 - Top-level API constants, usable without applying `Make`: `api_version`
   (`"v25.0"`), `graph_api_base`, `rupload_base`, `oauth_authorize_url`,
   `token_endpoint`. Applications should use these instead of writing

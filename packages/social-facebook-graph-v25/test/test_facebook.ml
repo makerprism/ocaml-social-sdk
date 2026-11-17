@@ -3223,6 +3223,51 @@ let test_api_error_provider_detail () =
    | None -> failwith "expected provider detail");
   print_endline "✓ Api_error provider detail"
 
+(* Permalink by id: GET /{id}?fields=permalink_url with appsecret_proof, and the
+   three outcomes callers branch on. *)
+let test_get_permalink () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app_secret";
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body = {|{"permalink_url":"https://example.com/p/1","id":"123_456"}|} } ];
+  Facebook.get_permalink ~post_id:"123_456" ~access_token:"tok"
+    (function
+      | Ok (Some "https://example.com/p/1") -> ()
+      | Ok _ -> failwith "expected the permalink"
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.host uri = Some "graph.facebook.com");
+       assert (Uri.path uri = "/v25.0/123_456");
+       assert (Uri.get_query_param uri "fields" = Some "permalink_url");
+       assert (Uri.get_query_param uri "appsecret_proof" <> None)
+   | _ -> failwith "expected one GET");
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"id":"123_456"}|} } ];
+  Facebook.get_permalink ~post_id:"123_456" ~access_token:"tok"
+    (function
+      | Ok None -> ()
+      | _ -> failwith "a missing permalink is Ok None");
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 400; headers = [];
+        body = {|{"error":{"message":"Unsupported get request","type":"GraphMethodException","code":100,"error_subcode":33}}|} } ];
+  Facebook.get_permalink ~post_id:"gone" ~access_token:"tok"
+    (function
+      | Error (Error_types.Resource_not_found _) -> ()
+      | Error err ->
+          failwith ("expected Resource_not_found, got " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "expected an error");
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = "<html>" } ];
+  Facebook.get_permalink ~post_id:"123_456" ~access_token:"tok"
+    (function
+      | Error (Error_types.Internal_error _) -> ()
+      | _ -> failwith "an unparseable 2xx body is Internal_error");
+  print_endline "PASS get_permalink"
+
 let () =
   print_endline "\n=== Facebook Provider Tests ===\n";
   
@@ -3336,5 +3381,7 @@ let () =
   test_get_page_info ();
   test_get_page_info_partial ();
   test_get_page_info_error ();
+
+  test_get_permalink ();
 
   print_endline "\n=== All 80 tests passed! ===\n"
