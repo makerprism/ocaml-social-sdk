@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed reads: threads, author feeds, post batches, notifications,
+  handles.**
+  - `Views` (module `Bluesky_views`, with an `.mli`): `post_view` (author,
+    record `text` / `createdAt` / `reply`, counts), the recursive `thread`
+    (`threadViewPost` with `parent` and `replies`, `notFoundPost`,
+    `blockedPost`, unknown `$type` kept as `Unknown_post`), `feed_view_post`
+    (hydrated reply context, `reasonRepost` / `reasonPin`),
+    `author_feed_page`, `notification` with a `notification_reason`
+    variant, `notifications_page`, `author_feed_filter`. Helpers:
+    `post_record_text`, `post_record_reply`, `rkey_of_uri`,
+    `post_web_url`.
+  - `Reads.Make (Http)`: `~service_url` with an optional `~access_jwt`, so
+    public reads can go to `Reads.public_api_url`
+    (`https://public.api.bsky.app`) with no session.
+    - `get_post_thread ?depth ?parent_height`
+    - `get_author_feed ?filter ?include_pins ?cursor`
+    - `get_posts`: batches of 25 `uris`, sent as repeated parameters
+    - `list_notifications ?reasons ?cursor`
+    - `resolve_handle`: `HandleNotFound` and the 400 "Unable to resolve
+      handle" are `Resource_not_found`.
+  - `Make_with_options` wrappers for a stored account, sent to the
+    configured `service_url`: `get_post_thread_view`, `get_author_feed_page`,
+    `get_posts`, `list_notifications_page`.
+  - `parse_xrpc_error` and `atproto_error_name` at top level;
+    `Make_with_options.parse_api_error` / `atproto_error_name` are the same
+    functions under their old names.
+  - Not breaking: `strong_ref` and `reply_ref` moved to `Bluesky_views` and
+    are re-exported with the same fields. The JSON-returning
+    `get_post_thread`, `get_author_feed`, `list_notifications` and
+    `resolve_handle` are unchanged.
+
 - **`OPTIONS.sleep`**: a non-blocking wait in the consumer's runtime
   (`seconds:float -> (unit -> unit) -> (string -> unit) -> unit`).
   `Default_options.sleep = None`.

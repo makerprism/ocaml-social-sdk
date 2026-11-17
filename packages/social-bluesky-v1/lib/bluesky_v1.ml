@@ -206,14 +206,19 @@ module Auth = struct
   end
 end
 
+(** Typed [app.bsky] views (post, thread, feed item, notification) and pure
+    helpers, as [Social_bluesky_v1.Views]. *)
+module Views = Bluesky_views
+
 (** A strong reference to a record: its AT URI and the CID of the exact
-    version referenced. Replies must carry both. *)
-type strong_ref = { uri : string; cid : string }
+    version referenced. Replies must carry both. Defined in
+    {!Bluesky_views}. *)
+type strong_ref = Bluesky_views.strong_ref = { uri : string; cid : string }
 
 (** Where a reply attaches. [parent] is the post replied to directly; [root]
     is the first post of its thread (the parent's own root, or the parent
     itself when it is a top-level post). *)
-type reply_ref = { root : strong_ref; parent : strong_ref }
+type reply_ref = Bluesky_views.reply_ref = { root : strong_ref; parent : strong_ref }
 
 (** Parse the ["uri|cid"] id that {!Make_with_options.post_single} and
     {!Make_with_options.post_thread} return. *)
@@ -318,9 +323,246 @@ let blob_looks_like_text blob_data =
       || String.starts_with ~prefix:"{" trimmed
       || String.starts_with ~prefix:"[" trimmed)
 
+(** The atproto error [name] from an XRPC error body, e.g. "ExpiredToken".
+
+    atproto puts the machine-readable name in [error] and the human-readable
+    text in [message]. {!parse_xrpc_error} keeps only the text, so callers
+    that need to tell one 400 from another read the name with this. A body
+    that is not an XRPC error envelope (an HTML page from a proxy, an empty
+    body) yields [None]. *)
+let atproto_error_name body =
+  try
+    match Yojson.Basic.from_string body with
+    | `Assoc fields ->
+        (match List.assoc_opt "error" fields with
+         | Some (`String name) -> Some name
+         | Some _ | None -> None)
+    | _ -> None
+  with _ -> None
+
+(** Parse an XRPC error response into an {!Error_types.error}.
+
+    atproto answers most failures with HTTP 400 and puts the reason in the
+    error name, so the name decides first:
+    - [ExpiredToken] / [InvalidToken]: the access JWT is dead, an
+      [Auth_error] (consumers refresh or ask the user to reconnect).
+    - [NotFound] / [RecordNotFound]: the post, record or thread is gone,
+      [Resource_not_found] carrying the server's message.
+    Otherwise 401 is an [Auth_error], 429 [Rate_limited], and anything else
+    an [Api_error] with the server's message. *)
+let parse_xrpc_error ~status_code ~body =
+  let parse_error_message () =
+    try
+      let json = Yojson.Basic.from_string body in
+      let open Yojson.Basic.Util in
+      let msg = json |> member "message" in
+      if msg <> `Null then to_string msg
+      else
+        let err = json |> member "error" in
+        if err <> `Null then to_string err
+        else "API error"
+    with _ -> "API error"
+  in
+  match atproto_error_name body with
+  | Some "ExpiredToken" -> Error_types.Auth_error Error_types.Token_expired
+  | Some "InvalidToken" -> Error_types.Auth_error Error_types.Token_invalid
+  | Some ("NotFound" | "RecordNotFound") ->
+      Error_types.Resource_not_found (parse_error_message ())
+  | Some _ | None ->
+      if status_code = 401 then
+        Error_types.Auth_error Error_types.Token_invalid
+      else if status_code = 429 then
+        Error_types.make_rate_limited ()
+      else
+        Error_types.make_api_error
+          ~platform:Platform_types.Bluesky
+          ~status_code
+          ~message:(parse_error_message ())
+          ~raw_response:body ()
+
 (** A non-blocking wait in the consumer's runtime, e.g. with Lwt:
     [fun ~seconds k _ -> Lwt.async (fun () -> Lwt.map k (Lwt_unix.sleep seconds))]. *)
 type sleep = seconds:float -> (unit -> unit) -> (string -> unit) -> unit
+
+(** Typed XRPC reads that need no account store.
+
+    Each call takes the [service_url] to send it to and, where the lexicon
+    allows unauthenticated use, an optional [access_jwt]:
+    - with a session, the user's PDS (it proxies [app.bsky.*] to the
+      AppView and applies the viewer's blocks and mutes);
+    - without one, {!public_api_url}, Bluesky's cached public AppView.
+    {{:https://docs.bsky.app/docs/advanced-guides/api-directory}}
+
+    {!Make_with_options} wraps the same calls for a stored account.
+
+    Errors are {!parse_xrpc_error}: [NotFound] is [Resource_not_found],
+    [ExpiredToken] / [InvalidToken] are [Auth_error]. A transport failure is
+    [Network_error]; a 2xx body that does not match the lexicon is
+    [Internal_error]. *)
+module Reads = struct
+  (** [https://public.api.bsky.app], the public AppView host for
+      unauthenticated [app.bsky.*] reads. *)
+  let public_api_url = "https://public.api.bsky.app"
+
+  (** Most [uris] one [app.bsky.feed.getPosts] call accepts. *)
+  let max_posts_per_request = 25
+
+  let trim_trailing_slash url =
+    let len = String.length url in
+    if len > 0 && url.[len - 1] = '/' then String.sub url 0 (len - 1) else url
+
+  (* XRPC array params repeat the key ([uris=a&uris=b]). Uri.with_query
+     would join a value list with commas instead. *)
+  let xrpc_url ~service_url nsid params =
+    let query = List.concat_map (fun (key, values) -> List.map (fun v -> (key, [ v ])) values) params in
+    Uri.with_query (Uri.of_string (trim_trailing_slash service_url ^ "/xrpc/" ^ nsid)) query
+    |> Uri.to_string
+
+  let opt_param key to_string = function Some value -> [ (key, [ to_string value ]) ] | None -> []
+
+  let bearer = function
+    | Some token -> [ ("Authorization", "Bearer " ^ token) ]
+    | None -> []
+
+  module Make (Http : HTTP_CLIENT) = struct
+    (* GET [url]; on 2xx parse the body with [parse]. *)
+    let get_view ~what ~headers ~error_of url parse on_result =
+      Http.get ~headers url
+        (fun (response : response) ->
+          if response.status >= 200 && response.status < 300 then
+            match Yojson.Basic.from_string response.body with
+            | json -> (
+                match parse json with
+                | Stdlib.Ok value -> on_result (Stdlib.Ok value)
+                | Stdlib.Error msg ->
+                    on_result
+                      (Stdlib.Error
+                         (Error_types.Internal_error
+                            (Printf.sprintf "Unexpected %s response: %s" what msg))))
+            | exception Yojson.Json_error msg ->
+                on_result
+                  (Stdlib.Error
+                     (Error_types.Internal_error
+                        (Printf.sprintf "Unexpected %s response: %s" what msg)))
+          else on_result (Stdlib.Error (error_of response)))
+        (fun err ->
+          on_result
+            (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+    let xrpc_error (response : response) =
+      parse_xrpc_error ~status_code:response.status ~body:response.body
+
+    (** [app.bsky.feed.getPostThread]: the post, up to [parent_height]
+        ancestors and [depth] levels of replies (server defaults 80 and 6,
+        both at most 1000). Pass a larger [depth] to crawl a whole
+        conversation; the default cuts long threads off. A deleted root is
+        [Resource_not_found] ([NotFound]); deleted or blocked posts inside
+        the tree are [Not_found_post] / [Blocked_post] nodes.
+        {{:https://docs.bsky.app/docs/api/app-bsky-feed-get-post-thread}} *)
+    let get_post_thread ~service_url ?access_jwt ~post_uri ?depth ?parent_height on_result =
+      let url =
+        xrpc_url ~service_url "app.bsky.feed.getPostThread"
+          ([ ("uri", [ post_uri ]) ]
+          @ opt_param "depth" string_of_int depth
+          @ opt_param "parentHeight" string_of_int parent_height)
+      in
+      get_view ~what:"getPostThread" ~headers:(bearer access_jwt) ~error_of:xrpc_error url
+        Bluesky_views.post_thread_of_json on_result
+
+    (** [app.bsky.feed.getAuthorFeed], one page: the actor's posts and
+        reposts, newest first. [limit] 1-100 (server default 50); [filter]
+        defaults to [Posts_with_replies] on the server; [include_pins] adds
+        the pinned post with [Reason_pin]. [BlockedActor] /
+        [BlockedByActor] are [Api_error].
+        {{:https://docs.bsky.app/docs/api/app-bsky-feed-get-author-feed}} *)
+    let get_author_feed ~service_url ?access_jwt ~actor ?limit ?cursor ?filter
+        ?include_pins on_result =
+      let url =
+        xrpc_url ~service_url "app.bsky.feed.getAuthorFeed"
+          ([ ("actor", [ actor ]) ]
+          @ opt_param "limit" string_of_int limit
+          @ opt_param "cursor" Fun.id cursor
+          @ opt_param "filter" Bluesky_views.author_feed_filter_to_string filter
+          @ opt_param "includePins" string_of_bool include_pins)
+      in
+      get_view ~what:"getAuthorFeed" ~headers:(bearer access_jwt) ~error_of:xrpc_error url
+        Bluesky_views.author_feed_page_of_json on_result
+
+    let rec get_posts_in_chunks ~service_url ~access_jwt acc uris on_result =
+      match uris with
+      | [] -> on_result (Stdlib.Ok (List.concat (List.rev acc)))
+      | _ ->
+          let chunk = List.filteri (fun i _ -> i < max_posts_per_request) uris in
+          let rest = List.filteri (fun i _ -> i >= max_posts_per_request) uris in
+          get_view ~what:"getPosts" ~headers:(bearer access_jwt) ~error_of:xrpc_error
+            (xrpc_url ~service_url "app.bsky.feed.getPosts" [ ("uris", chunk) ])
+            Bluesky_views.posts_of_json
+            (function
+              | Stdlib.Ok posts ->
+                  get_posts_in_chunks ~service_url ~access_jwt (posts :: acc) rest on_result
+              | Stdlib.Error _ as error -> on_result error)
+
+    (** [app.bsky.feed.getPosts]: post views for [post_uris], with counts.
+        The lexicon caps one call at 25 URIs, so longer lists are sent as
+        consecutive calls of 25 and the results concatenated; the first
+        failing call fails the whole read. Posts that no longer exist are
+        left out (the result can be shorter than [post_uris]), and order is
+        not guaranteed: match on [uri]. An empty list makes no call.
+        {{:https://docs.bsky.app/docs/api/app-bsky-feed-get-posts}} *)
+    let get_posts ~service_url ?access_jwt ~post_uris on_result =
+      get_posts_in_chunks ~service_url ~access_jwt [] post_uris on_result
+
+    (** [app.bsky.notification.listNotifications], one page, newest first.
+        Requires a session. [reasons] keeps only those reasons; [limit]
+        1-100 (server default 50). Pass the returned [cursor] for the next
+        (older) page.
+        {{:https://docs.bsky.app/docs/api/app-bsky-notification-list-notifications}} *)
+    let list_notifications ~service_url ~access_jwt ?limit ?cursor ?(reasons = []) on_result =
+      let url =
+        xrpc_url ~service_url "app.bsky.notification.listNotifications"
+          (opt_param "limit" string_of_int limit
+          @ opt_param "cursor" Fun.id cursor
+          @ [ ("reasons", List.map Bluesky_views.notification_reason_to_string reasons) ])
+      in
+      get_view ~what:"listNotifications" ~headers:(bearer (Some access_jwt))
+        ~error_of:xrpc_error url Bluesky_views.notifications_page_of_json on_result
+
+    (* The lexicon names [HandleNotFound]; PDS and AppView deployments
+       answer an unknown handle with 400 [InvalidRequest] "Unable to resolve
+       handle" instead. Both mean the handle does not exist. *)
+    let resolve_handle_error (response : response) =
+      let not_found =
+        match atproto_error_name response.body with
+        | Some "HandleNotFound" -> true
+        | Some "InvalidRequest" ->
+            response.status = 400
+            && (match Yojson.Basic.from_string response.body with
+               | `Assoc fields -> (
+                   match List.assoc_opt "message" fields with
+                   | Some (`String message) ->
+                       String.equal (String.lowercase_ascii message) "unable to resolve handle"
+                   | Some _ | None -> false)
+               | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> false
+               | exception Yojson.Json_error _ -> false)
+        | Some _ | None -> false
+      in
+      if not_found then Error_types.Resource_not_found "Unable to resolve handle"
+      else xrpc_error response
+
+    (** [com.atproto.identity.resolveHandle]: the DID of [handle] (no
+        leading [@]). Needs no session; any PDS or {!public_api_url}
+        answers. A handle that does not resolve ([HandleNotFound], or the
+        400 "Unable to resolve handle" deployed servers send) is
+        [Resource_not_found]. The existing
+        {!Make_with_options.resolve_handle} keeps reporting that case as
+        [Api_error].
+        {{:https://docs.bsky.app/docs/api/com-atproto-identity-resolve-handle}} *)
+    let resolve_handle ~service_url ~handle on_result =
+      get_view ~what:"resolveHandle" ~headers:[] ~error_of:resolve_handle_error
+        (xrpc_url ~service_url "com.atproto.identity.resolveHandle" [ ("handle", [ handle ]) ])
+        Bluesky_views.did_of_resolve_handle_json on_result
+  end
+end
 
 (** Options that are not account- or storage-related.
 
@@ -486,62 +728,10 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
       | _ -> false
     with _ -> false
   
-  (** The atproto error [name] from an XRPC error body, e.g. "ExpiredToken".
+  let atproto_error_name = atproto_error_name
 
-      atproto puts the machine-readable name in [error] and the human-readable
-      text in [message]. {!parse_api_error} keeps only the text, so callers
-      that need to tell one 400 from another read the name with this. A body
-      that is not an XRPC error envelope (an HTML page from a proxy, an empty
-      body) yields [None]. *)
-  let atproto_error_name body =
-    try
-      match Yojson.Basic.from_string body with
-      | `Assoc fields ->
-          (match List.assoc_opt "error" fields with
-           | Some (`String name) -> Some name
-           | Some _ | None -> None)
-      | _ -> None
-    with _ -> None
-
-  (** Parse an XRPC error response into an {!Error_types.error}.
-
-      atproto answers most failures with HTTP 400 and puts the reason in the
-      error name, so the name decides first:
-      - [ExpiredToken] / [InvalidToken]: the access JWT is dead, an
-        [Auth_error] (consumers refresh or ask the user to reconnect).
-      - [NotFound] / [RecordNotFound]: the post, record or thread is gone,
-        [Resource_not_found] carrying the server's message.
-      Otherwise 401 is an [Auth_error], 429 [Rate_limited], and anything else
-      an [Api_error] with the server's message. *)
-  let parse_api_error ~status_code ~body =
-    let parse_error_message () =
-      try
-        let json = Yojson.Basic.from_string body in
-        let open Yojson.Basic.Util in
-        let msg = json |> member "message" in
-        if msg <> `Null then to_string msg
-        else
-          let err = json |> member "error" in
-          if err <> `Null then to_string err
-          else "API error"
-      with _ -> "API error"
-    in
-    match atproto_error_name body with
-    | Some "ExpiredToken" -> Error_types.Auth_error Error_types.Token_expired
-    | Some "InvalidToken" -> Error_types.Auth_error Error_types.Token_invalid
-    | Some ("NotFound" | "RecordNotFound") ->
-        Error_types.Resource_not_found (parse_error_message ())
-    | Some _ | None ->
-        if status_code = 401 then
-          Error_types.Auth_error Error_types.Token_invalid
-        else if status_code = 429 then
-          Error_types.make_rate_limited ()
-        else
-          Error_types.make_api_error
-            ~platform:Platform_types.Bluesky
-            ~status_code
-            ~message:(parse_error_message ())
-            ~raw_response:body ()
+  (** {!parse_xrpc_error}, kept under its original name. *)
+  let parse_api_error = parse_xrpc_error
 
   let parse_json_object_or_error ~context ~body =
     try
@@ -2774,6 +2964,43 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
+
+  (** {1 Typed reads}
+
+      Account-bound versions of {!Reads.Make}, sent to {!service_url} with
+      the account's session ({!ensure_valid_token}, cached for four
+      minutes). The older JSON-returning readers ([get_post_thread],
+      [get_author_feed], [list_notifications]) are unchanged. *)
+
+  module Reads_http = Reads.Make (Config.Http)
+
+  let with_session ~account_id on_result read =
+    ensure_valid_token ~account_id read (fun err -> on_result (Stdlib.Error err))
+
+  (** {!Reads.Make.get_post_thread} for a stored account. *)
+  let get_post_thread_view ~account_id ~post_uri ?depth ?parent_height on_result =
+    with_session ~account_id on_result (fun access_jwt ->
+        Reads_http.get_post_thread ~service_url:(service_url ()) ~access_jwt ~post_uri
+          ?depth ?parent_height on_result)
+
+  (** {!Reads.Make.get_author_feed} for a stored account. *)
+  let get_author_feed_page ~account_id ~actor ?limit ?cursor ?filter ?include_pins
+      on_result =
+    with_session ~account_id on_result (fun access_jwt ->
+        Reads_http.get_author_feed ~service_url:(service_url ()) ~access_jwt ~actor
+          ?limit ?cursor ?filter ?include_pins on_result)
+
+  (** {!Reads.Make.get_posts} for a stored account (batches of 25). *)
+  let get_posts ~account_id ~post_uris on_result =
+    with_session ~account_id on_result (fun access_jwt ->
+        Reads_http.get_posts ~service_url:(service_url ()) ~access_jwt ~post_uris
+          on_result)
+
+  (** {!Reads.Make.list_notifications} for a stored account. *)
+  let list_notifications_page ~account_id ?limit ?cursor ?reasons on_result =
+    with_session ~account_id on_result (fun access_jwt ->
+        Reads_http.list_notifications ~service_url:(service_url ()) ~access_jwt
+          ?limit ?cursor ?reasons on_result)
 end
 
 (** Make functor with {!Default_options} (the Bluesky-hosted entryway). *)
