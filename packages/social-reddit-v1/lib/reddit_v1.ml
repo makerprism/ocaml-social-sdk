@@ -114,6 +114,19 @@ type media_upload = {
   upload_fields: (string * string) list; (** S3 form fields returned by Reddit *)
 }
 
+(** {1 User-Agent} *)
+
+(** User-Agent sent when the application configures none.
+
+    Reddit requires every client to identify itself as
+    [<platform>:<app ID>:<version> (by /u/<reddit username>)] and
+    "drastically" limits generic agents
+    (https://github.com/reddit-archive/reddit/wiki/API). This SDK-wide
+    default identifies the library, not your app, so set your own: the
+    [REDDIT_USER_AGENT] environment value for {!Make}, or [?user_agent] on
+    the {!OAuth.Make} functions. *)
+let default_user_agent = "ocaml:social-reddit-v1:v0.1.0"
+
 (** {1 OAuth Module} *)
 
 module OAuth = struct
@@ -253,7 +266,7 @@ module OAuth = struct
         @param on_success Continuation receiving credentials
         @param on_error Continuation receiving error message
     *)
-    let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
+    let exchange_code ?(user_agent = default_user_agent) ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
       let body = Social_core.form_urlencode_kvs [
         ("grant_type", "authorization_code");
         ("code", code);
@@ -262,6 +275,7 @@ module OAuth = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
+        ("User-Agent", user_agent);
       ] in
       
       Http.post ~headers ~body Metadata.token_endpoint
@@ -314,7 +328,7 @@ module OAuth = struct
         @param on_success Continuation receiving refreshed credentials
         @param on_error Continuation receiving error message
     *)
-    let refresh_token ~client_id ~client_secret ~refresh_token on_success on_error =
+    let refresh_token ?(user_agent = default_user_agent) ~client_id ~client_secret ~refresh_token on_success on_error =
       let body = Social_core.form_urlencode_kvs [
         ("grant_type", "refresh_token");
         ("refresh_token", refresh_token);
@@ -322,6 +336,7 @@ module OAuth = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
+        ("User-Agent", user_agent);
       ] in
       
       Http.post ~headers ~body Metadata.token_endpoint
@@ -369,11 +384,11 @@ module OAuth = struct
         @param on_success Continuation receiving user info
         @param on_error Continuation receiving error message
     *)
-    let get_user_info ~access_token on_success on_error =
+    let get_user_info ?(user_agent = default_user_agent) ~access_token on_success on_error =
       let url = Metadata.api_base ^ "/api/v1/me" in
       let headers = [
         ("Authorization", "Bearer " ^ access_token);
-        ("User-Agent", "ocaml:social-reddit-v1:v0.1.0");
+        ("User-Agent", user_agent);
       ] in
       
       Http.get ~headers url
@@ -405,7 +420,7 @@ module OAuth = struct
         @param on_success Continuation called on successful revocation
         @param on_error Continuation receiving error message
     *)
-    let revoke_token ~client_id ~client_secret ~token ?(token_type_hint="access_token") on_success on_error =
+    let revoke_token ?(user_agent = default_user_agent) ~client_id ~client_secret ~token ?(token_type_hint="access_token") on_success on_error =
       let url = "https://www.reddit.com/api/v1/revoke_token" in
       let body = Social_core.form_urlencode_kvs [
         ("token", token);
@@ -414,6 +429,7 @@ module OAuth = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", make_basic_auth ~client_id ~client_secret);
+        ("User-Agent", user_agent);
       ] in
       
       Http.post ~headers ~body url
@@ -445,8 +461,18 @@ end
 module Make (Config : CONFIG) = struct
   let api_base = "https://oauth.reddit.com"
   
-  (** Required User-Agent for Reddit API *)
-  let user_agent = "ocaml:social-reddit-v1:v0.1.0"
+  (** The library default, kept for compatibility. Requests send
+      {!request_user_agent}[ ()] instead. *)
+  let user_agent = default_user_agent
+
+  (** The [User-Agent] for every request: [REDDIT_USER_AGENT] from
+      [Config.get_env] when set and non-blank, otherwise
+      {!default_user_agent}. Read per request, like the other [REDDIT_*]
+      settings. *)
+  let request_user_agent () =
+    match Config.get_env "REDDIT_USER_AGENT" with
+    | Some value when String.trim value <> "" -> String.trim value
+    | Some _ | None -> default_user_agent
   
   (** {1 Validation Functions} *)
   
@@ -698,7 +724,8 @@ module Make (Config : CONFIG) = struct
             on_refresh_error (Error_types.Auth_error Error_types.Missing_credentials)
           else
             let module OAuthHttp = OAuth.Make(Config.Http) in
-            OAuthHttp.refresh_token ~client_id ~client_secret ~refresh_token
+            OAuthHttp.refresh_token ~user_agent:(request_user_agent ())
+              ~client_id ~client_secret ~refresh_token
               on_refresh_success
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
@@ -727,7 +754,7 @@ module Make (Config : CONFIG) = struct
         let url = api_base ^ "/subreddits/mine/moderator?limit=100" in
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
-          ("User-Agent", user_agent);
+          ("User-Agent", request_user_agent ());
         ] in
         
         Config.Http.get ~headers url
@@ -765,7 +792,7 @@ module Make (Config : CONFIG) = struct
         let url = Printf.sprintf "%s/r/%s/api/link_flair_v2" api_base subreddit in
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
-          ("User-Agent", user_agent);
+          ("User-Agent", request_user_agent ());
         ] in
         
         Config.Http.get ~headers url
@@ -800,7 +827,7 @@ module Make (Config : CONFIG) = struct
         let url = Printf.sprintf "%s/api/v1/%s/post_requirements" api_base subreddit in
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
-          ("User-Agent", user_agent);
+          ("User-Agent", request_user_agent ());
         ] in
         
         Config.Http.get ~headers url
@@ -860,7 +887,7 @@ module Make (Config : CONFIG) = struct
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
-              ("User-Agent", user_agent);
+              ("User-Agent", request_user_agent ());
               ("Content-Type", "application/x-www-form-urlencoded");
             ] in
             
@@ -932,7 +959,7 @@ module Make (Config : CONFIG) = struct
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
-              ("User-Agent", user_agent);
+              ("User-Agent", request_user_agent ());
               ("Content-Type", "application/x-www-form-urlencoded");
             ] in
             
@@ -981,7 +1008,7 @@ module Make (Config : CONFIG) = struct
 
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
-          ("User-Agent", user_agent);
+          ("User-Agent", request_user_agent ());
           ("Content-Type", "application/x-www-form-urlencoded");
         ] in
         
@@ -1144,7 +1171,7 @@ module Make (Config : CONFIG) = struct
       let body = Social_core.form_urlencode_kvs form_params in
       let headers = [
         ("Authorization", "Bearer " ^ access_token);
-        ("User-Agent", user_agent);
+        ("User-Agent", request_user_agent ());
         ("Content-Type", "application/x-www-form-urlencoded");
       ] in
       Config.Http.post ~headers ~body api_url
@@ -1309,7 +1336,7 @@ module Make (Config : CONFIG) = struct
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
-              ("User-Agent", user_agent);
+              ("User-Agent", request_user_agent ());
               ("Content-Type", "application/x-www-form-urlencoded");
             ] in
             
@@ -1382,7 +1409,7 @@ module Make (Config : CONFIG) = struct
             
             let headers = [
               ("Authorization", "Bearer " ^ access_token);
-              ("User-Agent", user_agent);
+              ("User-Agent", request_user_agent ());
               ("Content-Type", "application/x-www-form-urlencoded");
             ] in
             
@@ -1532,7 +1559,7 @@ module Make (Config : CONFIG) = struct
         
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
-          ("User-Agent", user_agent);
+          ("User-Agent", request_user_agent ());
           ("Content-Type", "application/x-www-form-urlencoded");
         ] in
         
@@ -1590,7 +1617,7 @@ module Make (Config : CONFIG) = struct
           api_base (Uri.pct_encode query) limit in
         let headers = [
           ("Authorization", "Bearer " ^ access_token);
-          ("User-Agent", user_agent);
+          ("User-Agent", request_user_agent ());
         ] in
 
         Config.Http.get ~headers url
@@ -1688,7 +1715,7 @@ module Make (Config : CONFIG) = struct
                     let api_url = api_base ^ "/api/submit_gallery_post" in
                     let headers = [
                       ("Authorization", "Bearer " ^ access_token);
-                      ("User-Agent", user_agent);
+                      ("User-Agent", request_user_agent ());
                       ("Content-Type", "application/json");
                     ] in
                     Config.Http.post ~headers ~body api_url
@@ -1835,6 +1862,7 @@ module Make (Config : CONFIG) = struct
       let headers = [
         ("Content-Type", "application/x-www-form-urlencoded");
         ("Authorization", "Basic " ^ Base64.encode_exn auth_string);
+        ("User-Agent", request_user_agent ());
       ] in
       Config.Http.post ~headers ~body OAuth.Metadata.token_endpoint
         (fun response ->
@@ -1902,7 +1930,7 @@ module Make (Config : CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_token ->
         let module OAuthHttp = OAuth.Make(Config.Http) in
-        OAuthHttp.get_user_info ~access_token
+        OAuthHttp.get_user_info ~user_agent:(request_user_agent ()) ~access_token
           (fun user -> on_result (Error_types.Success user))
           (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
       (fun err -> on_result (Error_types.Failure err))

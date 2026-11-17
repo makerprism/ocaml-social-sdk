@@ -192,6 +192,7 @@ match Reddit.validate_content ~title:"My Title" ~body:"My content" () with
 
 - `REDDIT_CLIENT_ID` - Your Reddit app's client ID
 - `REDDIT_CLIENT_SECRET` - Your Reddit app's client secret
+- `REDDIT_USER_AGENT` - Strongly recommended. Reddit requires `<platform>:<app ID>:<version> (by /u/<reddit username>)` and throttles generic agents. Without it the library default `ocaml:social-reddit-v1:v0.1.0` is sent. `OAuth.Make` functions take `?user_agent` instead.
 
 ## References
 
