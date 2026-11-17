@@ -569,8 +569,61 @@ let test_build_post_body_offer () =
   print_endline "PASS Build post body with offer"
 
 (** Run all tests *)
+module Gbp_oauth = OAuth.Make (Mock_http)
+
+let test_token_based_discovery () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 200;
+        body = {|{"accounts":[{"name":"accounts/1","accountName":"Me","type":"PERSONAL","role":"PRIMARY_OWNER",
+                 "verificationState":"VERIFIED"}],"nextPageToken":"p2"}|};
+        headers = [] };
+      { status = 200; body = {|{"accounts":[{"name":"accounts/2","type":"LOCATION_GROUP","role":"MANAGER"},{"accountName":"no name"}]}|}; headers = [] } ];
+  Gbp_oauth.list_all_accounts ~access_token:"tok" (function
+    | Stdlib.Ok [ first; second ] ->
+        assert (first.OAuth.account_resource_name = "accounts/1");
+        assert (first.account_type = Some OAuth.Personal && first.role = Some OAuth.Primary_owner);
+        assert (second.OAuth.account_type = Some OAuth.Location_group && second.role = Some OAuth.Manager);
+        (match List.rev !Mock_http.requests with
+         | [ ("GET", u1, h, _); ("GET", u2, _, _) ] ->
+             assert (u1 = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts");
+             assert (u2 = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts?pageToken=p2");
+             assert (List.assoc_opt "Authorization" h = Some "Bearer tok")
+         | _ -> failwith "expected two GETs")
+    | Stdlib.Ok _ -> failwith "expected two accounts"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 200;
+        body = {|{"locations":[{"name":"locations/9","title":"Cafe","storeCode":"S1",
+                 "storefrontAddress":{"regionCode":"DE","addressLines":["Hauptstr. 1"]}}]}|};
+        headers = [] } ];
+  Gbp_oauth.list_all_locations ~access_token:"tok" ~account_name:"accounts/1" (function
+    | Stdlib.Ok [ location ] ->
+        assert (location.OAuth.location_resource_name = "locations/9");
+        assert (location.title = Some "Cafe" && location.address_lines = [ "Hauptstr. 1" ]);
+        assert (OAuth.v4_location_name ~account_name:"accounts/1" ~location_name:location.location_resource_name
+                = "accounts/1/locations/9");
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] ->
+             let uri = Uri.of_string url in
+             assert (Uri.path uri = "/v1/accounts/1/locations");
+             assert (Uri.get_query_param uri "readMask" = Some OAuth.default_location_read_mask)
+         | _ -> failwith "expected one GET")
+    | Stdlib.Ok _ -> failwith "expected one location"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  assert (OAuth.v4_location_name ~account_name:"accounts/1" ~location_name:"accounts/1/locations/9"
+          = "accounts/1/locations/9");
+  Mock_http.reset ();
+  Mock_http.set_responses [ { status = 429; body = {|{"error":{"code":429,"message":"slow down"}}|}; headers = [] } ];
+  Gbp_oauth.list_all_accounts ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Rate_limited _) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited");
+  print_endline "✓ token-based account and location discovery follows nextPageToken"
+
 let () =
   print_endline "\n=== Google Business Profile Provider Tests ===\n";
+  test_token_based_discovery ();
 
   print_endline "--- OAuth Tests ---";
   test_oauth_url ();

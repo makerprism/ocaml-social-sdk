@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Token-based, paginated discovery in `OAuth.Make(Http)`**, usable in an OAuth callback before an account is stored: `list_accounts_page` / `list_all_accounts` (`OAuth.business_account` with typed `account_type` and `role`) and `list_locations_page` / `list_all_locations ~account_name ?read_mask` (`OAuth.business_location`), following `nextPageToken` up to `?max_pages` (default 50). Errors through `Social_google_oauth.api_error`; retry/backoff on `Rate_limited` stays with the caller. The account-bound `list_accounts` / `list_locations` (raw JSON, first page only) are unchanged.
+- Pure `OAuth.v4_location_name ~account_name ~location_name` (`accounts/{a}/locations/{l}` for the v4 `localPosts` API) and `OAuth.default_location_read_mask`.
+- `OAuth.Make(Http).get_userinfo` (typed Google userinfo).
+
 ## 0.1.0 (2026-03-22)
 
 - Initial release

@@ -1,0 +1,4 @@
+(test
+ (name test_google_oauth)
+ (modules test_google_oauth)
+ (libraries social-google-oauth social-core uri))

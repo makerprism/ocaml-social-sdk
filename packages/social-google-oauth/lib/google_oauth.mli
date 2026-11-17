@@ -41,6 +41,47 @@ val get_authorization_url :
   scopes:string list ->
   string
 
+(** {1 Typed reads} *)
+
+(** The Google account behind a token, from the OAuth2 v2 userinfo endpoint
+    ({!Endpoints.userinfo}, schema [Userinfo] in
+    {{:https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest}}).
+    [email] needs the [userinfo.email] scope; the name and picture fields
+    need [userinfo.profile]. *)
+type userinfo = {
+  id : string;  (** Obfuscated user id; the OpenID Connect [sub]. *)
+  email : string option;
+  verified_email : bool option;
+  name : string option;
+  given_name : string option;
+  family_name : string option;
+  picture : string option;
+  locale : string option;
+  hd : string option;  (** Hosted (Workspace) domain. *)
+}
+
+(** Parses a userinfo body; also accepts the OpenID Connect shape ([sub],
+    [email_verified]). Empty strings read as [None]. [Error] without an
+    id. *)
+val parse_userinfo : string -> (userinfo, string) result
+
+(** The SDK error for a failed Google API call, from the standard error
+    envelope [{"error": {"code", "message", "status", "errors": [{"reason"}]}}]
+    ({{:https://cloud.google.com/apis/design/errors}}):
+    - 401: [Auth_error Token_invalid];
+    - 429, and 403 with reason [quotaExceeded], [rateLimitExceeded],
+      [userRateLimitExceeded] or [dailyLimitExceeded]: [Rate_limited];
+    - other 403: [Auth_error (Insufficient_permissions {required =
+      required_scopes; platform_message})];
+    - 404: [Resource_not_found message];
+    - otherwise [Api_error] tagged [platform], with the body kept. *)
+val api_error :
+  platform:Platform_types.platform ->
+  required_scopes:string list ->
+  status_code:int ->
+  string ->
+  Error_types.error
+
 (** {1 Token Operations}
 
     Functor parameterized over the HTTP client. Each operation uses CPS:
@@ -84,5 +125,13 @@ module Make (_ : Social_core.HTTP_CLIENT) : sig
     platform:Platform_types.platform ->
     access_token:string ->
     ((Yojson.Basic.t, Error_types.error) result -> unit) ->
+    unit
+
+  (** Typed {!get_user_info}: {!userinfo}, failures through {!api_error}
+      ([Network_error] when no response arrived). *)
+  val get_userinfo :
+    platform:Platform_types.platform ->
+    access_token:string ->
+    ((userinfo, Error_types.error) result -> unit) ->
     unit
 end

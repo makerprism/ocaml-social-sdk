@@ -1383,8 +1383,48 @@ let test_upload_recovery_network_error () =
       | _ -> failwith "Unexpected outcome for network recovery")
 
 (** Run all tests *)
+module Youtube_oauth = OAuth.Make (Mock_http)
+
+let test_get_my_channels_typed () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 200;
+        body = {|{"kind":"youtube#channelListResponse","items":[{"id":"UC123",
+                 "snippet":{"title":"Maker","description":"","customUrl":"@maker",
+                   "thumbnails":{"default":{"url":"https://t/d"},"high":{"url":"https://t/h"}}},
+                 "statistics":{"viewCount":"1200","subscriberCount":"340","hiddenSubscriberCount":false,"videoCount":"12"}},
+                 {"id":"UC456","snippet":{"title":"Hidden"},"statistics":{"subscriberCount":"0","hiddenSubscriberCount":true}}]}|};
+        headers = [] } ];
+  Youtube_oauth.get_my_channels ~access_token:"tok" (function
+    | Stdlib.Ok [ first; hidden ] ->
+        assert (first.OAuth.id = "UC123");
+        assert (first.custom_url = Some "@maker");
+        assert (first.description = None);
+        assert (first.thumbnail_url = Some "https://t/h");
+        assert (first.view_count = Some 1200 && first.subscriber_count = Some 340 && first.video_count = Some 12);
+        assert (hidden.OAuth.subscriber_count = None && hidden.hidden_subscriber_count);
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] ->
+             assert (url = "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true")
+         | _ -> failwith "expected one GET")
+    | Stdlib.Ok _ -> failwith "expected two channels"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_responses [ { status = 200; body = {|{"kind":"youtube#channelListResponse","pageInfo":{"totalResults":0}}|}; headers = [] } ];
+  Youtube_oauth.get_my_channels ~access_token:"tok" (function
+    | Stdlib.Ok [] -> ()
+    | Stdlib.Ok _ | Stdlib.Error _ -> failwith "expected no channels");
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 403; body = {|{"error":{"code":403,"message":"q","errors":[{"reason":"quotaExceeded"}]}}|}; headers = [] } ];
+  Youtube_oauth.get_my_channels ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Rate_limited _) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited for quotaExceeded");
+  print_endline "✓ get_my_channels returns typed channels; hidden subscriber counts are None"
+
 let () =
   print_endline "\n=== YouTube Provider Tests ===\n";
+  test_get_my_channels_typed ();
 
   (* OAuth tests *)
   print_endline "--- OAuth Tests ---";

@@ -110,6 +110,80 @@ module OAuth = struct
   let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.write) () =
     Social_google_oauth.get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
 
+  (** {2 Typed channel read} *)
+
+  (** A channel from [channels.list]
+      ({{:https://developers.google.com/youtube/v3/docs/channels}}), parts
+      [snippet] and [statistics]. *)
+  type channel = {
+    id : string;
+    title : string option;
+    description : string option;
+    custom_url : string option;  (** The handle, e.g. ["@maker"]. *)
+    thumbnail_url : string option;  (** Largest of [high], [medium], [default]. *)
+    view_count : int option;
+    subscriber_count : int option;
+        (** [None] when [hiddenSubscriberCount] is [true]: the channel hides
+            it, and the number Google returns then is not meaningful.
+            Rounded down to three significant figures by YouTube. *)
+    hidden_subscriber_count : bool;
+    video_count : int option;  (** Public videos only. *)
+  }
+
+  (* Counts are "unsigned long" in the reference; the JSON carries them as
+     strings. Read both. *)
+  let count_of = function
+    | Some (`String value) -> int_of_string_opt value
+    | Some (`Int value) -> Some value
+    | Some (`Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> None
+
+  let field key = function
+    | `Assoc fields -> List.assoc_opt key fields
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+
+  let text key json =
+    match field key json with
+    | Some (`String value) when value <> "" -> Some value
+    | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+
+  let channel_of_json json =
+    match text "id" json with
+    | None -> None
+    | Some id ->
+        let snippet = Option.value (field "snippet" json) ~default:`Null in
+        let statistics = Option.value (field "statistics" json) ~default:`Null in
+        let hidden =
+          match field "hiddenSubscriberCount" statistics with
+          | Some (`Bool hidden) -> hidden
+          | Some (`Null | `Int _ | `Float _ | `String _ | `List _ | `Assoc _) | None -> false
+        in
+        let thumbnail_url =
+          let thumbnails = Option.value (field "thumbnails" snippet) ~default:`Null in
+          List.find_map
+            (fun size -> Option.bind (field size thumbnails) (text "url"))
+            [ "high"; "medium"; "default" ]
+        in
+        Some
+          { id;
+            title = text "title" snippet;
+            description = text "description" snippet;
+            custom_url = text "customUrl" snippet;
+            thumbnail_url;
+            view_count = count_of (field "viewCount" statistics);
+            subscriber_count = (if hidden then None else count_of (field "subscriberCount" statistics));
+            hidden_subscriber_count = hidden;
+            video_count = count_of (field "videoCount" statistics) }
+
+  (** Parses a [channels.list] body: the [items] with an [id]. A user
+      without a channel gets an empty list. *)
+  let parse_channels body : (channel list, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("channels response is not JSON: " ^ message)
+    | json -> (
+        match field "items" json with
+        | Some (`List items) -> Stdlib.Ok (List.filter_map channel_of_json items)
+        | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> Stdlib.Ok [])
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     module Shared = Social_google_oauth.Make(Http)
@@ -145,6 +219,26 @@ module OAuth = struct
               request_id = None;
             })))
         (fun err -> on_result (Error (Error_types.Internal_error err)))
+
+    (** The token user's channels, typed: [GET /channels?part=snippet,statistics&mine=true]
+        ({{:https://developers.google.com/youtube/v3/docs/channels/list}}),
+        1 quota unit. Successor of {!get_channel_info} (raw JSON), which
+        stays. Usually one channel; empty when the account has none. *)
+    let get_my_channels ~access_token on_result =
+      let url = Printf.sprintf "%s/channels?part=snippet,statistics&mine=true" Metadata.api_base in
+      Http.get ~headers:[ ("Authorization", "Bearer " ^ access_token) ] url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_channels response.body with
+            | Stdlib.Ok channels -> on_result (Stdlib.Ok channels)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result
+              (Stdlib.Error
+                 (Social_google_oauth.api_error ~platform:Platform_types.YouTubeShorts
+                    ~required_scopes:[ "https://www.googleapis.com/auth/youtube.readonly" ]
+                    ~status_code:response.status response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
   end
 end
 
