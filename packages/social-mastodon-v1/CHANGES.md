@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed account with counts**: `Entities.account` (`summary`, `followers_count`, `following_count`, `statuses_count`, `last_status_at`, `created_at`, `locked`, `bot`, `hide_collections`) with a strict `account_of_json` (the counts are documented as integers that are never null). `Reads.Make.get_account ~instance_url ?access_token ~target_account_id` (`GET /api/v1/accounts/:id`, public) and `Reads.Make.verify_credentials ~instance_url ~access_token`, plus `Make.get_account_entity ~account_id ~target_account_id` and `Make.get_own_account ~account_id`. `get_account` (account_summary) and `verify_credentials_result` (account_info, which reads missing counts as 0) are unchanged. Source: https://docs.joinmastodon.org/entities/Account/, https://docs.joinmastodon.org/methods/accounts/. Additive.
 - **Typed status, context, notification and WebFinger reads.**
   - `Entities` (module `Mastodon_entities`, with an `.mli`): the Status
     entity as `status` (account `acct` / `display_name` / `url`,

@@ -69,6 +69,29 @@ val pagination_cursors_of_headers :
     are [None] when the header is absent, which is how Mastodon signals the
     last page. *)
 
+(** {1 Account} *)
+
+(** [Account] entity with its counts, as [GET /api/v1/accounts/:id] and
+    [GET /api/v1/accounts/verify_credentials] return it.
+    {{:https://docs.joinmastodon.org/entities/Account/}} *)
+type account = {
+  summary : account_summary;  (** [id], [acct], [username], [display_name], [url] *)
+  followers_count : int;  (** "The reported followers of this profile." *)
+  following_count : int;  (** "The reported follows of this profile." *)
+  statuses_count : int;  (** "How many statuses are attached to this account." *)
+  last_status_at : string option;  (** Date only (3.1.0+); [None] without statuses *)
+  created_at : string;  (** Midnight of the creation day (3.4.0+) *)
+  locked : bool;
+  bot : bool;
+  hide_collections : bool option;
+      (** 4.3.0+: the user hides their follows and followers lists. The
+          counts are still reported. *)
+}
+
+val account_of_json : Yojson.Basic.t -> (account, string) result
+(** Requires [id], [acct], the three counts (documented as integers, never
+    null), [created_at], [locked] and [bot]. *)
+
 (** {1 Status} *)
 
 (** A visibility outside the four Mastodon values. Other servers that

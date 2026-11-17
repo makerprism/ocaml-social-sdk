@@ -696,6 +696,29 @@ module Reads = struct
            query)
         Mastodon_entities.status_page_of_response on_result
 
+    (** [GET /api/v1/accounts/:id] as a typed {!Mastodon_entities.account}
+        with follower, following and status counts. Public: the token is
+        optional. 404 is [Resource_not_found]; a suspended account (3.3.0+)
+        answers 200 with [suspended: true].
+        {{:https://docs.joinmastodon.org/methods/accounts/#get}} *)
+    let get_account ~instance_url ?access_token ~target_account_id on_result =
+      get_entity ~what:"account" ~required_scopes:[ "read:accounts" ]
+        ~headers:(bearer access_token)
+        (api_url ~instance_url ("/api/v1/accounts/" ^ Uri.pct_encode target_account_id) [])
+        (fun ~headers:_ json -> Mastodon_entities.account_of_json json)
+        on_result
+
+    (** [GET /api/v1/accounts/verify_credentials]: the token owner's own
+        account, typed, with its counts. Needs [read:accounts] (or
+        [profile], 4.3.0+).
+        {{:https://docs.joinmastodon.org/methods/accounts/#verify_credentials}} *)
+    let verify_credentials ~instance_url ~access_token on_result =
+      get_entity ~what:"verify_credentials" ~required_scopes:[ "read:accounts" ]
+        ~headers:(bearer (Some access_token))
+        (api_url ~instance_url "/api/v1/accounts/verify_credentials" [])
+        (fun ~headers:_ json -> Mastodon_entities.account_of_json json)
+        on_result
+
     (** [GET /api/v1/accounts/lookup?acct=]: the account behind a username
         (local) or [user@domain] address, as the instance knows it, without
         a WebFinger round trip. Documented as needing a [read:accounts]
@@ -1914,6 +1937,21 @@ module Make (Config : CONFIG) = struct
     with_credentials ~account_id on_result (fun creds ->
         Reads_http.get_status_context ~instance_url:creds.instance_url
           ~access_token:creds.access_token ~status_id on_result)
+
+  (** {!Reads.Make.get_account} for a stored account: a typed account with
+      its counts. {!get_account} (the older [account_summary] reader) is
+      unchanged. *)
+  let get_account_entity ~account_id ~target_account_id on_result =
+    with_credentials ~account_id on_result (fun creds ->
+        Reads_http.get_account ~instance_url:creds.instance_url
+          ~access_token:creds.access_token ~target_account_id on_result)
+
+  (** {!Reads.Make.verify_credentials} for a stored account: the account's
+      own profile with follower, following and status counts. *)
+  let get_own_account ~account_id on_result =
+    with_credentials ~account_id on_result (fun creds ->
+        Reads_http.verify_credentials ~instance_url:creds.instance_url
+          ~access_token:creds.access_token on_result)
 
   (** {!Reads.Make.get_status} for a stored account: the full typed status.
       {!get_status} (the older [timeline_status] reader) is unchanged. *)

@@ -412,6 +412,41 @@ let test_account_statuses () =
   assert (page.cursors.next_max_id = Some "103188938570975982");
   Printf.printf "✓\n"
 
+(* Account entity example from https://docs.joinmastodon.org/entities/Account/
+   (counts are integers, never null; hide_collections is 4.3.0+). *)
+let test_get_account_counts () =
+  Printf.printf "Test: typed account with counts, public and own... ";
+  Mock_http.reset [ ("/api/v1/accounts/14715", respond 200 alice) ];
+  let account =
+    capture (Reads.get_account ~instance_url ~target_account_id:"14715") |> expect_ok "account"
+  in
+  assert (account.E.summary.acct = "alice");
+  assert (account.followers_count = 10 && account.following_count = 5 && account.statuses_count = 42);
+  assert (account.last_status_at = Some "2019-11-23");
+  assert (account.hide_collections = None && not account.locked);
+  let request = last_request () in
+  assert (request.url = "https://mastodon.example/api/v1/accounts/14715");
+  assert (header request "Authorization" = None);
+  let hidden =
+    {|{"id":"1","username":"h","acct":"h","display_name":"","locked":true,"bot":false,"created_at":"2022-01-01T00:00:00.000Z","followers_count":0,"following_count":0,"statuses_count":3,"last_status_at":null,"hide_collections":true}|}
+  in
+  Mock_http.reset [ ("/api/v1/accounts/verify_credentials", respond 200 hidden) ];
+  let own =
+    capture (Reads.verify_credentials ~instance_url ~access_token:"tok") |> expect_ok "own"
+  in
+  assert (own.hide_collections = Some true && own.last_status_at = None && own.statuses_count = 3);
+  assert (header (last_request ()) "Authorization" = Some "Bearer tok");
+  Mock_http.reset
+    [ ("/api/v1/accounts/1", respond 200 {|{"id":"1","acct":"h","created_at":"x","locked":false,"bot":false}|}) ];
+  (match capture (Reads.get_account ~instance_url ~target_account_id:"1") with
+   | Error (Error_types.Internal_error msg) -> assert (Mock_http.contains msg "followers_count")
+   | _ -> failwith "an account without counts is a parse error");
+  Mock_http.reset [ ("/api/v1/accounts/404", respond 404 {|{"error":"Record not found"}|}) ];
+  (match capture (Reads.get_account ~instance_url ~target_account_id:"404") with
+   | Error (Error_types.Resource_not_found "Record not found") -> ()
+   | _ -> failwith "404 is Resource_not_found");
+  Printf.printf "✓\n"
+
 let test_lookup_account () =
   Printf.printf "Test: lookup_account ok and 404... ";
   Mock_http.reset
@@ -594,6 +629,9 @@ let test_account_wrappers () =
     |> expect_ok "account statuses"
   in
   assert (List.length statuses.statuses = 1);
+  let own = capture (Mastodon.get_own_account ~account_id:"acc") |> expect_ok "own account" in
+  assert (own.followers_count = 10);
+  assert ((last_request ()).url = "https://mastodon.example/api/v1/accounts/verify_credentials");
   Printf.printf "✓\n"
 
 let test_existing_readers_unchanged () =
@@ -620,6 +658,7 @@ let () =
   test_notifications_last_page_and_scope_error ();
   test_notification_type_round_trip ();
   test_account_statuses ();
+  test_get_account_counts ();
   test_lookup_account ();
   test_webfinger ();
   test_webfinger_pure ();
