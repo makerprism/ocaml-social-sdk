@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.Make(Http).get_user_account ~access_token ?ad_account_id`** and **`Make.get_user_account ~account_id`** (refreshes the stored token first): typed `GET /v5/user_account` as `OAuth.user_account` (`id`, `username`, `account_type = Pinner | Business | Unknown_account_type _`, `business_name`, `about`, `profile_image`, `website_url`, `board_count`, `pin_count`, `follower_count`, `following_count`, `monthly_views`), per the `Account` schema of Pinterest's OpenAPI description. Failures are typed (401 `Token_invalid`, 403 `Insufficient_permissions ["user_accounts:read"]`, 404, 429, else `Api_error` with the body). `OAuth.get_user_info` (raw JSON, every failure `Internal_error`) is unchanged.
+
 - OAuth 2.0 authentication flow
 - Automatic token refresh with 30-day token validity
 - Pin creation with title, description, and media

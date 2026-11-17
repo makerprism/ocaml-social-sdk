@@ -1565,8 +1565,50 @@ let test_post_single_omits_section_id_when_empty () =
           failwith "Expected full success")
 
 (** Run all tests *)
+module Pinterest_oauth = OAuth.Make (Mock_http)
+
+let test_get_user_account_typed () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 200;
+        body = {|{"account_type":"BUSINESS","id":"2783136121146311751","username":"maker",
+                 "business_name":"Maker Co","about":"","profile_image":"https://i/x.jpg",
+                 "website_url":"https://maker.example","board_count":14,"pin_count":339,
+                 "follower_count":10,"following_count":347,"monthly_views":null}|};
+        headers = [] } ];
+  Pinterest_oauth.get_user_account ~access_token:"tok" ~ad_account_id:"549755885175" (function
+    | Stdlib.Ok account ->
+        assert (account.OAuth.id = "2783136121146311751");
+        assert (account.account_type = Some OAuth.Business);
+        assert (account.business_name = Some "Maker Co");
+        assert (account.about = None);
+        assert (account.pin_count = Some 339 && account.monthly_views = None);
+        (match !Mock_http.requests with
+         | [ ("GET", url, headers, _) ] ->
+             assert (url = "https://api.pinterest.com/v5/user_account?ad_account_id=549755885175");
+             assert (List.assoc_opt "Authorization" headers = Some "Bearer tok")
+         | _ -> failwith "expected one GET")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 403; body = {|{"code":3,"message":"Not authorized to access the user account."}|}; headers = [] } ];
+  Pinterest_oauth.get_user_account ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required; platform_message })) ->
+        assert (required = [ "user_accounts:read" ]);
+        assert (platform_message = Some "Not authorized to access the user account.")
+    | Stdlib.Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected an error");
+  Mock_http.reset ();
+  Mock_http.set_responses [ { status = 500; body = {|{"code":1,"message":"boom"}|}; headers = [] } ];
+  Pinterest_oauth.get_user_account ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Api_error { status_code = 500; raw_response = Some _; message = "boom"; _ }) -> ()
+    | Stdlib.Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected an error");
+  print_endline "✓ get_user_account returns the typed Account and maps errors"
+
 let () =
   print_endline "\n=== Pinterest Provider Tests ===\n";
+  test_get_user_account_typed ();
   test_oauth_url ();
   test_token_exchange ();
   test_token_exchange_rejects_missing_scopes ();

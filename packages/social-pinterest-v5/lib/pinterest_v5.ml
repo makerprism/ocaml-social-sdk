@@ -136,6 +136,101 @@ module OAuth = struct
     ) params |> String.concat "&" in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
   
+  (** {2 Typed user account} *)
+
+  (** [account_type] of {!user_account} (OpenAPI [UserAccountType]). *)
+  type account_type =
+    | Pinner
+    | Business
+    | Unknown_account_type of string  (** A value the spec does not list yet. *)
+
+  (** The Pinterest user account ([GET /v5/user_account], schema [Account]
+      in Pinterest's OpenAPI description
+      {{:https://github.com/pinterest/api-description/blob/main/v5/openapi.yaml}},
+      reference page
+      {{:https://developers.pinterest.com/docs/api/v5/user_account-get}}).
+      Needs [user_accounts:read]. Counts are [None] when Pinterest returns
+      [null]. *)
+  type user_account = {
+    id : string;
+    username : string option;
+    account_type : account_type option;
+    business_name : string option;
+    about : string option;
+    profile_image : string option;
+    website_url : string option;
+    board_count : int option;
+    pin_count : int option;
+    follower_count : int option;
+    following_count : int option;
+    monthly_views : int option;
+  }
+
+  let account_type_of_string = function
+    | "PINNER" -> Pinner
+    | "BUSINESS" -> Business
+    | other -> Unknown_account_type other
+
+  (** Parses an [Account] body. [Error] without an [id]. *)
+  let parse_user_account body : (user_account, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("user_account response is not JSON: " ^ message)
+    | `Assoc fields -> (
+        let text key =
+          match List.assoc_opt key fields with
+          | Some (`String value) when value <> "" -> Some value
+          | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+        in
+        let count key =
+          match List.assoc_opt key fields with
+          | Some (`Int value) -> Some value
+          | Some (`String _ | `Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> None
+        in
+        match text "id" with
+        | None -> Stdlib.Error "user_account response has no id"
+        | Some id ->
+            Stdlib.Ok
+              { id;
+                username = text "username";
+                account_type = Option.map account_type_of_string (text "account_type");
+                business_name = text "business_name";
+                about = text "about";
+                profile_image = text "profile_image";
+                website_url = text "website_url";
+                board_count = count "board_count";
+                pin_count = count "pin_count";
+                follower_count = count "follower_count";
+                following_count = count "following_count";
+                monthly_views = count "monthly_views" })
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "user_account response is not an object"
+
+  (** The SDK error for a failed v5 read: 401 [Token_invalid], 403
+      [Insufficient_permissions required_scopes], 404 [Resource_not_found],
+      429 [Rate_limited], otherwise [Api_error] with the body kept. The
+      message is the [Pinterest.Lib.Error] [message] when present. *)
+  let read_error ~required_scopes ~status_code body =
+    let message =
+      match Yojson.Basic.from_string body with
+      | `Assoc fields -> (
+          match List.assoc_opt "message" fields with
+          | Some (`String message) -> message
+          | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> body)
+      | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> body
+      | exception Yojson.Json_error _ -> body
+    in
+    match status_code with
+    | 401 -> Error_types.Auth_error Error_types.Token_invalid
+    | 403 ->
+        Error_types.Auth_error
+          (Error_types.Insufficient_permissions { required = required_scopes; platform_message = Some message })
+    | 404 -> Error_types.Resource_not_found message
+    | 429 ->
+        Error_types.Rate_limited { retry_after_seconds = None; limit = None; remaining = Some 0; reset_at = None }
+    | _ ->
+        Error_types.Api_error
+          { status_code; message; platform = Platform_types.Pinterest; raw_response = Some body; request_id = None }
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Helper to create Basic Auth header
@@ -313,6 +408,31 @@ module OAuth = struct
           else
             on_result (Error (Error_types.Internal_error (Printf.sprintf "Get boards failed (%d): %s" response.status response.body))))
         (fun err -> on_result (Error (Error_types.Internal_error err)))
+
+    (** Typed [GET /v5/user_account]; successor of {!get_user_info}, which
+        returns raw JSON with every failure as [Internal_error] and stays.
+
+        @param ad_account_id With Business Access, reads the owner of that
+          ad account instead of the token's user. *)
+    let get_user_account ~access_token ?ad_account_id on_result =
+      let query =
+        match ad_account_id with
+        | Some id -> "?" ^ Uri.encoded_of_query [ ("ad_account_id", [ id ]) ]
+        | None -> ""
+      in
+      Http.get ~headers:[ ("Authorization", "Bearer " ^ access_token) ]
+        (Metadata.api_base ^ "/user_account" ^ query)
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_user_account response.body with
+            | Stdlib.Ok account -> on_result (Stdlib.Ok account)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result
+              (Stdlib.Error
+                 (read_error ~required_scopes:[ "user_accounts:read" ] ~status_code:response.status
+                    response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
   end
 end
 
@@ -756,6 +876,15 @@ module Make (Config : CONFIG) = struct
         | Ok analytics ->
             on_result (Ok (to_canonical_account_analytics_series analytics))
         | Error err -> on_result (Error err))
+
+  (** {!OAuth.Make.get_user_account} for a stored account, refreshing its
+      token first when needed. *)
+  let get_user_account ~account_id ?ad_account_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let module Oauth_http = OAuth.Make (Config.Http) in
+        Oauth_http.get_user_account ~access_token ?ad_account_id on_result)
+      (fun err -> on_result (Stdlib.Error err))
 
   let get_pin_analytics ~account_id ~pin_id ~start_date ~end_date on_result =
     ensure_valid_token ~account_id
