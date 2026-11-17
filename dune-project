@@ -17,7 +17,9 @@
  (depends
   (ocaml (>= 4.14))
   yojson
-  re))
+  re
+  digestif
+  base64))
 
 (package
  (name social-lwt)

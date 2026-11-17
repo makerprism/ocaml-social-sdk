@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Secure_random.bytes`: bytes from the OS CSPRNG (`/dev/urandom`), for
+  secrets the SDK generates. Raises `Failure` rather than falling back to a
+  predictable generator when no entropy source is readable.
+- `Oauth_pkce` (RFC 7636): `generate_verifier ?bytes ()`, `challenge_s256`,
+  `challenge_method`. Replaces three per-package copies; verified against the
+  RFC's appendix B known answer. `social-core` now depends on `digestif` and
+  `base64` (already in every consumer's closure via the provider packages).
+  No `mirage-crypto-rng` dependency on purpose: it would need runtime-specific
+  seeding and its 0.x/1.x APIs are incompatible, forcing consumers to migrate.
 - `Health_status`: the closed set of account-health values providers may report
   through `CONFIG.update_health_status`, with `to_string`, `of_string`, and
   `of_error`. Providers now build the status string with `to_string` instead of

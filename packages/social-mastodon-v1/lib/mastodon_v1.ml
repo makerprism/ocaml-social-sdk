@@ -129,29 +129,18 @@ module OAuth = struct
   
   (** PKCE helpers for OAuth 2.0 with Proof Key for Code Exchange *)
   module Pkce = struct
-    (** Generate a cryptographically random code verifier (128 chars)
-        
-        The code verifier uses characters [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
-        per RFC 7636.
-        
-        @return A 128-character random code verifier string
+    (** Generate a code verifier: 128 base64url characters from 96 bytes of
+        the OS CSPRNG ({!Oauth_pkce.generate_verifier}).
+
+        @raise Failure if the OS entropy source cannot be read
     *)
-    let generate_code_verifier () =
-      let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~" in
-      let chars_len = String.length chars in
-      String.init 128 (fun _ -> String.get chars (Random.int chars_len))
-    
+    let generate_code_verifier () = Oauth_pkce.generate_verifier ~bytes:96 ()
+
     (** Generate code_challenge from code_verifier using SHA256 (S256 method)
-        
+
         code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
-        
-        @param verifier The code_verifier string
-        @return Base64-URL encoded SHA256 hash without padding
     *)
-    let generate_code_challenge verifier =
-      let hash = Digestif.SHA256.digest_string verifier in
-      let raw_hash = Digestif.SHA256.to_raw_string hash in
-      Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet raw_hash
+    let generate_code_challenge = Oauth_pkce.challenge_s256
   end
   
   (** Generate authorization URL for Mastodon OAuth 2.0 flow
@@ -751,15 +740,22 @@ module Make (Config : CONFIG) = struct
       scope = None;
     }
   
-  (** Generate a UUID v4 for idempotency keys *)
+  (** Generate a UUID v4 for idempotency keys.
+
+      Drawn from the OS CSPRNG. The previous [Stdlib.Random] version was
+      never seeded, so every process produced the same key sequence; after a
+      restart the first post could reuse a key the instance still remembered
+      (Mastodon keeps idempotency keys for an hour) and be answered with an
+      earlier status instead of being published. *)
   let generate_uuid () =
-    let random_byte () = Random.int 256 in
+    let bytes = Secure_random.bytes 16 in
+    let byte i = Char.code bytes.[i] in
     Printf.sprintf "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
-      (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ())
-      (random_byte ()) (random_byte ())
-      ((random_byte () land 0x0f) lor 0x40) (random_byte ())
-      ((random_byte () land 0x3f) lor 0x80) (random_byte ())
-      (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ()) (random_byte ())
+      (byte 0) (byte 1) (byte 2) (byte 3)
+      (byte 4) (byte 5)
+      ((byte 6 land 0x0f) lor 0x40) (byte 7)
+      ((byte 8 land 0x3f) lor 0x80) (byte 9)
+      (byte 10) (byte 11) (byte 12) (byte 13) (byte 14) (byte 15)
   
   (** Verify credentials are valid and return account information,
       reporting failures as structured errors.

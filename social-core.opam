@@ -14,6 +14,8 @@ depends: [
   "ocaml" {>= "4.14"}
   "yojson"
   "re"
+  "digestif"
+  "base64"
   "odoc" {with-doc}
 ]
 build: [
