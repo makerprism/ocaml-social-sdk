@@ -17,7 +17,7 @@
 - Added canonical analytics conversion helpers for social-core metric normalization.
 - Added request-contract and malformed-payload tests for analytics endpoints.
 - Added token redaction guard for network errors surfaced from query-token analytics/read URLs.
-- Changed OAuth authorization endpoint from `threads.net` to `www.threads.com` to match Meta's April 2025 domain migration (threads.net now 301-redirects to threads.com, breaking the GDPR consent flow).
+- Documented the hosts on `oauth_authorize_url` and `graph_api_host`; the hosts themselves are unchanged. The authorization endpoint is `https://threads.net/oauth/authorize`. An earlier entry here said it had moved to `www.threads.com`, but that change was reverted before release. As of 2026-11-17 `threads.net`, `www.threads.net` and `threads.com` 301-redirect to `https://www.threads.com/oauth/authorize`; Meta's docs show `threads.com`. `graph.threads.net` and `graph.threads.com` both serve the API (Meta documents both; its examples use `.com`).
 
 ## 0.1.0 - 2026-02-12
 

@@ -58,6 +58,7 @@ Known subtle bug traps:
 - For publish endpoints, `access_token` is part of form/query contract (not Authorization header).
 - OAuth inputs are strict-trim validated (state/code/redirect/client values with surrounding whitespace are rejected).
 - Thread posting includes idempotency/reply-control forwarding; extra media entries fail validation early.
+- Hosts: `threads.net`, `www.threads.net` and `threads.com` authorize URLs all 301 to `https://www.threads.com/oauth/authorize` (checked 2026-11-17); the SDK keeps `threads.net`. `graph.threads.net` and `graph.threads.com` both serve the API; the SDK keeps `graph.threads.net`.
 
 ## Pinterest
 

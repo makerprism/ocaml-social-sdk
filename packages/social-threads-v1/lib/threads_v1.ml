@@ -8,7 +8,12 @@ open Social_core
 (** Threads API version, e.g. ["v1.0"]. *)
 let api_version = "v1.0"
 
-(** Unversioned Threads Graph API host. *)
+(** Unversioned Threads Graph API host.
+
+    Meta documents the API as reachable on both [graph.threads.net] and
+    [graph.threads.com]; its examples use [graph.threads.com]. Both answer
+    identically (checked 2026-11-17), so this keeps the host consumers
+    already allow-list and pin in tests. *)
 let graph_api_host = "https://graph.threads.net"
 
 (** Versioned API base URL, ["https://graph.threads.net/v1.0"]. *)
@@ -20,7 +25,14 @@ let threads_token_exchange_endpoint = graph_api_host ^ "/access_token"
 (** Long-lived token refresh ([th_refresh_token]). *)
 let threads_token_refresh_endpoint = graph_api_host ^ "/refresh_access_token"
 
-(** Threads authorization window. *)
+(** Threads authorization window.
+
+    Meta's docs show [https://threads.com/oauth/authorize]. As of 2026-11-17
+    [threads.net], [www.threads.net] and [threads.com] all answer with a 301
+    to [https://www.threads.com/oauth/authorize], which serves the window.
+    The host has been switched back and forth over reports that a redirect
+    hop breaks Meta's EU cookie-consent step; change it only together with a
+    live EU authorization test. *)
 let oauth_authorize_url = "https://threads.net/oauth/authorize"
 
 (** Authorization-code exchange endpoint. *)
