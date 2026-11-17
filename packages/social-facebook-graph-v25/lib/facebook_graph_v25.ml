@@ -323,8 +323,12 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let get_user_pages ~user_access_token on_success on_error =
-      let url = Printf.sprintf "%s/me/accounts?fields=id,name,access_token,category&access_token=%s"
-        Metadata.api_base user_access_token in
+      let query =
+        Uri.encoded_of_query
+          [ ("fields", ["id,name,access_token,category"]);
+            ("access_token", [user_access_token]) ]
+      in
+      let url = Printf.sprintf "%s/me/accounts?%s" Metadata.api_base query in
       
       Http.get url
         (fun response ->
@@ -356,8 +360,14 @@ module OAuth = struct
         @param on_error Continuation receiving error message
     *)
     let debug_token ~access_token ~app_token on_success on_error =
-      let url = Printf.sprintf "%s/debug_token?input_token=%s&access_token=%s"
-        Metadata.api_base access_token app_token in
+      (* The app token is "app_id|app_secret"; both tokens must be
+         percent-encoded or a reserved character in either one changes the
+         query. *)
+      let query =
+        Uri.encoded_of_query
+          [ ("input_token", [access_token]); ("access_token", [app_token]) ]
+      in
+      let url = Printf.sprintf "%s/debug_token?%s" Metadata.api_base query in
       
       Http.get url
         (fun response ->

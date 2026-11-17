@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`OAuth.Make.get_user_pages` and `OAuth.Make.debug_token` percent-encode
+  their tokens.** Both interpolated tokens into the query string raw. An app
+  token is `app_id|app_secret`, and opaque tokens can contain `+`, `/`, `=` or
+  `&`, so a reserved character could change or split the query. Both now build
+  the query with `Uri.encoded_of_query`, like `exchange_code` already did.
+  Signatures are unchanged.
 - **Reels publish through the documented Reels Publishing API.**
   `upload_video_reel_typed` (and so `post_reel`) used to post `file_url` to
   `/{page_id}/videos`, which is not the Reels flow and has no `place`
