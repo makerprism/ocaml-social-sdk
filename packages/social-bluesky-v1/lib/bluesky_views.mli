@@ -77,6 +77,29 @@ type 'post post_union =
   | Blocked_post of blocked_post
   | Unknown_post of string  (** A [$type] this library does not know *)
 
+(** {1 Profiles} *)
+
+(** [app.bsky.actor.defs#profileViewDetailed], the answer of
+    [app.bsky.actor.getProfile]. Only [did] and [handle] are required by
+    the lexicon; counts are [None] when the AppView leaves them out.
+    {{:https://github.com/bluesky-social/atproto/blob/main/packages/api/lexicons/app/bsky/actor/defs.json}}
+    {{:https://docs.bsky.app/docs/api/app-bsky-actor-get-profile}} *)
+type profile_detailed = {
+  did : string;
+  handle : string;
+  display_name : string option;
+  description : string option;
+  avatar : string option;
+  banner : string option;
+  followers_count : int option;  (** [followersCount] *)
+  follows_count : int option;  (** [followsCount] *)
+  posts_count : int option;  (** [postsCount] *)
+  created_at : string option;  (** [createdAt] *)
+  indexed_at : string option;  (** [indexedAt] *)
+}
+
+val profile_detailed_of_json : Yojson.Basic.t -> (profile_detailed, string) result
+
 (** {1 Threads} *)
 
 (** [app.bsky.feed.getPostThread] output [thread]. *)

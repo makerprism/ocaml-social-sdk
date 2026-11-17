@@ -223,6 +223,7 @@ Rows describe the typed reads in `social-bluesky-v1` (`Reads.Make (Http)`; the `
 | Post thread | GET | `{service}/xrpc/app.bsky.feed.getPostThread?uri&depth&parentHeight` | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_post_thread`, `get_post_thread_view` | `test_post_thread`, `test_post_thread_parent_chain_and_defaults`, `test_post_thread_errors` |
 | Author feed | GET | `{service}/xrpc/app.bsky.feed.getAuthorFeed?actor&limit&cursor&filter&includePins` | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_author_feed`, `get_author_feed_page` | `test_author_feed` |
 | Posts by URI | GET | `{service}/xrpc/app.bsky.feed.getPosts?uris=..&uris=..` (at most 25 per call; longer lists are split) | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_posts`, `get_posts` | `test_get_posts_batches` |
+| Profile with counts | GET | `{service}/xrpc/app.bsky.actor.getProfile?actor=<handle or DID>` | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_profile`, `get_profile_view` (`Views.profile_detailed`) | `test_get_profile`, `test_account_wrappers` |
 | Notifications | GET | `{service}/xrpc/app.bsky.notification.listNotifications?limit&cursor&reasons=..&reasons=..` | `Authorization: Bearer <accessJwt>` | none | `Reads.list_notifications`, `list_notifications_page` | `test_list_notifications` |
 | Resolve handle | GET | `{service}/xrpc/com.atproto.identity.resolveHandle?handle` | none | none | `Reads.resolve_handle` | `test_resolve_handle` |
 

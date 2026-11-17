@@ -274,6 +274,48 @@ let test_get_posts_batches () =
   | _ -> failwith "second batch failure fails the read");
   Printf.printf "✓\n"
 
+(* {1 getProfile} *)
+
+(* profileViewDetailed as an AppView sends it (app.bsky.actor.defs). *)
+let profile_body =
+  {|{"did":"did:plc:alice","handle":"alice.bsky.social","displayName":"Alice","description":"Hi",
+     "avatar":"https://cdn.bsky.app/img/avatar/plain/did:plc:alice/bafkreiavatar@jpeg",
+     "associated":{"lists":0,"feedgens":0,"starterPacks":0,"labeler":false},
+     "indexedAt":"2024-01-01T00:00:00.000Z","createdAt":"2023-04-20T10:00:00.000Z",
+     "viewer":{"muted":false,"blockedBy":false},"labels":[],
+     "followersCount":1520,"followsCount":310,"postsCount":4821,
+     "pinnedPost":{"uri":"at://did:plc:alice/app.bsky.feed.post/3kpin","cid":"bafypin"}}|}
+
+let test_get_profile () =
+  Printf.printf "Test: getProfile typed counts, public and with a session... ";
+  reset (fun _ -> json_response profile_body);
+  let profile =
+    capture (Reads.get_profile ~service_url:Social_bluesky_v1.Reads.public_api_url ~actor:"alice.bsky.social")
+    |> expect_ok "profile"
+  in
+  assert (profile.V.followers_count = Some 1520);
+  assert (profile.follows_count = Some 310);
+  assert (profile.posts_count = Some 4821);
+  assert (profile.display_name = Some "Alice" && profile.banner = None);
+  let request = last_request () in
+  assert (String.starts_with ~prefix:"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?" request.url);
+  assert (query_value request.url "actor" = Some "alice.bsky.social");
+  assert (List.assoc_opt "Authorization" request.headers = None);
+  (* Counts are optional in the lexicon. *)
+  reset (fun _ -> json_response {|{"did":"did:plc:x","handle":"x.test"}|});
+  let bare = capture (Reads.get_profile ~service_url:"https://bsky.social" ~access_jwt:"t" ~actor:"did:plc:x") |> expect_ok "bare" in
+  assert (bare.followers_count = None && bare.posts_count = None);
+  assert (List.assoc_opt "Authorization" (last_request ()).headers = Some "Bearer t");
+  reset (fun _ -> json_response {|{"handle":"x.test"}|});
+  (match capture (Reads.get_profile ~service_url:"https://bsky.social" ~actor:"x.test") with
+  | Error (Error_types.Internal_error msg) -> assert (contains msg "did")
+  | _ -> failwith "a profile without did is a parse error");
+  reset (fun _ -> json_response ~status:400 {|{"error":"InvalidRequest","message":"Profile not found"}|});
+  (match capture (Reads.get_profile ~service_url:"https://bsky.social" ~actor:"gone.test") with
+  | Error (Error_types.Api_error _ | Error_types.Resource_not_found _) -> ()
+  | _ -> failwith "an unknown actor is an error");
+  Printf.printf "✓\n"
+
 (* {1 listNotifications} *)
 
 let notifications_body =
@@ -413,6 +455,7 @@ let wrapper_responder request =
   else if contains request.url "getAuthorFeed" then json_response author_feed_body
   else if contains request.url "getPosts" then json_response (Printf.sprintf {|{"posts":[%s]}|} root_post)
   else if contains request.url "listNotifications" then json_response notifications_body
+  else if contains request.url "getProfile" then json_response profile_body
   else json_response ~status:404 {|{"error":"NotFound"}|}
 
 let test_account_wrappers () =
@@ -440,6 +483,9 @@ let test_account_wrappers () =
     capture (Self_hosted.list_notifications_page ~account_id:"acct" ~reasons:[ V.Reply ]) |> expect_ok "notifications"
   in
   assert (List.length page.notifications = 3);
+  let profile = capture (Self_hosted.get_profile_view ~account_id:"acct" ~actor:"did:plc:alice") |> expect_ok "profile" in
+  assert (profile.V.posts_count = Some 4821);
+  assert (String.starts_with ~prefix:"https://pds.example.org/xrpc/app.bsky.actor.getProfile?" (last_request ()).url);
   assert (List.length (List.filter (fun r -> contains r.url "refreshSession") !requests) = 1);
   Printf.printf "✓\n"
 
@@ -460,6 +506,7 @@ let () =
   test_post_thread_errors ();
   test_author_feed ();
   test_get_posts_batches ();
+  test_get_profile ();
   test_list_notifications ();
   test_notification_reason_round_trip ();
   test_resolve_handle ();

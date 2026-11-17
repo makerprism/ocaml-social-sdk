@@ -512,6 +512,16 @@ module Reads = struct
     let get_posts ~service_url ?access_jwt ~post_uris on_result =
       get_posts_in_chunks ~service_url ~access_jwt [] post_uris on_result
 
+    (** [app.bsky.actor.getProfile]: the actor's profile with follower,
+        follows and post counts. [actor] is a handle or a DID. Needs no
+        session ({!public_api_url} answers); with one, the viewer's state
+        is included.
+        {{:https://docs.bsky.app/docs/api/app-bsky-actor-get-profile}} *)
+    let get_profile ~service_url ?access_jwt ~actor on_result =
+      get_view ~what:"getProfile" ~headers:(bearer access_jwt) ~error_of:xrpc_error
+        (xrpc_url ~service_url "app.bsky.actor.getProfile" [ ("actor", [ actor ]) ])
+        Bluesky_views.profile_detailed_of_json on_result
+
     (** [app.bsky.notification.listNotifications], one page, newest first.
         Requires a session. [reasons] keeps only those reasons; [limit]
         1-100 (server default 50). Pass the returned [cursor] for the next
@@ -2995,6 +3005,13 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     with_session ~account_id on_result (fun access_jwt ->
         Reads_http.get_posts ~service_url:(service_url ()) ~access_jwt ~post_uris
           on_result)
+
+  (** {!Reads.Make.get_profile} for a stored account: a typed profile with
+      counts. The older [get_profile] returns the raw JSON and is
+      unchanged. *)
+  let get_profile_view ~account_id ~actor on_result =
+    with_session ~account_id on_result (fun access_jwt ->
+        Reads_http.get_profile ~service_url:(service_url ()) ~access_jwt ~actor on_result)
 
   (** {!Reads.Make.list_notifications} for a stored account. *)
   let list_notifications_page ~account_id ?limit ?cursor ?reasons on_result =
