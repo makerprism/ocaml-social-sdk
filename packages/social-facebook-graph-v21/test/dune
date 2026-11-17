@@ -6,7 +6,8 @@
   social-core
   ptime
   ptime.clock.os
-  str))
+  str
+  uri))
 
 (test
  (name test_facebook_health_contract)

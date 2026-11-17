@@ -374,6 +374,49 @@ let test_exchange_code_and_get_pages () =
       print_endline "✓ Exchange code and get pages")
     (fun err -> failwith ("Exchange code and get pages failed: " ^ err))
 
+module OAuth_http = OAuth.Make (Mock_http)
+
+let query_param url key =
+  match Uri.get_query_param (Uri.of_string url) key with
+  | Some value -> value
+  | None -> failwith (Printf.sprintf "missing query parameter %s in %s" key url)
+
+(* Tokens may contain reserved characters ('|' in app tokens "id|secret",
+   '+', '/', '=', '&' in opaque tokens). Each must survive as one query
+   value. *)
+let tricky_token = "EAAB+x/y=&fields=evil"
+
+let test_get_user_pages_encodes_token () =
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 200; body = {|{"data":[]}|}; headers = [] };
+  OAuth_http.get_user_pages ~user_access_token:tricky_token
+    (fun _pages ->
+      match !Mock_http.requests with
+      | [ ("GET", url, _, _) ] ->
+          assert (query_param url "access_token" = tricky_token);
+          assert (query_param url "fields" = "id,name,access_token,category");
+          assert (not (string_contains url "&fields=evil"));
+          print_endline "✓ get_user_pages percent-encodes the user token"
+      | _ -> failwith "expected one GET for get_user_pages")
+    (fun err -> failwith ("get_user_pages failed: " ^ err))
+
+let test_debug_token_encodes_tokens () =
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 200; body = {|{"data":{"is_valid":true}}|}; headers = [] };
+  let app_token = "1234|s3cr+t/=" in
+  OAuth_http.debug_token ~access_token:tricky_token ~app_token
+    (fun _json ->
+      match !Mock_http.requests with
+      | [ ("GET", url, _, _) ] ->
+          assert (query_param url "input_token" = tricky_token);
+          assert (query_param url "access_token" = app_token);
+          assert (not (string_contains url "|"));
+          print_endline "✓ debug_token percent-encodes input and app tokens"
+      | _ -> failwith "expected one GET for debug_token")
+    (fun err -> failwith ("debug_token failed: " ^ err))
+
 (** Test: Field selection *)
 let test_field_selection () =
   Mock_config.reset ();
@@ -3052,6 +3095,8 @@ let () =
   test_token_exchange ();
   test_token_exchange_errors ();
   test_exchange_code_and_get_pages ();
+  test_get_user_pages_encodes_token ();
+  test_debug_token_encodes_tokens ();
   test_long_lived_token ();
   test_page_vs_user_token ();
   test_token_expiry_detection ();
