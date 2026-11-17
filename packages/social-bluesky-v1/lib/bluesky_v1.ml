@@ -206,6 +206,25 @@ module Auth = struct
   end
 end
 
+(** A strong reference to a record: its AT URI and the CID of the exact
+    version referenced. Replies must carry both. *)
+type strong_ref = { uri : string; cid : string }
+
+(** Where a reply attaches. [parent] is the post replied to directly; [root]
+    is the first post of its thread (the parent's own root, or the parent
+    itself when it is a top-level post). *)
+type reply_ref = { root : strong_ref; parent : strong_ref }
+
+(** Parse the ["uri|cid"] id that {!Make_with_options.post_single} and
+    {!Make_with_options.post_thread} return. *)
+let strong_ref_of_post_id post_id =
+  match String.split_on_char '|' post_id with
+  | [ uri; cid ] when uri <> "" && cid <> "" -> Some { uri; cid }
+  | _ -> None
+
+(** The ["uri|cid"] id format the posting functions return. *)
+let post_id_of_strong_ref { uri; cid } = uri ^ "|" ^ cid
+
 (** Configuration module type for Bluesky provider *)
 module type CONFIG = sig
   module Http : HTTP_CLIENT
@@ -1197,9 +1216,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         
         ensure_valid_token_with_did ~account_id
           (fun (did, access_jwt) ->
-            Config.get_credentials ~account_id
-              (fun creds ->
-                let identifier = creds.access_token in
+            (
 
                 (* Pair URLs with alt text and dimensions - use None if lists are shorter *)
                 let urls_with_meta = List.mapi (fun i url ->
@@ -1426,7 +1443,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                       (fun post_record ->
                         let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
                         let body = `Assoc [
-                          ("repo", `String identifier);
+                          ("repo", `String did);
                           ("collection", `String "app.bsky.feed.post");
                           ("record", post_record);
                         ] in
@@ -1463,9 +1480,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                             (Error_types.Connection_failed err))))))
                       (fun _ -> on_result (Error_types.Failure (Error_types.Internal_error 
                         "Facet extraction failed"))))
-                  (fun err -> on_result (Error_types.Failure err)))
-              (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
-                (Error_types.Connection_failed err)))))
+                  (fun err -> on_result (Error_types.Failure err))))
           (fun err -> on_result (Error_types.Failure err))
   
   (** Post a single post to Bluesky
@@ -1485,6 +1500,20 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
     post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload ~reply_refs:None on_result
 
+  (** Reply to a post.
+
+      [reply_to.parent] is the post answered; [reply_to.root] the first post
+      of its thread (equal to [parent] for a top-level post). Get both
+      [uri] and [cid] from a thread read ([getPostThread]) or from the id a
+      posting function returned ({!strong_ref_of_post_id}). The reply is
+      posted with the same text, media, facet and link-card handling as
+      {!post_single}, and the outcome carries the new post's ["uri|cid"].
+  *)
+  let reply_to_post ~account_id ~(reply_to : reply_ref) ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
+    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload
+      ~reply_refs:(Some (reply_to.root.uri, reply_to.root.cid, reply_to.parent.uri, reply_to.parent.cid))
+      on_result
+
   (** Post a thread to Bluesky
 
       @param account_id The account identifier
@@ -1496,9 +1525,18 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
       @param skip_enrichments Skip link card fetching (default: false)
       @param validate_media_before_upload When true, validates each media file after download.
              Default: false
-      @param on_result Callback receiving the outcome with thread_result
+      @param reply_to Attach the first post as a reply under this reference
+             (the rest chain under it as usual). Use it to post a thread
+             as a reply, or to resume a thread that failed part-way:
+             pass the original root and the last post that went out, and
+             only the remaining texts. Default: the first post starts a
+             new thread.
+      @param on_result Callback receiving the outcome with thread_result.
+             When a post after the first fails, the outcome is
+             [Partial_success] with [failed_at_index = Some i] and the
+             ["uri|cid"] ids of the posts that went out.
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ?(reply_to : reply_ref option) on_result =
     (* Validate entire thread upfront *)
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
@@ -1592,7 +1630,13 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                 "Failed to parse post response (expected uri|cid format)"))
         in
         
-        post_thread_items texts media_with_meta_per_post None None []
+        let initial_root, initial_parent =
+          match reply_to with
+          | None -> (None, None)
+          | Some { root; parent } ->
+              (Some (root.uri, root.cid), Some (parent.uri, parent.cid))
+        in
+        post_thread_items texts media_with_meta_per_post initial_root initial_parent []
   
   (** {1 Public API - Post Management} *)
   
@@ -1993,9 +2037,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     | Ok () ->
         ensure_valid_token_with_did ~account_id
           (fun (did, access_jwt) ->
-            Config.get_credentials ~account_id
-              (fun creds ->
-                let identifier = creds.access_token in
+            (
                 let _ = skip_enrichments in (* Quote posts don't use link cards *)
 
                 (* Pair URLs with alt text and dimensions *)
@@ -2166,7 +2208,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                         
                         let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
                         let body = `Assoc [
-                          ("repo", `String identifier);
+                          ("repo", `String did);
                           ("collection", `String "app.bsky.feed.post");
                           ("record", `Assoc final_record);
                         ] in
@@ -2195,9 +2237,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                             (Error_types.Connection_failed err)))))
                       (fun _ -> on_result (Error_types.Failure (Error_types.Internal_error 
                         "Facet extraction failed"))))
-                  (fun err -> on_result (Error_types.Failure err)))
-              (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
-                (Error_types.Connection_failed err)))))
+                  (fun err -> on_result (Error_types.Failure err))))
           (fun err -> on_result (Error_types.Failure err))
   
   (** {1 Public API - Notifications} *)

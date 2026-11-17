@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`reply_to_post ~reply_to`** replies to any post. `reply_to` is a
+  `reply_ref` (`root` and `parent`, each a `strong_ref` of `uri` and `cid`);
+  text, media, facets and link cards work as in `post_single`. Replying used
+  to need the internal `post_with_reply_impl` and a 4-tuple.
+- **`post_thread ?reply_to`** attaches the first post of a thread under a
+  reply reference. That posts a whole thread as a reply, and resumes a
+  thread that failed part-way: pass the original root, the last post that
+  went out, and only the remaining texts.
+- `strong_ref_of_post_id` / `post_id_of_strong_ref` convert between a
+  `strong_ref` and the `"uri|cid"` id the posting functions return.
+
 ### Fixed
+
+- **Posts and quote posts name the session DID as `repo`.** They used the
+  stored identifier, which can be a login email (valid for
+  `createSession`, rejected as a record `repo`) or a handle the user has
+  since changed.
 
 - **No helper stores the app password any more.**
   `Auth.Make.session_to_credentials` put the app password in
