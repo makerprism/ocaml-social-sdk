@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.Make(Http).get_my_channels ~access_token`**: typed `channels.list?part=snippet,statistics&mine=true` (1 quota unit) as `OAuth.channel list` (`id`, `title`, `description`, `custom_url`, `thumbnail_url`, `view_count`, `subscriber_count`, `hidden_subscriber_count`, `video_count`). Counts are read from JSON strings or numbers; `subscriber_count` is `None` when the channel hides it. Errors through `Social_google_oauth.api_error` (403 `quotaExceeded` is `Rate_limited`). `get_channel_info` (raw JSON) is unchanged.
 - `post_single` takes an optional `?recording_location` (a
   `recording_location` record with `latitude` and `longitude`). When given,
   the upload sends `recordingDetails.location` and adds `recordingDetails`

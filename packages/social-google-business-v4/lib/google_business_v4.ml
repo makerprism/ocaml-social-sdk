@@ -88,6 +88,128 @@ module OAuth = struct
   let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.all) () =
     Social_google_oauth.get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
 
+  (** {2 Token-based discovery types} *)
+
+  (** [type] of a Business Profile account
+      ({{:https://developers.google.com/my-business/reference/accountmanagement/rest/v1/accounts}}). *)
+  type account_type =
+    | Personal
+    | Location_group
+    | User_group
+    | Organization
+    | Unknown_account_type of string  (** Includes [ACCOUNT_TYPE_UNSPECIFIED]. *)
+
+  (** The caller's [role] on an account. *)
+  type account_role =
+    | Primary_owner
+    | Owner
+    | Manager
+    | Site_manager
+    | Unknown_role of string  (** Includes [ACCOUNT_ROLE_UNSPECIFIED]. *)
+
+  type business_account = {
+    account_resource_name : string;  (** [name]: ["accounts/{accountId}"] *)
+    account_name : string option;  (** [accountName], the display name. *)
+    account_type : account_type option;
+    role : account_role option;
+    verification_state : string option;  (** [VERIFIED], [UNVERIFIED], ... *)
+  }
+
+  (** A location from [accounts.locations.list]
+      ({{:https://developers.google.com/my-business/reference/businessinformation/rest/v1/accounts.locations}}).
+      Fields outside the [readMask] are [None] / empty. *)
+  type business_location = {
+    location_resource_name : string;  (** [name]: ["locations/{locationId}"] *)
+    title : string option;
+    store_code : string option;
+    website_uri : string option;
+    address_lines : string list;  (** [storefrontAddress.addressLines] *)
+  }
+
+  (** One page of a Google list call. [next_page_token] is [None] on the
+      last page. *)
+  type 'a page = {
+    items : 'a list;
+    next_page_token : string option;
+  }
+
+  (** The [readMask] {!Make.list_locations_page} sends by default. Google
+      requires one. *)
+  let default_location_read_mask = "name,title,storeCode,websiteUri,storefrontAddress"
+
+  (** The v4 resource name ["accounts/{a}/locations/{l}"] that the v4
+      [localPosts] API needs, from the account name and the
+      ["locations/{l}"] name the Business Information API returns. A
+      [location_name] that already starts with ["accounts/"] is returned
+      unchanged. *)
+  let v4_location_name ~account_name ~location_name =
+    if String.starts_with ~prefix:"accounts/" location_name then location_name
+    else account_name ^ "/" ^ location_name
+
+  let account_type_of_string = function
+    | "PERSONAL" -> Personal
+    | "LOCATION_GROUP" -> Location_group
+    | "USER_GROUP" -> User_group
+    | "ORGANIZATION" -> Organization
+    | other -> Unknown_account_type other
+
+  let account_role_of_string = function
+    | "PRIMARY_OWNER" -> Primary_owner
+    | "OWNER" -> Owner
+    | "MANAGER" -> Manager
+    | "SITE_MANAGER" -> Site_manager
+    | other -> Unknown_role other
+
+  let json_field key = function
+    | `Assoc fields -> List.assoc_opt key fields
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+
+  let json_text key json =
+    match json_field key json with
+    | Some (`String value) when value <> "" -> Some value
+    | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+
+  let business_account_of_json json =
+    Option.map
+      (fun account_resource_name ->
+        { account_resource_name;
+          account_name = json_text "accountName" json;
+          account_type = Option.map account_type_of_string (json_text "type" json);
+          role = Option.map account_role_of_string (json_text "role" json);
+          verification_state = json_text "verificationState" json })
+      (json_text "name" json)
+
+  let business_location_of_json json =
+    Option.map
+      (fun location_resource_name ->
+        { location_resource_name;
+          title = json_text "title" json;
+          store_code = json_text "storeCode" json;
+          website_uri = json_text "websiteUri" json;
+          address_lines =
+            (match Option.bind (json_field "storefrontAddress" json) (json_field "addressLines") with
+             | Some (`List lines) ->
+                 List.filter_map
+                   (function
+                     | `String line -> Some line
+                     | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _ -> None)
+                   lines
+             | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> []) })
+      (json_text "name" json)
+
+  (** Parses one page of a list response: the entries of [key] that
+      [item_of] accepts, and [nextPageToken]. *)
+  let parse_page ~key item_of body : ('a page, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("list response is not JSON: " ^ message)
+    | json ->
+        let items =
+          match json_field key json with
+          | Some (`List items) -> List.filter_map item_of items
+          | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> []
+        in
+        Stdlib.Ok { items; next_page_token = json_text "nextPageToken" json }
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     module Shared = Social_google_oauth.Make(Http)
@@ -100,6 +222,87 @@ module OAuth = struct
 
     let get_user_info ~access_token on_result =
       Shared.get_user_info ~platform:Platform_types.GoogleBusinessProfile ~access_token on_result
+
+    (** {!Social_google_oauth.Make.get_userinfo} tagged
+        [GoogleBusinessProfile]. *)
+    let get_userinfo ~access_token on_result =
+      Shared.get_userinfo ~platform:Platform_types.GoogleBusinessProfile ~access_token on_result
+
+    let get_page ~access_token url parse on_result =
+      Http.get ~headers:[ ("Authorization", "Bearer " ^ access_token) ] url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse response.body with
+            | Stdlib.Ok page -> on_result (Stdlib.Ok page)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result
+              (Stdlib.Error
+                 (Social_google_oauth.api_error ~platform:Platform_types.GoogleBusinessProfile
+                    ~required_scopes:Scopes.business_manage ~status_code:response.status response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+    let page_query ?page_size ?page_token extra =
+      let params =
+        extra
+        @ (match page_size with Some size -> [ ("pageSize", [ string_of_int size ]) ] | None -> [])
+        @ (match page_token with Some token -> [ ("pageToken", [ token ]) ] | None -> [])
+      in
+      match params with
+      | [] -> ""
+      | _ :: _ -> "?" ^ Uri.encoded_of_query params
+
+    (** Follows [nextPageToken] up to [max_pages] requests. *)
+    let collect_pages ~max_pages fetch on_result =
+      let rec loop ~remaining ~page_token acc =
+        fetch ?page_token (function
+          | Stdlib.Error err -> on_result (Stdlib.Error err)
+          | Stdlib.Ok { items; next_page_token } ->
+              let acc = List.rev_append items acc in
+              (match next_page_token with
+               | Some token when remaining > 1 -> loop ~remaining:(remaining - 1) ~page_token:(Some token) acc
+               | Some _ | None -> on_result (Stdlib.Ok (List.rev acc))))
+      in
+      loop ~remaining:(max 1 max_pages) ~page_token:None []
+
+    (** One page of the token user's accounts, [GET /v1/accounts]
+        ({{:https://developers.google.com/my-business/reference/accountmanagement/rest/v1/accounts/list}};
+        [pageSize] at most 20). Needs [business.manage]. *)
+    let list_accounts_page ~access_token ?page_size ?page_token on_result =
+      get_page ~access_token
+        (Metadata.account_management_base ^ "/accounts" ^ page_query ?page_size ?page_token [])
+        (parse_page ~key:"accounts" business_account_of_json)
+        on_result
+
+    (** Every account, following [nextPageToken] (default 50 pages). *)
+    let list_all_accounts ~access_token ?(max_pages = 50) on_result =
+      collect_pages ~max_pages
+        (fun ?page_token k -> list_accounts_page ~access_token ?page_token k)
+        on_result
+
+    (** One page of an account's locations,
+        [GET /v1/{account_name}/locations?readMask=...]
+        ({{:https://developers.google.com/my-business/reference/businessinformation/rest/v1/accounts.locations/list}};
+        [pageSize] at most 100).
+
+        @param account_name ["accounts/{accountId}"], or ["accounts/-"] for
+          the token user.
+        @param read_mask Defaults to {!default_location_read_mask}. *)
+    let list_locations_page ~access_token ~account_name ?(read_mask = default_location_read_mask)
+        ?page_size ?page_token on_result =
+      get_page ~access_token
+        (Printf.sprintf "%s/%s/locations%s" Metadata.business_information_base account_name
+           (page_query ?page_size ?page_token [ ("readMask", [ read_mask ]) ]))
+        (parse_page ~key:"locations" business_location_of_json)
+        on_result
+
+    (** Every location of an account, following [nextPageToken] (default
+        50 pages). Retry and backoff on [Rate_limited] are left to the
+        caller. *)
+    let list_all_locations ~access_token ~account_name ?read_mask ?(max_pages = 50) on_result =
+      collect_pages ~max_pages
+        (fun ?page_token k -> list_locations_page ~access_token ~account_name ?read_mask ?page_token k)
+        on_result
   end
 end
 

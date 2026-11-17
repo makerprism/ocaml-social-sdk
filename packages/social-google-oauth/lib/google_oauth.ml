@@ -40,6 +40,112 @@ let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
 let expires_at_of_expires_in expires_in =
   Token_expiry.expires_at_of_expires_in expires_in
 
+(** {1 Typed reads} *)
+
+(** The Google account behind a token, from the OAuth2 v2 userinfo
+    endpoint ([GET https://www.googleapis.com/oauth2/v2/userinfo], schema
+    [Userinfo] in
+    {{:https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest}}).
+    [email] needs the [userinfo.email] scope; the name and picture fields
+    need [userinfo.profile]. *)
+type userinfo = {
+  id : string;  (** Obfuscated user id; the OpenID Connect [sub]. *)
+  email : string option;
+  verified_email : bool option;
+  name : string option;
+  given_name : string option;
+  family_name : string option;
+  picture : string option;
+  locale : string option;
+  hd : string option;  (** Hosted (Workspace) domain. *)
+}
+
+let json_text fields key =
+  match List.assoc_opt key fields with
+  | Some (`String value) when value <> "" -> Some value
+  | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+
+(** Parses a userinfo body. Accepts [sub] when [id] is absent (the OpenID
+    Connect userinfo shape). [Error] without either. *)
+let parse_userinfo body : (userinfo, string) result =
+  match Yojson.Basic.from_string body with
+  | exception Yojson.Json_error message -> Error ("userinfo response is not JSON: " ^ message)
+  | `Assoc fields -> (
+      let id =
+        match json_text fields "id" with
+        | Some _ as id -> id
+        | None -> json_text fields "sub"
+      in
+      let verified =
+        match List.assoc_opt "verified_email" fields, List.assoc_opt "email_verified" fields with
+        | Some (`Bool verified), _ | None, Some (`Bool verified) -> Some verified
+        | Some (`Null | `Int _ | `Float _ | `String _ | `List _ | `Assoc _), _
+        | None, (Some (`Null | `Int _ | `Float _ | `String _ | `List _ | `Assoc _) | None) -> None
+      in
+      match id with
+      | None -> Error "userinfo response has no id"
+      | Some id ->
+          Ok
+            { id;
+              email = json_text fields "email";
+              verified_email = verified;
+              name = json_text fields "name";
+              given_name = json_text fields "given_name";
+              family_name = json_text fields "family_name";
+              picture = json_text fields "picture";
+              locale = json_text fields "locale";
+              hd = json_text fields "hd" })
+  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> Error "userinfo response is not an object"
+
+(** The SDK error for a failed Google API call, from the standard error
+    envelope [{"error": {"code", "message", "status", "errors": [{"reason"}]}}]
+    ({{:https://cloud.google.com/apis/design/errors}}):
+    - 401: [Auth_error Token_invalid];
+    - 403 with reason [quotaExceeded], [rateLimitExceeded],
+      [userRateLimitExceeded] or [dailyLimitExceeded], and any 429:
+      [Rate_limited];
+    - other 403: [Auth_error (Insufficient_permissions {required =
+      required_scopes; ...})];
+    - 404: [Resource_not_found];
+    - otherwise [Api_error] with the body kept. *)
+let api_error ~platform ~required_scopes ~status_code body =
+  let error_fields =
+    match Yojson.Basic.from_string body with
+    | `Assoc fields -> (
+        match List.assoc_opt "error" fields with
+        | Some (`Assoc error) -> error
+        | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _) | None -> [])
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> []
+    | exception Yojson.Json_error _ -> []
+  in
+  let message = Option.value (json_text error_fields "message") ~default:body in
+  let reasons =
+    match List.assoc_opt "errors" error_fields with
+    | Some (`List items) ->
+        List.filter_map
+          (function
+            | `Assoc item -> json_text item "reason"
+            | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None)
+          items
+    | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> []
+  in
+  let rate_limit_reason =
+    List.exists
+      (fun reason ->
+        List.mem reason [ "quotaExceeded"; "rateLimitExceeded"; "userRateLimitExceeded"; "dailyLimitExceeded" ])
+      reasons
+  in
+  let rate_limited = Error_types.make_rate_limited ~remaining:0 () in
+  match status_code with
+  | 401 -> Error_types.Auth_error Error_types.Token_invalid
+  | 429 -> rate_limited
+  | 403 when rate_limit_reason -> rate_limited
+  | 403 ->
+      Error_types.Auth_error
+        (Error_types.Insufficient_permissions { required = required_scopes; platform_message = Some message })
+  | 404 -> Error_types.Resource_not_found message
+  | _ -> Error_types.make_api_error ~platform ~status_code ~message ~raw_response:body ()
+
 module Make (Http : Social_core.HTTP_CLIENT) = struct
   let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =
     let body = Social_core.form_urlencode_kvs [
@@ -179,4 +285,21 @@ module Make (Http : Social_core.HTTP_CLIENT) = struct
             request_id = None;
           })))
       (fun err -> on_result (Error (Error_types.Internal_error err)))
+
+  (** Typed {!get_user_info}: [GET] {!Endpoints.userinfo} as {!userinfo},
+      failures through {!api_error}. [platform] tags [Api_error]s. *)
+  let get_userinfo ~platform ~access_token on_result =
+    Http.get ~headers:[ ("Authorization", "Bearer " ^ access_token) ] Endpoints.userinfo
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          match parse_userinfo response.body with
+          | Ok userinfo -> on_result (Ok userinfo)
+          | Error message -> on_result (Error (Error_types.Internal_error message))
+        else
+          on_result
+            (Error
+               (api_error ~platform
+                  ~required_scopes:[ "https://www.googleapis.com/auth/userinfo.profile" ]
+                  ~status_code:response.status response.body)))
+      (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
 end

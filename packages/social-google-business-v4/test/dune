@@ -6,4 +6,5 @@
   social-core
   ptime
   ptime.clock.os
-  str))
+  str
+  uri))
