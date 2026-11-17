@@ -96,8 +96,8 @@
 
 (package
  (name social-facebook-graph-v21)
- (synopsis "Facebook Graph API v21 client")
- (description "Facebook Graph API v21 client. Supports posting to pages, media upload, stories, and reels.")
+ (synopsis "Deprecated: Facebook Graph API v21 client (use social-facebook-graph-v25)")
+ (description "Deprecated: Meta makes Graph API v21.0 unavailable on 2027-01-21; use social-facebook-graph-v25. Facebook Graph API v21 client. Supports posting to pages, media upload, stories, and reels.")
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
@@ -108,8 +108,8 @@
 
 (package
  (name social-instagram-graph-v21)
- (synopsis "Instagram Graph API v21 client (Facebook Login)")
- (description "Instagram Graph API v21 client for accounts linked via Facebook Login. Supports posting to business/creator accounts, media upload, stories, reels, and carousels. Uses graph.facebook.com as the API base.")
+ (synopsis "Deprecated: Instagram Graph API v21 client (Facebook Login)")
+ (description "Deprecated: Meta makes Graph API v21.0 unavailable on 2027-01-21, and there is no v25 Facebook Login Instagram package yet. Instagram Graph API v21 client for accounts linked via Facebook Login. Supports posting to business/creator accounts, media upload, stories, reels, and carousels. Uses graph.facebook.com as the API base.")
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))
@@ -121,8 +121,8 @@
 
 (package
  (name social-instagram-standalone-v21)
- (synopsis "Instagram Standalone (Business Login) API v21 client")
- (description "Instagram API v21 client for accounts using Instagram's own Business Login flow. Fully independent from the Facebook-based Instagram SDK. Uses graph.instagram.com as the API base.")
+ (synopsis "Deprecated: Instagram Standalone (Business Login) API v21 client (use social-instagram-standalone-v25)")
+ (description "Deprecated: Meta makes Graph API v21.0 unavailable on 2027-01-21; use social-instagram-standalone-v25. Instagram API v21 client for accounts using Instagram's own Business Login flow. Fully independent from the Facebook-based Instagram SDK. Uses graph.instagram.com as the API base.")
  (depends
   (ocaml (>= 4.14))
   (social-core (= :version))

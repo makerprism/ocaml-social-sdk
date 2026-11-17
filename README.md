@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OCaml](https://img.shields.io/badge/OCaml-%3E%3D4.14-orange)](https://ocaml.org/)
 
-OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, YouTube, Pinterest, Reddit, and TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
+OCaml SDK for social media APIs. Post content, manage media, handle threads across Twitter, LinkedIn, Bluesky, Mastodon, Facebook, Instagram, Threads, YouTube, Google Business Profile, Pinterest, Reddit, and TikTok. Runtime-agnostic design works with Lwt, Eio, or sync code.
 
 > **Warning: Experimental Software**
 >
@@ -27,12 +27,20 @@ OCaml SDK for social media APIs. Post content, manage media, handle threads acro
 | `social-bluesky-v1` | Bluesky/AT Protocol |
 | `social-linkedin-v2` | LinkedIn API v2 |
 | `social-mastodon-v1` | Mastodon API |
-| `social-facebook-graph-v21` | Facebook Graph API v21 |
-| `social-instagram-graph-v21` | Instagram Graph API v21 |
+| `social-facebook-graph-v25` | Facebook Graph API v25 (Pages) |
+| `social-instagram-standalone-v25` | Instagram API v25 with Instagram Business Login (`graph.instagram.com`) |
+| `social-threads-v1` | Threads API v1 |
 | `social-youtube-data-v3` | YouTube Data API v3 |
+| `social-google-business-v4` | Google Business Profile API v4 |
+| `social-google-oauth` | Shared Google OAuth 2.0 (PKCE, token exchange and refresh) for the Google packages |
 | `social-pinterest-v5` | Pinterest API v5 |
 | `social-reddit-v1` | Reddit API v1 |
 | `social-tiktok-v1` | TikTok Content Posting API |
+| `social-facebook-graph-v21` | **Deprecated.** Facebook Graph API v21. Use `social-facebook-graph-v25` |
+| `social-instagram-standalone-v21` | **Deprecated.** Instagram Business Login API v21. Use `social-instagram-standalone-v25` |
+| `social-instagram-graph-v21` | **Deprecated.** Instagram Graph API v21 via Facebook Login (`graph.facebook.com`). No v25 package yet |
+
+Meta makes Graph API v21.0 unavailable on **2027-01-21** (see Meta's [Graph API versions](https://developers.facebook.com/docs/graph-api/changelog/versions) page). After that date Meta upgrades calls to the oldest available version, so the v21 packages may keep answering, but on newer semantics. They stay in the repository and still build, but they get no new features.
 
 ## Installation
 
@@ -151,9 +159,12 @@ bodies your application fetched itself.
 ### With Lwt Runtime
 
 ```ocaml
-open Social_provider_lwt
+(* An HTTP client for provider configs; Make_with_options adds a
+   per-request deadline. *)
+module Http = Social_lwt.Cohttp_client.Make
 
-let%lwt result = Lwt_adapter.post client ~text:"Hello!" ()
+(* A non-blocking timer for configs that take Social_core.SLEEP *)
+let sleep = Social_lwt.Lwt_adapter.sleep
 ```
 
 ## Architecture

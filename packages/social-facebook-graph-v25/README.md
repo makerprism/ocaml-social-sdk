@@ -1,6 +1,6 @@
-# social-facebook-graph-v21
+# social-facebook-graph-v25
 
-OCaml library for Facebook Graph API v21 integration (Facebook Pages) with runtime-agnostic design.
+OCaml library for Facebook Graph API v25 integration (Facebook Pages) with runtime-agnostic design.
 
 > **Status:** This package has automated unit tests in this repository. Real Facebook app/page integration behavior should still be validated in your environment.
 
@@ -26,7 +26,7 @@ OCaml library for Facebook Graph API v21 integration (Facebook Pages) with runti
 
 ### From source
 ```bash
-cd packages/social-facebook-graph-v21
+cd packages/social-facebook-graph-v25
 dune build
 dune install
 ```
@@ -36,11 +36,11 @@ dune install
 ### Basic Example
 
 ```ocaml
-open Social_provider_core
-open Social_facebook_graph_v21
+open Social_core
+open Social_facebook_graph_v25
 
 module Config = struct
-  module Http = Social_provider_lwt.Cohttp_client
+  module Http = Social_lwt.Cohttp_client.Make
   
   let get_env = Sys.getenv_opt
   let get_credentials ~account_id on_success on_error = (* ... *)
@@ -55,7 +55,7 @@ module Config = struct
   (* ... other required functions *)
 end
 
-module Facebook = Facebook_graph_v21.Make(Config)
+module Facebook = Facebook_graph_v25.Make(Config)
 
 (* OAuth flow *)
 let start_oauth () =
@@ -284,7 +284,7 @@ Facebook.delete ~path:"123456_post_id" ~access_token
 Execute multiple requests in a single API call (max 50).
 
 ```ocaml
-open Facebook_graph_v21
+open Facebook_graph_v25
 
 let requests = [
   { method_ = `GET; relative_url = "me"; body = None; name = Some "user" };
@@ -365,7 +365,7 @@ All requests now use `Authorization: Bearer <token>` headers instead of URL para
 Run the test suite:
 
 ```bash
-cd packages/social-facebook-graph-v21
+cd packages/social-facebook-graph-v25
 dune test
 ```
 

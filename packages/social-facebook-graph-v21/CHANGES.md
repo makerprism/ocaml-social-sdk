@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Deprecated
+
+- **This package is deprecated.** Meta makes Graph API v21.0 unavailable on 2027-01-21. Use `social-facebook-graph-v25`. The package stays and still builds; it gets fixes only.
+
 ### Fixed
 
 - **Transport failures are `Network_error`, not `Internal_error`** (same fix
