@@ -361,7 +361,7 @@ let test_standalone_exchange_code_http_error () =
     ~code:"bad_code"
     (function
       | Ok _ -> failwith "Expected error for HTTP 400"
-      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+      | Error (Error_types.Auth_error Error_types.Token_invalid) ->
           print_endline "PASS Standalone exchange_code handles HTTP error"
       | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
 
@@ -830,17 +830,30 @@ let test_polling_no_publish_on_status_error () =
       assert (not attempted_publish);
       print_endline "PASS Polling does not publish on status-check errors")
 
-(** Test: OAuth API error mapping for token expiration *)
+(** Test: OAuth API error mapping for token expiration (190 / subcode 463) *)
 let test_parse_api_error_token_expired () =
+  let err =
+    Instagram.parse_api_error
+      ~status_code:400
+      ~response_body:{|{"error":{"message":"Error validating access token: Session has expired on Monday, 16-Nov-26 10:00:00 PST. The current time is Tuesday, 17-Nov-26 01:00:00 PST.","type":"OAuthException","code":190,"error_subcode":463,"fbtrace_id":"AbCdEf"}}|}
+  in
+  match err with
+  | Error_types.Auth_error Error_types.Token_expired ->
+      print_endline "PASS OAuth API error mapping (token expired)"
+  | _ -> failwith "Expected Auth_error Token_expired"
+
+(** Test: 190 without a subcode is an invalid token, not an expired one.
+    Before the shared Meta classifier every 190 read as Token_expired. *)
+let test_parse_api_error_token_invalid_without_subcode () =
   let err =
     Instagram.parse_api_error
       ~status_code:400
       ~response_body:{|{"error":{"code":190,"message":"Invalid OAuth 2.0 Access Token"}}|}
   in
   match err with
-  | Error_types.Auth_error Error_types.Token_expired ->
-      print_endline "PASS OAuth API error mapping (token expired)"
-  | _ -> failwith "Expected Auth_error Token_expired"
+  | Error_types.Auth_error Error_types.Token_invalid ->
+      print_endline "PASS OAuth API error mapping (190 without subcode)"
+  | _ -> failwith "Expected Auth_error Token_invalid"
 
 (** Test: User-friendly error response mapping for token expiration *)
 let test_parse_error_response_token_expired () =
@@ -872,9 +885,9 @@ let test_create_container_structured_auth_error () =
     ~is_carousel_item:false
     (function
       | Ok _ -> failwith "Expected auth error"
-      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+      | Error (Error_types.Auth_error Error_types.Token_invalid) ->
           print_endline "PASS Structured auth error from container creation"
-      | Error _ -> failwith "Expected Token_expired auth error")
+      | Error _ -> failwith "Expected Token_invalid auth error")
 
 (** Test: Standalone refresh_token in OAuth.Make *)
 let test_standalone_oauth_refresh_token () =
@@ -1020,9 +1033,9 @@ let test_post_comment_auth_error () =
     ~message:"This will fail"
     (function
       | Ok _ -> failwith "Expected auth error"
-      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+      | Error (Error_types.Auth_error Error_types.Token_invalid) ->
           print_endline "PASS Post comment auth error"
-      | Error _ -> failwith "Expected Token_expired")
+      | Error _ -> failwith "Expected Token_invalid")
 
 (** {1 Media Listing Tests (H2)} *)
 
@@ -1188,9 +1201,9 @@ let test_delete_media_auth_error () =
     ~access_token:"bad_token"
     (function
       | Ok _ -> failwith "Expected auth error"
-      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+      | Error (Error_types.Auth_error Error_types.Token_invalid) ->
           print_endline "PASS Delete media auth error"
-      | Error _ -> failwith "Expected Token_expired")
+      | Error _ -> failwith "Expected Token_invalid")
 
 (** {1 Tagging Tests (H4)} *)
 
@@ -1508,6 +1521,50 @@ let test_exported_api_constants () =
   assert (OAuth.Metadata.token_endpoint == Social_instagram_standalone_v25.token_endpoint);
   print_endline "✓ Exported API version constants"
 
+
+(* Graph error body as Meta sends it, for the shared-classifier contract. *)
+let graph_error_body ?subcode ?(error_type = "OAuthException") ~message code =
+  Printf.sprintf {|{"error":{"message":%S,"type":%S,"code":%d%s,"fbtrace_id":"AvX3kq0Lm2P"}}|}
+    message error_type code
+    (match subcode with Some s -> Printf.sprintf {|,"error_subcode":%d|} s | None -> "")
+
+let is_rate_limited = function Error_types.Rate_limited _ -> true | _ -> false
+let is_permission_error = function
+  | Error_types.Auth_error (Error_types.Insufficient_permissions _) -> true
+  | _ -> false
+
+(** Instagram maps Graph codes through the table shared with Facebook and
+    Threads ([Meta_graph_error]). Before, 17/341/368/80002, 3, 100/33 and 506
+    were plain Api_errors. Instagram's OAuthException-typed media errors must
+    not read as token errors. *)
+let test_shared_meta_graph_error_contract () =
+  let parse ?(status_code = 400) body =
+    Instagram.parse_api_error ~status_code ~response_body:body
+  in
+  List.iter
+    (fun code ->
+      assert (is_rate_limited (parse (graph_error_body ~message:"limit" code))))
+    [ 4; 9; 17; 32; 341; 368; 613; 80002 ];
+  List.iter
+    (fun code ->
+      assert (is_permission_error (parse (graph_error_body ~message:"denied" code))))
+    [ 3; 10; 200; 230; 299 ];
+  (match
+     parse (graph_error_body ~subcode:33 ~error_type:"GraphMethodException"
+              ~message:"Object with ID '1790' does not exist" 100)
+   with
+   | Error_types.Resource_not_found _ -> ()
+   | _ -> failwith "100/33 should be Resource_not_found");
+  assert (parse (graph_error_body ~subcode:1455006 ~message:"Duplicate" 506)
+          = Error_types.Duplicate_content);
+  (match
+     parse (graph_error_body ~subcode:2207052
+              ~message:"The media could not be fetched from this uri: https://example.com/a.jpg" 9004)
+   with
+   | Error_types.Api_error { status_code = 400; _ } -> ()
+   | _ -> failwith "9004 media error should stay an Api_error");
+  print_endline "PASS Shared Meta Graph error contract"
+
 let () =
   print_endline "\n=== Instagram Standalone Provider Tests ===\n";
 
@@ -1550,6 +1607,8 @@ let () =
   test_post_single_rejects_unsupported_media ();
   test_polling_no_publish_on_status_error ();
   test_parse_api_error_token_expired ();
+  test_parse_api_error_token_invalid_without_subcode ();
+  test_shared_meta_graph_error_contract ();
   test_parse_error_response_token_expired ();
   test_create_container_structured_auth_error ();
 

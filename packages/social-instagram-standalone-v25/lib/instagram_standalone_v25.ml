@@ -217,50 +217,15 @@ module OAuth = struct
       scope;
     } : credentials)
 
+  (** Graph error body as an SDK error, through the table shared with the
+      Facebook and Threads packages ({!Meta_graph_error}). *)
   let parse_api_error ~status_code ~response_body =
-    try
-      let json = Yojson.Basic.from_string response_body in
-      let open Yojson.Basic.Util in
-      let error_obj = json |> member "error" in
-      let error_code =
-        try error_obj |> member "code" |> to_int
-        with _ -> 0
-      in
-      let error_message =
-        try error_obj |> member "message" |> to_string
-        with _ -> response_body
-      in
-      match error_code with
-      | 190 -> Error_types.Auth_error Error_types.Token_expired
-      | 102 -> Error_types.Auth_error Error_types.Token_invalid
-      | 4 | 32 | 613 ->
-          Error_types.Rate_limited {
-            retry_after_seconds = Some 300;
-            limit = Some 25;
-            remaining = Some 0;
-            reset_at = None;
-          }
-      | 10 | 200 ->
-          Error_types.Auth_error (Error_types.Insufficient_permissions {
-            required = ["instagram_content_publish"];
-            platform_message = Some error_message;
-          })
-      | _ ->
-          Error_types.Api_error {
-            status_code;
-            message = error_message;
-            platform = Platform_types.Instagram;
-            raw_response = Some response_body;
-            request_id = None;
-          }
-    with _ ->
-      Error_types.Api_error {
-        status_code;
-        message = response_body;
-        platform = Platform_types.Instagram;
-        raw_response = Some response_body;
-        request_id = None;
-      }
+    Meta_graph_error.to_error
+      ~platform:Platform_types.Instagram
+      ~status_code
+      ~required_permissions:["instagram_content_publish"]
+      ~retry_after_seconds:300
+      response_body
 
   let network_error_of_string err =
     let lower = String.lowercase_ascii err in
@@ -274,7 +239,7 @@ module OAuth = struct
         [ "access_token="; "access_token"; "client_secret"; "authorization" ]
     in
     let safe_err = if looks_sensitive then "[REDACTED_SENSITIVE_TEXT]" else err in
-    Error_types.Network_error (Error_types.Connection_failed safe_err)
+    Meta_graph_error.transport_error safe_err
 
   (** Platform metadata for Instagram Standalone OAuth *)
   module Metadata = struct

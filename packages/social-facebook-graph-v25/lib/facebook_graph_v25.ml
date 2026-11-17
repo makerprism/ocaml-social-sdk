@@ -408,11 +408,11 @@ end
 
 (** Facebook error codes *)
 type facebook_error_code = 
-  | Invalid_token (* 190 - Token expired/invalid *)
-  | Rate_limit_exceeded (* 4, 17, 32, 613 - Rate limited *)
-  | Permission_denied (* 200, 299, 10 - Permission issues *)
+  | Invalid_token (* 102, 190 - Token expired/invalid *)
+  | Rate_limit_exceeded (* 4, 9, 17, 32, 341, 368, 613, 80000-80014 *)
+  | Permission_denied (* 3, 10, 200-299 - Permission issues *)
   | Invalid_parameter (* 100 - Invalid API parameter *)
-  | Temporarily_unavailable (* 2, 368 - Temporary failure *)
+  | Temporarily_unavailable (* 1, 2 - Temporary failure *)
   | Duplicate_post (* 506 - Duplicate content *)
   | Unknown of int
 
@@ -573,51 +573,55 @@ module Make (Config : CONFIG) = struct
   
   (** {1 Error Handling} *)
   
-  (** Parse Facebook error code into typed variant *)
+  (** Graph error code as a [facebook_error_code]. The table is
+      {!Meta_graph_error.classify}'s, shared with Instagram and Threads; this
+      function only projects it onto the older variant. *)
   let parse_error_code code =
-    match code with
-    | 190 -> Invalid_token
-    | 4 | 17 | 32 | 613 | 80000 | 80001 | 80002 | 80003 | 80004 | 80005 | 80006 | 80008 | 80009 | 80014 -> Rate_limit_exceeded
-    | 200 | 299 | 10 -> Permission_denied
-    | 100 -> Invalid_parameter
-    | 2 | 368 -> Temporarily_unavailable
-    | 506 -> Duplicate_post
-    | n -> Unknown n
+    let graph =
+      { Meta_graph_error.code = Some code; subcode = None; error_type = None;
+        message = None; user_title = None; user_message = None;
+        fbtrace_id = None; is_transient = None }
+    in
+    match Meta_graph_error.classify graph with
+    | Meta_graph_error.Token_invalid _ -> Invalid_token
+    | Meta_graph_error.Rate_limited -> Rate_limit_exceeded
+    | Meta_graph_error.Permission_denied -> Permission_denied
+    | Meta_graph_error.Resource_not_found | Meta_graph_error.Invalid_request ->
+        Invalid_parameter
+    | Meta_graph_error.Transient -> Temporarily_unavailable
+    | Meta_graph_error.Duplicate_content -> Duplicate_post
+    | Meta_graph_error.Unclassified -> Unknown code
   
   (** Determine if error is retryable *)
   let is_retryable = function
-    | Rate_limit_exceeded -> true
-    | Temporarily_unavailable -> true
-    | _ -> false
+    | Rate_limit_exceeded | Temporarily_unavailable -> true
+    | Invalid_token | Permission_denied | Invalid_parameter | Duplicate_post
+    | Unknown _ ->
+        false
   
   (** Get recommended retry delay in seconds *)
   let get_retry_delay = function
     | Rate_limit_exceeded -> Some 300 (* 5 minutes *)
     | Temporarily_unavailable -> Some 60 (* 1 minute *)
-    | _ -> None
+    | Invalid_token | Permission_denied | Invalid_parameter | Duplicate_post
+    | Unknown _ ->
+        None
   
   (** Parse Facebook API error from response *)
   let parse_facebook_error response_body =
-    try
-      let json = Yojson.Basic.from_string response_body in
-      let open Yojson.Basic.Util in
-      let error_obj = json |> member "error" in
-      let message = error_obj |> member "message" |> to_string_option |> Option.value ~default:"Unknown error" in
-      let error_type = error_obj |> member "type" |> to_string_option |> Option.value ~default:"UnknownError" in
-      let code_int = error_obj |> member "code" |> to_int_option |> Option.value ~default:0 in
-      let code = parse_error_code code_int in
-      let subcode = error_obj |> member "error_subcode" |> to_int_option in
-      let fbtrace_id = error_obj |> member "fbtrace_id" |> to_string_option in
-      Some {
-        message;
-        error_type;
-        code;
-        subcode;
-        fbtrace_id;
-        should_retry = is_retryable code;
-        retry_after_seconds = get_retry_delay code;
-      }
-    with _ -> None
+    match Meta_graph_error.of_body response_body with
+    | None -> None
+    | Some graph ->
+        let code = parse_error_code (Option.value ~default:0 graph.code) in
+        Some {
+          message = Option.value ~default:"Unknown error" graph.message;
+          error_type = Option.value ~default:"UnknownError" graph.error_type;
+          code;
+          subcode = graph.subcode;
+          fbtrace_id = graph.fbtrace_id;
+          should_retry = is_retryable code;
+          retry_after_seconds = get_retry_delay code;
+        }
   
   (** Parse API error response and return structured Error_types.error *)
   let contains_substring s sub =
@@ -648,46 +652,12 @@ module Make (Config : CONFIG) = struct
       provider_required_permissions
 
   let parse_api_error_with_permissions ~required_permissions ~status_code ~response_body =
-    match parse_facebook_error response_body with
-    | Some fb_err ->
-        (match fb_err.code with
-        | Invalid_token ->
-            let auth_error =
-              match fb_err.subcode with
-              | Some 463 | Some 467 -> Error_types.Token_expired
-              | _ -> Error_types.Token_invalid
-            in
-            Error_types.Auth_error auth_error
-        | Rate_limit_exceeded ->
-            Error_types.Rate_limited { 
-              retry_after_seconds = fb_err.retry_after_seconds;
-              limit = None;
-              remaining = Some 0;
-              reset_at = None;
-            }
-        | Permission_denied ->
-            Error_types.Auth_error (Error_types.Insufficient_permissions {
-              required = required_permissions;
-              platform_message = Some fb_err.message;
-            })
-        | Duplicate_post ->
-            Error_types.Duplicate_content
-        | _ ->
-            Error_types.Api_error {
-              status_code;
-              message = fb_err.message;
-              platform = Platform_types.FacebookPage;
-              raw_response = Some response_body;
-              request_id = fb_err.fbtrace_id;
-            })
-    | None ->
-        Error_types.Api_error {
-          status_code;
-          message = response_body;
-          platform = Platform_types.FacebookPage;
-          raw_response = Some response_body;
-          request_id = None;
-        }
+    Meta_graph_error.to_error
+      ~platform:Platform_types.FacebookPage
+      ~status_code
+      ~required_permissions
+      ?retry_after_seconds:(get_retry_delay Rate_limit_exceeded)
+      response_body
 
   let parse_api_error ~status_code ~response_body =
     parse_api_error_with_permissions
@@ -723,8 +693,7 @@ module Make (Config : CONFIG) = struct
       evidence about the credentials. Consumers routing on the error
       variant, and {!Health_status.of_error}, rely on this distinction. *)
   let transport_error err =
-    Error_types.Network_error
-      (Error_types.Connection_failed (redact_sensitive_text_if_needed err))
+    Meta_graph_error.transport_error (redact_sensitive_text_if_needed err)
 
   (** {1 Rate Limiting} *)
   
@@ -894,13 +863,25 @@ module Make (Config : CONFIG) = struct
             (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err))))
       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
 
-  let is_recoverable_posting_auth_error = function
-    | Error_types.Auth_error (Error_types.Insufficient_permissions _ | Error_types.Token_invalid | Error_types.Token_expired) -> true
-    | _ -> false
+  (* Token_revoked is included because Graph subcodes 458 (app not
+     installed) and 460 (password changed) map to it; before the shared
+     Meta classifier they arrived as Token_invalid and went through
+     recovery, which also records the account's health. *)
+  let is_page_token_auth_error = function
+    | Error_types.Auth_error
+        ( Error_types.Insufficient_permissions _ | Error_types.Token_invalid
+        | Error_types.Token_expired | Error_types.Token_revoked ) ->
+        true
+    | Error_types.Auth_error (Error_types.Refresh_failed _ | Error_types.Missing_credentials)
+    | Error_types.Validation_error _ | Error_types.Rate_limited _
+    | Error_types.Api_error _ | Error_types.Network_error _
+    | Error_types.Duplicate_content | Error_types.Content_policy_violation _
+    | Error_types.Resource_not_found _ | Error_types.Internal_error _ ->
+        false
 
-  let should_try_next_recovery_token = function
-    | Error_types.Auth_error (Error_types.Insufficient_permissions _ | Error_types.Token_invalid | Error_types.Token_expired) -> true
-    | _ -> false
+  let is_recoverable_posting_auth_error = is_page_token_auth_error
+
+  let should_try_next_recovery_token = is_page_token_auth_error
 
   let recover_page_access_token ~account_id ~current_access_token on_success on_error =
     Config.get_page_id ~account_id

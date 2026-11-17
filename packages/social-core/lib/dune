@@ -11,6 +11,8 @@
   content_validator
   url_extractor
   error_types
+  provider_error_detail
+  meta_graph_error
   health_status
   secure_random
   oauth_pkce)

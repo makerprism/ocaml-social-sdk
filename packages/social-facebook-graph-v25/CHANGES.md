@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Graph errors are classified by the table shared with Instagram and
+  Threads** (`Meta_graph_error`, see social-core). `parse_api_error`,
+  `parse_api_error_with_permissions`, `parse_error_code` and
+  `parse_facebook_error` delegate to it. Behaviour changes, types unchanged:
+  - 100 with subcode 33 (object does not exist) is `Resource_not_found`, not
+    `Api_error`.
+  - 102 is `Auth_error Token_invalid`; 190 with subcode 458 (app not
+    installed) or 460 (password changed) is `Token_revoked` instead of
+    `Token_invalid`. 463 and 467 stay `Token_expired`. Page-token recovery
+    now also runs on `Token_revoked`, so those two subcodes still go
+    through it.
+  - 3 and 201-298 are `Insufficient_permissions` (were `Api_error`).
+  - 9, 341 and 368 are `Rate_limited` (368 was "temporarily unavailable" and
+    surfaced as `Api_error`); `parse_error_code` maps them to
+    `Rate_limit_exceeded`, and 1/102/3 to `Temporarily_unavailable` /
+    `Invalid_token` / `Permission_denied`.
+  - An HTTP 429 is `Rate_limited` whatever the body.
 - **Transport failures are `Network_error`, not `Internal_error`.** Every
   request that got no HTTP response (connection refused, DNS, TLS, timeout)
   was reported as `Internal_error`, which the error taxonomy reserves for SDK
