@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.authorize_url ~client_id ~redirect_uri ~state ~scopes ?enable_fb_login ?force_reauth ?extra_params ()`**: the one documented Business Login builder (plain comma-separated `scope`). `enable_fb_login` and `force_reauth` are sent only when given. Host unchanged (`api.instagram.com`).
+- **Deprecated**: `OAuth.get_authorization_url` and `Make.get_oauth_url` (both send the undocumented `params[scope]=[...]`); use `OAuth.authorize_url`. Both unchanged.
 - **`Make_nonblocking (Config : NONBLOCKING_CONFIG)`**: the provider with
   container polling waiting through `Social_core.SLEEP`
   (`sleep : seconds:float -> (unit -> unit) -> (string -> unit) -> unit`),

@@ -4860,8 +4860,25 @@ let test_debug_token_info () =
     | Ok _ -> failwith "expected an error");
   print_endline "ok: Threads debug_token_info reads the typed answer"
 
+let test_authorize_url () =
+  let url =
+    Social_threads_v1.OAuth.authorize_url ~client_id:"c" ~redirect_uri:"https://e.com/cb" ~state:"s"
+      ~scopes:[ "threads_basic"; "threads_read_replies" ] ~extra_params:[ ("x", "y") ] ()
+  in
+  assert (String.starts_with ~prefix:"https://threads.net/oauth/authorize?" url);
+  assert (query_param url "scope" = "threads_basic,threads_read_replies");
+  assert (query_param url "response_type" = "code");
+  assert (query_param url "x" = "y");
+  assert (
+    Social_threads_v1.OAuth.get_authorization_url ~client_id:"c" ~redirect_uri:"https://e.com/cb" ~state:"s"
+      ~scopes:[ Social_threads_v1.OAuth.Threads_basic; Social_threads_v1.OAuth.Threads_read_replies ]
+    = Social_threads_v1.OAuth.authorize_url ~client_id:"c" ~redirect_uri:"https://e.com/cb" ~state:"s"
+        ~scopes:[ "threads_basic"; "threads_read_replies" ] ());
+  print_endline "ok: Threads authorize_url keeps the plain scope parameter and host"
+
 let () =
   test_oauth_url ();
+  test_authorize_url ();
   test_debug_token_info ();
   test_exported_api_constants ();
   test_shared_meta_graph_error_contract ();
