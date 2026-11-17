@@ -4698,9 +4698,82 @@ let test_get_pending_replies_approval_status () =
       | Ok _ -> failwith "expected two pending replies"
       | Error _ -> failwith "expected successful get_pending_replies")
 
+
+(* Graph error body as Meta sends it, for the shared-classifier contract. *)
+let graph_error_body ?subcode ?(error_type = "OAuthException") ~message code =
+  Printf.sprintf {|{"error":{"message":%S,"type":%S,"code":%d%s,"fbtrace_id":"AvX3kq0Lm2P"}}|}
+    message error_type code
+    (match subcode with Some s -> Printf.sprintf {|,"error_subcode":%d|} s | None -> "")
+
+let is_rate_limited = function Error_types.Rate_limited _ -> true | _ -> false
+let is_permission_error = function
+  | Error_types.Auth_error (Error_types.Insufficient_permissions _) -> true
+  | _ -> false
+
+(** Threads maps Graph codes through the table shared with Facebook and
+    Instagram ([Meta_graph_error]). Before, 17/341/368/80xxx, 3 and 100/33
+    were plain Api_errors, and every 190 read as Token_expired. *)
+let test_shared_meta_graph_error_contract () =
+  let parse ?(status_code = 400) body =
+    Social_threads_v1.parse_api_error ~status_code ~headers:[] ~response_body:body
+  in
+  List.iter
+    (fun code ->
+      assert (is_rate_limited (parse (graph_error_body ~message:"limit" code))))
+    [ 4; 17; 32; 341; 368; 613; 80001; 80002; 80014 ];
+  List.iter
+    (fun code ->
+      assert (is_permission_error (parse (graph_error_body ~message:"denied" code))))
+    [ 3; 10; 200; 230; 299 ];
+  assert (parse (graph_error_body ~subcode:463 ~message:"Session has expired" 190)
+          = Error_types.Auth_error Error_types.Token_expired);
+  assert (parse (graph_error_body ~message:"Invalid OAuth access token" 190)
+          = Error_types.Auth_error Error_types.Token_invalid);
+  assert (parse (graph_error_body ~subcode:460 ~message:"Password changed" 190)
+          = Error_types.Auth_error Error_types.Token_revoked);
+  (match
+     parse (graph_error_body ~subcode:33 ~error_type:"GraphMethodException"
+              ~message:"Object with ID '1790' does not exist" 100)
+   with
+   | Error_types.Resource_not_found _ -> ()
+   | _ -> failwith "100/33 should be Resource_not_found");
+  (* Container still processing: Threads-specific, left to the caller. *)
+  (match
+     parse (graph_error_body ~subcode:4279009 ~error_type:"THApiException"
+              ~message:"The requested resource does not exist" 24)
+   with
+   | Error_types.Api_error api_err ->
+       assert (string_contains api_err.message "code=24");
+       assert (string_contains api_err.message "subcode=4279009")
+   | _ -> failwith "24/4279009 should stay an Api_error");
+  print_endline "ok: shared Meta Graph error contract"
+
+(** The numeric Graph code survives the secret scrubbing of [raw_response],
+    so [Provider_error_detail] can read it back. *)
+let test_api_error_detail_survives_redaction () =
+  let body =
+    {|{"error":{"message":"(#100) Invalid parameter","type":"OAuthException","code":100,"error_subcode":2207028,"fbtrace_id":"AvX3kq0Lm2P"},"access_token":"should-not-leak"}|}
+  in
+  let err =
+    Social_threads_v1.parse_api_error ~status_code:400
+      ~headers:[ ("x-fb-trace-id", "hdr-trace") ] ~response_body:body
+  in
+  (match Provider_error_detail.of_error err with
+   | Some detail ->
+       assert (detail.code = Some "100");
+       assert (detail.subcode = Some 2207028);
+       assert (detail.trace_id = Some "hdr-trace");
+       (match detail.body_excerpt with
+        | Some excerpt -> assert (not (string_contains excerpt "should-not-leak"))
+        | None -> failwith "expected an excerpt")
+   | None -> failwith "expected provider detail");
+  print_endline "ok: api error detail survives redaction"
+
 let () =
   test_oauth_url ();
   test_exported_api_constants ();
+  test_shared_meta_graph_error_contract ();
+  test_api_error_detail_survives_redaction ();
   test_oauth_url_encodes_special_characters ();
   test_oauth_url_rejects_empty_state ();
   test_oauth_url_rejects_whitespace_client_id ();

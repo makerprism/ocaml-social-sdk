@@ -132,6 +132,15 @@ let is_sensitive_key key =
   | "code" -> true
   | _ -> false
 
+(* OAuth authorization codes are strings. Graph error codes are numbers and
+   must survive in [raw_response] so {!Provider_error_detail} can read them. *)
+let is_sensitive_field key (value : Yojson.Basic.t) =
+  is_sensitive_key key
+  &&
+  match value with
+  | `Int _ -> String.lowercase_ascii key <> "code"
+  | `Null | `Bool _ | `Float _ | `String _ | `Assoc _ | `List _ -> true
+
 let contains_substring haystack needle =
   let h_len = String.length haystack in
   let n_len = String.length needle in
@@ -174,7 +183,7 @@ let rec redact_json_sensitive_fields = function
       `Assoc
         (List.map
            (fun (key, value) ->
-             if is_sensitive_key key then (key, `String "[REDACTED]")
+             if is_sensitive_field key value then (key, `String "[REDACTED]")
              else (key, redact_json_sensitive_fields value))
            fields)
   | `List values -> `List (List.map redact_json_sensitive_fields values)
@@ -199,82 +208,61 @@ let constant_time_equal a b =
   done;
   !diff = 0
 
+(* Threads has always appended the Graph code, type and subcode to the
+   message as " [code=N;type=T;subcode=S]"; consumers may read it, so it
+   stays. *)
+let provider_metadata_suffix (graph : Meta_graph_error.t) =
+  let code = Option.value ~default:0 graph.code in
+  let provider_type = Option.value ~default:"" graph.error_type in
+  if code <> 0 || provider_type <> "" || graph.subcode <> None then
+    Printf.sprintf " [code=%d%s%s]" code
+      (if provider_type = "" then "" else ";type=" ^ provider_type)
+      (match graph.subcode with
+       | Some subcode -> Printf.sprintf ";subcode=%d" subcode
+       | None -> "")
+  else ""
+
+let with_message_suffix suffix (error : Error_types.error) =
+  match error with
+  | Error_types.Api_error api_error ->
+      Error_types.Api_error { api_error with message = api_error.message ^ suffix }
+  | Error_types.Auth_error (Error_types.Insufficient_permissions permissions) ->
+      Error_types.Auth_error
+        (Error_types.Insufficient_permissions
+           { permissions with
+             platform_message =
+               Option.map (fun m -> m ^ suffix) permissions.platform_message })
+  | Error_types.Auth_error
+      ( Error_types.Token_expired | Error_types.Token_invalid
+      | Error_types.Token_revoked | Error_types.Refresh_failed _
+      | Error_types.Missing_credentials )
+  | Error_types.Validation_error _ | Error_types.Rate_limited _
+  | Error_types.Network_error _ | Error_types.Duplicate_content
+  | Error_types.Content_policy_violation _ | Error_types.Resource_not_found _
+  | Error_types.Internal_error _ ->
+      error
+
+(** Graph error body as an SDK error, through the table shared with the
+    Facebook and Instagram packages ({!Meta_graph_error}). Secrets are
+    scrubbed from the stored body and the message. *)
 let parse_api_error ~status_code ~headers ~response_body =
-  let sanitized_response_body = sanitize_response_body response_body in
-  if status_code = 429 then
-    Error_types.Rate_limited {
-      retry_after_seconds = parse_retry_after headers;
-      limit = None;
-      remaining = Some 0;
-      reset_at = None;
-    }
-  else
-    try
-      let json = Yojson.Basic.from_string response_body in
-      let open Yojson.Basic.Util in
-      let err = json |> member "error" in
-      let message =
-        try err |> member "message" |> to_string
-        with _ -> sanitized_response_body
-      in
-      let message = sanitize_text_if_sensitive message in
-      let code =
-        try err |> member "code" |> to_int
-        with _ -> 0
-      in
-      let provider_type =
-        try err |> member "type" |> to_string
-        with _ -> ""
-      in
-      let provider_subcode =
-        try Some (err |> member "error_subcode" |> to_int)
-        with _ -> None
-      in
-      let provider_metadata_suffix =
-        if code <> 0 || provider_type <> "" || provider_subcode <> None then
-          Printf.sprintf
-            " [code=%d%s%s]"
-            code
-            (if provider_type = "" then "" else ";type=" ^ provider_type)
-            (match provider_subcode with
-             | Some subcode -> Printf.sprintf ";subcode=%d" subcode
-             | None -> "")
-        else
-          ""
-      in
-      match code with
-      | 190 -> Error_types.Auth_error Error_types.Token_expired
-      | 102 -> Error_types.Auth_error Error_types.Token_invalid
-      | 10 | 200 -> Error_types.Auth_error (Error_types.Insufficient_permissions {
-          required = ["threads_basic"];
-          platform_message = Some (message ^ provider_metadata_suffix);
-        })
-      | 4 | 32 | 613 ->
-          Error_types.Rate_limited {
-            retry_after_seconds = parse_retry_after headers;
-            limit = None;
-            remaining = Some 0;
-            reset_at = None;
-          }
-      | _ ->
-          Error_types.Api_error {
-            status_code;
-            message = message ^ provider_metadata_suffix;
-            platform = Platform_types.Threads;
-            raw_response = Some sanitized_response_body;
-            request_id = request_id_of_headers headers;
-          }
-    with _ ->
-      Error_types.Api_error {
-        status_code;
-        message = sanitized_response_body;
-        platform = Platform_types.Threads;
-        raw_response = Some sanitized_response_body;
-        request_id = request_id_of_headers headers;
-      }
+  let error =
+    Meta_graph_error.to_error
+      ~platform:Platform_types.Threads
+      ~status_code
+      ~required_permissions:["threads_basic"]
+      ?retry_after_seconds:(parse_retry_after headers)
+      ?request_id:(request_id_of_headers headers)
+      ~redact_body:sanitize_response_body
+      ~redact_message:sanitize_text_if_sensitive
+      response_body
+  in
+  match Meta_graph_error.of_body response_body with
+  | Some graph -> with_message_suffix (provider_metadata_suffix graph) error
+  | None -> error
 
 let network_error err =
-  Error_types.Network_error (Error_types.Connection_failed (sanitize_text_if_sensitive err))
+  Meta_graph_error.transport_error (sanitize_text_if_sensitive err)
 
 module OAuth = struct
   (** Thread OAuth scopes as an ADT with string fallback for future scopes.

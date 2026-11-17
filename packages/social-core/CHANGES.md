@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Provider_error_detail` (issue #63): the provider's own error detail of an
+  `Api_error`, read back from its `raw_response`. `of_error : Error_types.error
+  -> t option`, `of_api_error`, and `of_response ~status_code ?request_id
+  body`. A `t` carries `http_status`, `code` (as text: `"190"`,
+  `"url_ownership_unverified"`, `"ExpiredToken"`, `"quotaExceeded"`, ...),
+  `subcode`, `error_type`, the provider `message`, `trace_id` (recorded
+  request id, else `fbtrace_id` / TikTok `log_id`) and a `body_excerpt` of at
+  most 1024 bytes. It understands the Meta Graph, TikTok, Google, AT Protocol,
+  OAuth 2.0, Mastodon, X/Twitter, LinkedIn, Pinterest and Reddit envelopes.
+  Additive: `Error_types.api_error` is unchanged, so no record construction
+  or pattern match breaks, and it works for every package's `Api_error`
+  without package changes. Other constructors (`Auth_error`, `Rate_limited`,
+  ...) carry no body and return `None`.
+- `Meta_graph_error`: the one Graph error classifier for the Facebook,
+  Instagram and Threads packages, which used to carry three disagreeing
+  copies. `of_body`, `classify` and `to_error` follow Meta's error-handling and
+  rate-limiting guides: 100/33 `Resource_not_found`, other 100
+  `Invalid_request`, 1/2 `Transient`, 4/9/17/32/341/368/613/80000-80014
+  `Rate_limited`, 102/190 (and an `OAuthException` without a code)
+  `Token_invalid` with the 458/459/460/463/464/467/492 subcodes as a
+  `token_reason`, 3/10/200-299 `Permission_denied`, 506 `Duplicate_content`.
+  An `OAuthException` that has a code outside the table is *not* a token
+  error: Instagram labels media errors (9004, 352, 36003) that way.
+  `transport_error` is the shared `Network_error` for requests that got no
+  response. `of_error` reads the Graph error back out of an `Api_error`, so
+  `Option.map classify (of_error err)` recovers a `Transient` that arrived
+  under a 4xx status (the status-only `Error_types.classify_error` reads that
+  as permanent; the status is never rewritten). Pinned per code by `test_meta_graph_error`.
+
+  Namespace note: like `Health_status`, both modules claim a bare module name
+  (`social-core` is `(wrapped false)`).
 - `Social_core.SLEEP`: the runtime timer interface
   (`sleep : seconds:float -> (unit -> unit) -> (string -> unit) -> unit`).
   Providers that back off or poll take it from their `Config` instead of

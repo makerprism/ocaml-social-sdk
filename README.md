@@ -130,6 +130,24 @@ let () = Reddit.submit_self_post
     | _ -> ())
 ```
 
+### Reading provider error codes
+
+Every package returns `Error_types.error`. When a failure has no more specific
+constructor it is an `Api_error` that keeps the response body;
+`Provider_error_detail.of_error` reads the provider's code, subcode, type,
+message and trace id back out of it, whatever the platform:
+
+```ocaml
+match Provider_error_detail.of_error err with
+| Some { code = Some "url_ownership_unverified"; _ } -> (* TikTok *) ...
+| Some { code = Some "100"; subcode = Some 2207028; _ } -> (* Instagram *) ...
+| Some _ | None -> ...
+```
+
+Facebook, Instagram and Threads classify Graph errors with one shared table,
+`Meta_graph_error` (`of_body`, `classify`, `to_error`), which is also usable on
+bodies your application fetched itself.
+
 ### With Lwt Runtime
 
 ```ocaml
@@ -153,6 +171,7 @@ The SDK follows a runtime-agnostic design:
 - **URL Extraction**: Parse and handle URLs in content
 - **Media Upload**: Support for images, videos, and GIFs
 - **Thread Posting**: Post threads/reply chains on supported platforms (Twitter, Bluesky, Mastodon, Threads)
+- **Structured Errors**: one `Error_types.error` for every platform, `Error_types.classify_error` (auth / transient / permanent), `Health_status.of_error`, and `Provider_error_detail` for the provider's own code
 
 ## Supported Platforms
 

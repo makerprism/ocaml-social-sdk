@@ -3106,6 +3106,78 @@ let test_get_page_info_partial () =
       | Error e -> failwith ("Get page info partial failed: " ^ Error_types.error_to_string e))
 
 (** Run all tests *)
+
+(* Graph error body as Meta sends it, for the shared-classifier contract. *)
+let graph_error_body ?subcode ?(error_type = "OAuthException") ~message code =
+  Printf.sprintf {|{"error":{"message":%S,"type":%S,"code":%d%s,"fbtrace_id":"AvX3kq0Lm2P"}}|}
+    message error_type code
+    (match subcode with Some s -> Printf.sprintf {|,"error_subcode":%d|} s | None -> "")
+
+let is_rate_limited = function Error_types.Rate_limited _ -> true | _ -> false
+let is_permission_error = function
+  | Error_types.Auth_error (Error_types.Insufficient_permissions _) -> true
+  | _ -> false
+
+(** Facebook maps Graph codes through the table shared with Instagram and
+    Threads ([Meta_graph_error]). Before, 3, 102, 341, 201-298 and 100/33
+    were plain Api_errors and 368 was "temporarily unavailable". *)
+let test_shared_meta_graph_error_contract () =
+  let parse ?(status_code = 400) body =
+    Facebook.parse_api_error ~status_code ~response_body:body
+  in
+  List.iter
+    (fun code ->
+      assert (is_rate_limited (parse (graph_error_body ~message:"limit" code))))
+    [ 4; 17; 32; 341; 368; 613; 80001; 80007; 80014 ];
+  List.iter
+    (fun code ->
+      assert (is_permission_error (parse (graph_error_body ~message:"denied" code))))
+    [ 3; 10; 200; 230; 299 ];
+  assert (parse (graph_error_body ~message:"Session key invalid" 102)
+          = Error_types.Auth_error Error_types.Token_invalid);
+  assert (parse (graph_error_body ~subcode:458 ~message:"App not installed" 190)
+          = Error_types.Auth_error Error_types.Token_revoked);
+  (match
+     parse (graph_error_body ~subcode:33 ~error_type:"GraphMethodException"
+              ~message:"Object with ID '1790' does not exist" 100)
+   with
+   | Error_types.Resource_not_found _ -> ()
+   | _ -> failwith "100/33 should be Resource_not_found");
+  assert (Facebook.parse_error_code 368 = Rate_limit_exceeded);
+  assert (Facebook.parse_error_code 1 = Temporarily_unavailable);
+  assert (Facebook.parse_error_code 102 = Invalid_token);
+  assert (Facebook.parse_error_code 3 = Permission_denied);
+  assert (Facebook.parse_error_code 1609005 = Unknown 1609005);
+  (* A code-1 error pinned by a subcode and is_transient=false is not
+     retryable; the subcode must not be dropped before classifying. *)
+  (match
+     Facebook.parse_facebook_error
+       {|{"error":{"message":"Invalid thumbnail offset","type":"OAuthException","code":1,"error_subcode":99,"is_transient":false}}|}
+   with
+   | Some fb_err ->
+       assert (fb_err.code = Unknown 1);
+       assert (not fb_err.should_retry)
+   | None -> failwith "expected a Graph error");
+  print_endline "✓ Shared Meta Graph error contract"
+
+(** [Provider_error_detail] reads the code back out of a Facebook Api_error. *)
+let test_api_error_provider_detail () =
+  let body =
+    graph_error_body ~subcode:1487390 ~message:"(#100) Invalid parameter" 100
+  in
+  (match
+     Provider_error_detail.of_error
+       (Facebook.parse_api_error ~status_code:400 ~response_body:body)
+   with
+   | Some detail ->
+       assert (detail.http_status = 400);
+       assert (detail.code = Some "100");
+       assert (detail.subcode = Some 1487390);
+       assert (detail.error_type = Some "OAuthException");
+       assert (detail.trace_id = Some "AvX3kq0Lm2P")
+   | None -> failwith "expected provider detail");
+  print_endline "✓ Api_error provider detail"
+
 let () =
   print_endline "\n=== Facebook Provider Tests ===\n";
   
@@ -3134,6 +3206,8 @@ let () =
   test_field_selection ();
   test_error_code_parsing ();
   test_invalid_token_without_expiry_subcode ();
+  test_shared_meta_graph_error_contract ();
+  test_api_error_provider_detail ();
   test_token_subcode_467_maps_to_expired ();
   test_permission_error_scopes ();
   test_me_accounts_permission_scope ();

@@ -22,3 +22,13 @@
  (name test_oauth_pkce)
  (modules test_oauth_pkce)
  (libraries social-core))
+
+(test
+ (name test_meta_graph_error)
+ (modules test_meta_graph_error)
+ (libraries social-core))
+
+(test
+ (name test_provider_error_detail)
+ (modules test_provider_error_detail)
+ (libraries social-core))

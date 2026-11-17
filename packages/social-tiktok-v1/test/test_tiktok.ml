@@ -2792,6 +2792,46 @@ let test_init_photo_post_403_scope_mapping () =
       | Ok _ -> failwith "Expected permission error");
   assert !done_
 
+(* Issue #63: the TikTok error code is readable as a field, not only as a
+   prefix of the message. *)
+let test_init_photo_post_error_code_detail () =
+  print_string "Test: init_photo_post error code via Provider_error_detail... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"content/init/" url then
+      {
+        Social_core.status = 400;
+        headers = [("x-tt-logid", "20261117010203ABCDEF")];
+        body = {|{"data":{},"error":{"code":"url_ownership_unverified","message":"Please review our URL ownership verification rules.","log_id":"20261117010203ABCDEF"}}|};
+      }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Ownership test"
+    ~photo_images:["https://example.com/photo1.jpg"]
+    () in
+  let done_ = ref false in
+  TikTok.init_photo_post
+    ~account_id:"test_account"
+    ~photo_post_info:photo_info
+    (function
+      | Error err ->
+          (match Provider_error_detail.of_error err with
+           | Some detail ->
+               assert (detail.http_status = 400);
+               assert (detail.code = Some "url_ownership_unverified");
+               assert (detail.message = Some "Please review our URL ownership verification rules.");
+               assert (detail.trace_id = Some "20261117010203ABCDEF");
+               done_ := true;
+               print_endline "PASSED"
+           | None -> failwith ("Expected Api_error detail, got: " ^ Error_types.error_to_string err))
+      | Ok _ -> failwith "Expected ownership error");
+  assert !done_
+
 let test_upload_video_chunk_tracks_upload_url () =
   print_string "Test: upload_video_chunk tracks upload URL... ";
   reset_mock_state ();
@@ -3226,6 +3266,7 @@ let () =
   test_init_photo_post_empty_images_rejected ();
   test_init_photo_post_cover_index_out_of_bounds ();
   test_init_photo_post_403_scope_mapping ();
+  test_init_photo_post_error_code_detail ();
 
   print_endline "\n--- Upload URL Tracking ---";
   test_upload_video_chunk_tracks_upload_url ();
