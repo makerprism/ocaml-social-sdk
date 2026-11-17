@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Cohttp_client.Make_with_options (Options : OPTIONS)`: the Cohttp client with `timeout_seconds : float option`, a deadline for each request covering connect, headers and the whole body. A request that misses it is cancelled and reports `Cohttp_client.timeout_message seconds` ("Request timed out after 10s") to its error continuation. `Cohttp_client.Make` is now `Make_with_options (Default_options)` (no deadline) and behaves as before.
 - `Lwt_adapter.sleep`, a non-blocking `Social_core.SLEEP` (backed by `Lwt_unix.sleep`) for provider configs.
 - Lwt adapter for converting CPS-style interfaces to Lwt promises
 - `Cohttp_client` module providing HTTP client implementation using Cohttp_lwt_unix
