@@ -558,10 +558,23 @@ type media_kind =
   | Video
   | GIF
 
+(** Lifecycle state of a media container, from the [status] field of
+    [GET /{container_id}?fields=status,error_message].
+    See https://developers.facebook.com/docs/threads/troubleshooting *)
 type container_status =
-  | Finished
-  | In_progress
+  | Finished  (** Ready to be published. *)
+  | In_progress  (** Still processing; poll again. *)
+  | Published
+      (** The container's media object has already been published. Publishing
+          it again is not possible; a retry after an ambiguous publish
+          failure should treat this as success. *)
+  | Expired
+      (** Not published within 24 hours of creation. A new container must be
+          created. *)
   | Error_status of string
+      (** [ERROR], or a status this SDK does not know. Carries the
+          [error_message] field (for example [FAILED_PROCESSING_VIDEO]) when
+          present, otherwise the raw status. *)
 
 type publishing_limit = {
   quota_usage : int;
@@ -1335,6 +1348,8 @@ module Make (Config : CONFIG) = struct
               match String.uppercase_ascii status with
               | "FINISHED" -> Finished
               | "IN_PROGRESS" -> In_progress
+              | "PUBLISHED" -> Published
+              | "EXPIRED" -> Expired
               | _ ->
                   let msg =
                     match error_message with
@@ -1355,6 +1370,13 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
 
+  (** Poll [check_container_status] until the container is ready to publish.
+
+      Returns [Ok container_id] once the status is [FINISHED]. An already
+      [PUBLISHED] container yields [Error Duplicate_content], so a caller
+      retrying an ambiguous publish can tell "already live" apart from a
+      processing failure. [EXPIRED], [ERROR] and exhausting [max_attempts]
+      yield [Error (Internal_error _)]. *)
   let poll_container_status
       ?(poll_interval = 2.0)
       ?(max_attempts = 10)
@@ -1372,6 +1394,12 @@ module Make (Config : CONFIG) = struct
             | Ok In_progress ->
                 let delay = poll_interval *. (float_of_int (min attempt 5)) in
                 Config.sleep delay (fun () -> loop (attempt + 1))
+            | Ok Published -> on_result (Error Error_types.Duplicate_content)
+            | Ok Expired ->
+                on_result (Error (Error_types.Internal_error
+                  (Printf.sprintf
+                     "Container %s expired before it was published (containers expire 24 hours after creation)"
+                     container_id)))
             | Ok (Error_status msg) ->
                 on_result (Error (Error_types.Internal_error
                   (Printf.sprintf "Container %s processing failed: %s" container_id msg)))
