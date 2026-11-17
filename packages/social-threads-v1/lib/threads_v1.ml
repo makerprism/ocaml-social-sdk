@@ -38,6 +38,10 @@ let oauth_authorize_url = "https://threads.net/oauth/authorize"
 (** Authorization-code exchange endpoint. *)
 let token_endpoint = graph_api_host ^ "/oauth/access_token"
 
+(** Typed Threads Insights metrics and values ({!Threads_v1_insights}); the
+    requests are [Make.get_user_insights] and [Make.get_media_insights]. *)
+module Insights = Threads_v1_insights
+
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it ({!Social_meta_graph_paging.resolve_page_url}).
     Meta documents both graph hosts for the Threads API. *)
@@ -659,7 +663,12 @@ type post_insight = {
   value : int;
 }
 
+(** Metrics {!Make.get_post_insights} requests (media level). *)
 let insight_metric_names = [ "views"; "likes"; "replies"; "reposts"; "quotes"; "shares" ]
+
+(** Metrics {!Make.get_account_insights} requests. [shares] is a media
+    metric; the user insights endpoint does not document it. *)
+let account_insight_metric_names = [ "views"; "likes"; "replies"; "reposts"; "quotes" ]
 
 let string_of_insight_metric = function
   | Views -> "views"
@@ -1220,7 +1229,15 @@ module Make (Config : CONFIG) = struct
                    try Some (item |> member "period" |> to_string)
                    with _ -> None
                  in
-                 let value_items = item |> member "values" |> to_list in
+                 (* User metrics other than [views] answer with
+                    [total_value: {value}] instead of [values]; read it as
+                    one bucket without [end_time]. *)
+                 let value_items =
+                   match item |> member "values", item |> member "total_value" with
+                   | `List items, _ -> items
+                   | _, (`Assoc _ as total) -> [ total ]
+                   | _, _ -> item |> member "values" |> to_list
+                 in
                  (match parse_values [] value_items with
                   | Error msg -> Error msg
                   | Ok values ->
@@ -1248,6 +1265,8 @@ module Make (Config : CONFIG) = struct
                  in
                  let value_result =
                    try Ok (parse_int_value (item |> member "value"))
+                   with _ ->
+                   try Ok (parse_int_value (item |> member "total_value" |> member "value"))
                    with _ ->
                      try
                        let values = item |> member "values" |> to_list in
@@ -2424,6 +2443,13 @@ module Make (Config : CONFIG) = struct
                   (fun err -> on_result (Error (network_error err)))))
       (fun err -> on_result (Error err))
 
+  (** Account insights as [account_insight] records ([views], [likes],
+      [replies], [reposts], [quotes]; total-value metrics become one value
+      without [end_time]).
+
+      Deprecated: new code should use {!get_user_insights_for_account},
+      which also covers [clicks] and [followers_count] and keeps the
+      response shape ({!Insights.value}). *)
   let get_account_insights ~account_id ~since ~until on_result =
     with_valid_credentials ~account_id
       (fun creds ->
@@ -2431,7 +2457,7 @@ module Make (Config : CONFIG) = struct
           (function
             | Error err -> on_result (Error err)
             | Ok user_id ->
-                let metrics_param = String.concat "," insight_metric_names in
+                let metrics_param = String.concat "," account_insight_metric_names in
                 let query =
                   Uri.encoded_of_query
                     [ ("metric", [metrics_param]);
@@ -2514,6 +2540,91 @@ module Make (Config : CONFIG) = struct
       (function
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
+
+  let get_insights_url url on_result =
+    http_get_with_retry url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          match Insights.parse_insights response.body with
+          | Ok insights -> on_result (Ok insights)
+          | Error msg ->
+              on_result
+                (Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse insights response: %s" msg)))
+        else
+          on_result
+            (Error
+               (parse_api_error ~status_code:response.status
+                  ~headers:response.headers ~response_body:response.body)))
+      (fun err -> on_result (Error (network_error err)))
+
+  let metric_param metrics = String.concat "," (List.map Insights.metric_to_string metrics)
+
+  (** User insights: [GET /{user_id}/threads_insights?metric=...]
+      ({!Insights.user_metrics} by default). [since] / [until] are a Unix
+      timestamp or a date ([YYYY-MM-DD]); omitted, Meta reports yesterday
+      through today. No [period] is sent: the endpoint documents none.
+      Each metric keeps the shape Meta sent ({!Insights.value}): [views] a
+      time series, [followers_count] and the interaction counts a total,
+      [clicks] per-URL totals. Needs [threads_manage_insights].
+
+      @see <https://developers.facebook.com/docs/threads/insights> *)
+  let get_user_insights ~access_token ~user_id ?(metrics = Insights.user_metrics) ?since
+      ?until on_result =
+    let optional key = function
+      | Some value -> [ (key, [ String.trim value ]) ]
+      | None -> []
+    in
+    let query =
+      Uri.encoded_of_query
+        ([ ("metric", [ metric_param metrics ]) ]
+        @ optional "since" since @ optional "until" until
+        @ [ ("access_token", [ access_token ]) ])
+    in
+    get_insights_url
+      (Printf.sprintf "%s/%s/threads_insights?%s" threads_api_base
+         (Uri.pct_encode (String.trim user_id)) query)
+      on_result
+
+  (** {!get_user_insights} with the account's stored (and, if configured,
+      refreshed) credentials. Pass [?user_id] when it is known; otherwise it
+      is read from [GET /me] first. *)
+  let get_user_insights_for_account ~account_id ?user_id ?metrics ?since ?until on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        let access_token = creds.access_token in
+        match user_id with
+        | Some user_id ->
+            get_user_insights ~access_token ~user_id ?metrics ?since ?until on_result
+        | None ->
+            get_user_id ~access_token (function
+              | Ok user_id ->
+                  get_user_insights ~access_token ~user_id ?metrics ?since ?until on_result
+              | Error err -> on_result (Error err)))
+      (fun err -> on_result (Error err))
+
+  (** Media insights: [GET /{media_id}/insights?metric=...]
+      ({!Insights.media_metrics} by default). Counts do not include nested
+      replies' metrics; a repost facade answers with an empty list.
+
+      @see <https://developers.facebook.com/docs/threads/insights> *)
+  let get_media_insights ~access_token ~media_id ?(metrics = Insights.media_metrics) on_result =
+    let query =
+      Uri.encoded_of_query
+        [ ("metric", [ metric_param metrics ]); ("access_token", [ access_token ]) ]
+    in
+    get_insights_url
+      (Printf.sprintf "%s/%s/insights?%s" threads_api_base
+         (Uri.pct_encode (String.trim media_id)) query)
+      on_result
+
+  (** {!get_media_insights} with the account's stored credentials. *)
+  let get_media_insights_for_account ~account_id ~media_id ?metrics on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        get_media_insights ~access_token:creds.access_token ~media_id ?metrics on_result)
+      (fun err -> on_result (Error err))
 
   (** Permalink of a post or reply by id: [GET /{post_id}?fields=permalink].
       [Ok None] when Meta returns no permalink for the object. Takes a token,

@@ -1654,7 +1654,7 @@ let test_get_account_insights_contract () =
            | [ (_, me_url, _, _); (_, insights_url, _, _) ] ->
                assert (string_contains me_url "/v1.0/me?");
                assert (string_contains insights_url "/v1.0/user-1/threads_insights?");
-               assert (query_param insights_url "metric" = Some "views,likes,replies,reposts,quotes,shares");
+               assert (query_param insights_url "metric" = Some "views,likes,replies,reposts,quotes");
                assert (query_param insights_url "period" = Some "day");
                assert (query_param insights_url "since" = Some "2025-01-01");
                assert (query_param insights_url "until" = Some "2025-01-02");
@@ -4772,6 +4772,167 @@ let test_api_error_detail_survives_redaction () =
 
 (* Permalink by id: GET /{id}?fields=permalink with the token in the query,
    percent-encoded, and the three outcomes callers branch on. *)
+(* Response shapes from https://developers.facebook.com/docs/threads/insights
+   (user insights): [views] is a time series, the interaction counts and
+   [followers_count] carry [total_value], [clicks] carries
+   [link_total_values]. *)
+let documented_user_insights_body =
+  {|{"data":[
+    {"name":"views","period":"day","values":[
+      {"value":10,"end_time":"2024-07-12T08:00:00+0000"},
+      {"value":7,"end_time":"2024-07-15T08:00:00+0000"},
+      {"value":0,"end_time":"2024-07-16T08:00:00+0000"}],
+     "title":"views","description":"The number of times your profile was viewed.",
+     "id":"1234567/insights/views/day"},
+    {"name":"likes","period":"day","title":"likes","description":"likes",
+     "total_value":{"value":100},"id":"1234567/insights/likes/day"},
+    {"name":"clicks","period":"day","title":"clicks","description":"clicks",
+     "link_total_values":[{"value":11,"link_url":"https://example.com/a"},
+                          {"value":4,"link_url":"https://example.com/b"}],
+     "id":"1234567/insights/clicks/day"},
+    {"name":"followers_count","period":"day","title":"followers_count",
+     "description":"followers","total_value":{"value":540},
+     "id":"1234567/insights/followers_count/day"},
+    {"name":"follower_demographics","period":"day","total_value":{"value":0},
+     "id":"1234567/insights/follower_demographics/day"}]}|}
+
+let test_get_user_insights_documented_shapes () =
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = documented_user_insights_body } ];
+  let token = "tok+en/with=&reserved" in
+  let module I = Social_threads_v1.Insights in
+  Threads.get_user_insights ~access_token:token ~user_id:"1234567" ~since:"1717200000"
+    ~until:"1717286400" (function
+    | Error err -> failwith (Error_types.error_to_string err)
+    | Ok insights ->
+        assert (List.length insights = 4);
+        (match I.find I.Views insights with
+         | Some { value = I.Time_series [ _; _; { value = 0; end_time = Some _ } ]; period = Some "day"; _ } -> ()
+         | _ -> failwith "views should be a three-bucket time series");
+        (match I.find I.Likes insights with
+         | Some { value = I.Total 100; _ } -> ()
+         | _ -> failwith "likes should be total 100");
+        (match I.find I.Followers_count insights with
+         | Some { value = I.Total 540; _ } -> ()
+         | _ -> failwith "followers_count should be total 540");
+        (match I.find I.Clicks insights with
+         | Some ({ value = I.Link_totals [ { link_url = "https://example.com/a"; link_clicks = 11 }; _ ]; _ } as clicks) ->
+             assert (I.sum clicks.value = 15)
+         | _ -> failwith "clicks should be link totals");
+        let views = Option.get (I.find I.Views insights) in
+        assert (I.latest_value views.value = Some 0);
+        assert (I.latest_value ~skip_zero:true views.value = Some 7);
+        assert (I.sum views.value = 17);
+        let series = I.to_canonical_series ~scope:Analytics_types.Account insights in
+        assert (List.exists (fun (s : Analytics_types.series) ->
+          s.metric = Analytics_types.Profile_visits && s.provider_metric = Some "views"
+          && List.length s.points = 3) series);
+        assert (List.exists (fun (s : Analytics_types.series) ->
+          s.metric = Analytics_types.Followers && s.points = [ Analytics_types.make_datapoint 540 ]) series);
+        assert (List.exists (fun (s : Analytics_types.series) ->
+          s.metric = Analytics_types.Outbound_clicks && s.points = [ Analytics_types.make_datapoint 15 ]) series));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v1.0/1234567/threads_insights");
+       assert (Uri.get_query_param uri "metric"
+               = Some "views,likes,replies,reposts,quotes,clicks,followers_count");
+       assert (Uri.get_query_param uri "since" = Some "1717200000");
+       assert (Uri.get_query_param uri "until" = Some "1717286400");
+       assert (Uri.get_query_param uri "period" = None);
+       assert (Uri.get_query_param uri "access_token" = Some token)
+   | _ -> failwith "expected one GET");
+  print_endline "ok: get_user_insights documented shapes"
+
+let test_get_user_insights_for_account_user_id () =
+  with_reply_account ();
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body = {|{"data":[{"name":"followers_count","period":"day","total_value":{"value":3}}]}|} } ];
+  let module I = Social_threads_v1.Insights in
+  Threads.get_user_insights_for_account ~account_id:"acct-1" ~user_id:"u-9"
+    ~metrics:[ I.Followers_count ] (function
+    | Ok [ { metric = I.Followers_count; value = I.Total 3; _ } ] -> ()
+    | Ok _ -> failwith "expected followers_count 3"
+    | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       assert (Uri.path (Uri.of_string url) = "/v1.0/u-9/threads_insights");
+       assert (Uri.get_query_param (Uri.of_string url) "metric" = Some "followers_count");
+       assert (Uri.get_query_param (Uri.of_string url) "since" = None);
+       assert (Uri.get_query_param (Uri.of_string url) "access_token" = Some "access-xyz")
+   | _ -> failwith "a known user_id must skip GET /me");
+  (* Without a user id the account's id is read from /me first. *)
+  with_reply_account ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"id":"me-1","username":"alice"}|} };
+      { status = 200; headers = []; body = {|{"data":[]}|} } ];
+  Threads.get_user_insights_for_account ~account_id:"acct-1" (function
+    | Ok [] -> ()
+    | _ -> failwith "expected an empty result");
+  (match List.rev !Mock_http.requests with
+   | [ (_, me_url, _, _); (_, url, _, _) ] ->
+       assert (string_contains me_url "/v1.0/me?");
+       assert (Uri.path (Uri.of_string url) = "/v1.0/me-1/threads_insights")
+   | _ -> failwith "expected /me then insights");
+  print_endline "ok: get_user_insights_for_account"
+
+(* Media insights answer with [values: [{value}]], period lifetime
+   (https://developers.facebook.com/docs/threads/insights#media-insights). *)
+let test_get_media_insights_documented_shape () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body = {|{"data":[
+          {"name":"likes","period":"lifetime","values":[{"value":100}],"title":"likes",
+           "description":"The number of likes on your post.","id":"m-1/insights/likes/lifetime"},
+          {"name":"shares","period":"lifetime","values":[{"value":2}],"title":"shares",
+           "description":"shares","id":"m-1/insights/shares/lifetime"}]}|} } ];
+  let module I = Social_threads_v1.Insights in
+  Threads.get_media_insights ~access_token:"t" ~media_id:"m-1" (function
+    | Ok insights ->
+        (match I.find I.Likes insights with
+         | Some { value; period = Some "lifetime"; _ } -> assert (I.latest_value value = Some 100)
+         | _ -> failwith "likes missing");
+        let series = I.to_canonical_series ~scope:Analytics_types.Post insights in
+        assert (List.exists (fun (s : Analytics_types.series) -> s.metric = Analytics_types.Shares) series)
+    | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       assert (Uri.path (Uri.of_string url) = "/v1.0/m-1/insights");
+       assert (Uri.get_query_param (Uri.of_string url) "metric" = Some "views,likes,replies,reposts,quotes,shares")
+   | _ -> failwith "expected one GET");
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"data":[{"name":"likes","period":"lifetime"}]}|} } ];
+  Threads.get_media_insights ~access_token:"t" ~media_id:"m-1" (function
+    | Error (Error_types.Internal_error msg) -> assert (string_contains msg "likes")
+    | _ -> failwith "an entry without a value must be a parse error");
+  print_endline "ok: get_media_insights documented shape"
+
+(* Regression: get_account_insights required [values] on every entry, so the
+   documented [total_value] answer for likes/replies/reposts/quotes failed
+   the whole read with a parse error. *)
+let test_get_account_insights_accepts_total_value () =
+  with_reply_account ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"id":"user-1"}|} };
+      { status = 200; headers = [];
+        body = {|{"data":[
+          {"name":"views","period":"day","values":[{"value":5,"end_time":"2024-07-12T08:00:00+0000"}]},
+          {"name":"likes","period":"day","total_value":{"value":42}}]}|} } ];
+  Threads.get_account_insights ~account_id:"acct-1" ~since:"2024-07-11" ~until:"2024-07-12"
+    (function
+    | Ok [ views; likes ] ->
+        assert (views.metric = Social_threads_v1.Views);
+        assert (likes.metric = Social_threads_v1.Likes);
+        (match likes.values with
+         | [ { value = 42; end_time = None } ] -> ()
+         | _ -> failwith "likes total_value should be one value")
+    | Ok _ -> failwith "expected two insights"
+    | Error err -> failwith (Error_types.error_to_string err));
+  print_endline "ok: get_account_insights accepts total_value"
+
 let test_get_permalink () =
   Mock_config.reset ();
   Mock_http.set_responses
@@ -5151,6 +5312,10 @@ let () =
   test_get_posts_after_cursor_trimmed ();
   test_get_posts_after_cursor_whitespace_omitted ();
   test_get_account_insights_contract ();
+  test_get_user_insights_documented_shapes ();
+  test_get_user_insights_for_account_user_id ();
+  test_get_media_insights_documented_shape ();
+  test_get_account_insights_accepts_total_value ();
   test_get_account_insights_malformed_payload_returns_internal_error ();
   test_get_post_insights_contract ();
   test_get_post_insights_malformed_payload_returns_internal_error ();
