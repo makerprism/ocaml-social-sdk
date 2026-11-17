@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed profile with counts**: `Reads.Make.get_profile ~service_url ?access_jwt ~actor` (`app.bsky.actor.getProfile`, works on `Reads.public_api_url` without a session) and `Make_with_options.get_profile_view ~account_id ~actor` return `Views.profile_detailed` (`did`, `handle`, `display_name`, `description`, `avatar`, `banner`, `followers_count`, `follows_count`, `posts_count`, `created_at`, `indexed_at`; counts are `option` because the lexicon does not require them). The raw-JSON `get_profile` is unchanged. Source: `app.bsky.actor.defs#profileViewDetailed` (https://github.com/bluesky-social/atproto/blob/main/packages/api/lexicons/app/bsky/actor/defs.json), https://docs.bsky.app/docs/api/app-bsky-actor-get-profile. Additive.
 - **Typed reads: threads, author feeds, post batches, notifications,
   handles.**
   - `Views` (module `Bluesky_views`, with an `.mli`): `post_view` (author,

@@ -185,6 +185,38 @@ let post_union_of_json ~view_type parse json =
     | "app.bsky.feed.defs#blockedPost" -> blocked_post_of_json json
     | other -> Ok (Unknown_post other)
 
+(* {1 Profiles} *)
+
+type profile_detailed = {
+  did : string;
+  handle : string;
+  display_name : string option;
+  description : string option;
+  avatar : string option;
+  banner : string option;
+  followers_count : int option;
+  follows_count : int option;
+  posts_count : int option;
+  created_at : string option;
+  indexed_at : string option;
+}
+
+let profile_detailed_of_json json =
+  let* did = string_req "did" json in
+  let* handle = string_req "handle" json in
+  let* display_name = string_opt "displayName" json in
+  let* description = string_opt "description" json in
+  let* avatar = string_opt "avatar" json in
+  let* banner = string_opt "banner" json in
+  let* followers_count = int_opt "followersCount" json in
+  let* follows_count = int_opt "followsCount" json in
+  let* posts_count = int_opt "postsCount" json in
+  let* created_at = string_opt "createdAt" json in
+  let* indexed_at = string_opt "indexedAt" json in
+  Ok
+    { did; handle; display_name; description; avatar; banner; followers_count; follows_count;
+      posts_count; created_at; indexed_at }
+
 (* {1 Threads} *)
 
 type thread = thread_view_post post_union
