@@ -1571,6 +1571,44 @@ let test_user_agent_header () =
         print_endline "✓ User-Agent header verification")
       (fun err -> failwith ("Request failed: " ^ err)))
 
+let test_user_agent_from_config () =
+  Mock_config.setup_valid_credentials ();
+  Mock_config.set_env "REDDIT_USER_AGENT" "web:com.example.app:v2.0.0 (by /u/example)";
+  Mock_http.set_response
+    { status = 200; body = {|{"json":{"errors":[],"data":{"id":"ua1","name":"t3_ua1","url":"..."}}}|}; headers = [] };
+  Reddit.submit_self_post ~account_id:"test_account" ~subreddit:"test" ~title:"Test" ()
+    (handle_outcome
+      (fun _ ->
+        let (_, _, headers, _) = List.hd !Mock_http.requests in
+        assert (List.assoc_opt "User-Agent" headers
+                = Some "web:com.example.app:v2.0.0 (by /u/example)");
+        print_endline "✓ User-Agent comes from REDDIT_USER_AGENT")
+      (fun err -> failwith ("Request failed: " ^ err)))
+
+(* Token endpoint calls sent no User-Agent at all, so the HTTP client's
+   generic default reached Reddit, which it throttles. *)
+let test_oauth_token_requests_send_user_agent () =
+  Mock_config.reset ();
+  let module OAuth_http = OAuth.Make (Mock_http) in
+  Mock_http.set_response
+    { status = 200; body = {|{"access_token":"a","token_type":"bearer","expires_in":3600,"scope":"identity"}|}; headers = [] };
+  OAuth_http.exchange_code ~user_agent:"web:com.example.app:v2.0.0 (by /u/example)"
+    ~client_id:"c" ~client_secret:"s" ~redirect_uri:"https://example.com/cb" ~code:"code"
+    (fun _ -> ())
+    (fun err -> failwith ("exchange_code failed: " ^ err));
+  let (_, _, headers, _) = List.hd !Mock_http.requests in
+  assert (List.assoc_opt "User-Agent" headers
+          = Some "web:com.example.app:v2.0.0 (by /u/example)");
+  Mock_config.reset ();
+  Mock_http.set_response
+    { status = 200; body = {|{"access_token":"a","token_type":"bearer","expires_in":3600}|}; headers = [] };
+  OAuth_http.refresh_token ~client_id:"c" ~client_secret:"s" ~refresh_token:"r"
+    (fun _ -> ())
+    (fun err -> failwith ("refresh_token failed: " ^ err));
+  let (_, _, headers, _) = List.hd !Mock_http.requests in
+  assert (List.assoc_opt "User-Agent" headers = Some default_user_agent);
+  print_endline "✓ OAuth token requests send a User-Agent"
+
 let test_authorization_header () =
   Mock_config.reset ();
   Mock_config.set_env "REDDIT_CLIENT_ID" "test_client";
@@ -2064,6 +2102,8 @@ let () =
   
   print_endline "\n--- Header Verification Tests ---";
   test_user_agent_header ();
+  test_user_agent_from_config ();
+  test_oauth_token_requests_send_user_agent ();
   test_authorization_header ();
   
   print_endline "\n--- Credentials Tests ---";
