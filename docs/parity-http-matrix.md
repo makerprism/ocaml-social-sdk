@@ -110,6 +110,8 @@ Known subtle bug traps:
 | User account (typed) | GET | `https://api.pinterest.com/v5/user_account[?ad_account_id]` | `Authorization: Bearer <token>` | none | `OAuth_http.get_user_account`, `Pinterest.get_user_account` | `test_get_user_account_typed` |
 | Account analytics | GET | `/v5/user_account/analytics?start_date&end_date` | `Authorization: Bearer <token>` | none (query contract) | `Pinterest.get_account_analytics` | `test_get_account_analytics_request_contract` |
 | Post analytics (pin) | GET | `/v5/pins/{pin_id}/analytics?start_date&end_date&metric_types=IMPRESSION,PIN_CLICK,OUTBOUND_CLICK,SAVE` | `Authorization: Bearer <token>` | none (query contract) | `Pinterest.get_pin_analytics` | `test_get_pin_analytics_request_contract` |
+| Account analytics report (typed) | GET | `https://api.pinterest.com/v5/user_account/analytics?start_date&end_date[&metric_types=A,B][&ad_account_id]` | `Authorization: Bearer <token>` | none; answer `{"<group>": {"daily_metrics": [...], "summary_metrics": {...}}}`, group `all` when unsplit | `OAuth_http.get_user_account_analytics`, `Pinterest.get_account_analytics_report` (`Analytics.report`) | `test_user_account_analytics_report`, `test_account_analytics_reads_documented_summary` |
+| Pin analytics report (typed) | GET | `https://api.pinterest.com/v5/pins/{pin_id}/analytics?start_date&end_date&metric_types=<Analytics.pin_metric_types>[&ad_account_id]` | `Authorization: Bearer <token>` | none; groups add `lifetime_metrics` | `OAuth_http.get_pin_analytics`, `Pinterest.get_pin_analytics_report` | `test_pin_analytics_report_for_account` |
 
 Known subtle bug traps:
 - OAuth token exchange uses Basic Auth header; putting client credentials only in body is non-parity.
