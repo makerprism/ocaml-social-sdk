@@ -142,27 +142,27 @@ let () = Reddit.submit_self_post
 
 Every package returns `Error_types.error`. When a failure has no more specific
 constructor it is an `Api_error` that keeps the response body;
-`Provider_error_detail.of_error` reads the provider's code, subcode, type,
+`Social_provider_error_detail.of_error` reads the provider's code, subcode, type,
 message and trace id back out of it, whatever the platform:
 
 ```ocaml
-match Provider_error_detail.of_error err with
+match Social_provider_error_detail.of_error err with
 | Some { code = Some "url_ownership_unverified"; _ } -> (* TikTok *) ...
 | Some { code = Some "100"; subcode = Some 2207028; _ } -> (* Instagram *) ...
 | Some _ | None -> ...
 ```
 
 Facebook, Instagram and Threads classify Graph errors with one shared table,
-`Meta_graph_error` (`of_body`, `classify`, `to_error`), which is also usable on
+`Social_meta_graph_error` (`of_body`, `classify`, `to_error`), which is also usable on
 bodies your application fetched itself.
 
 Their paged list reads (Threads reply reads, Facebook and Instagram comment
-pages) return one `Meta_graph_paging.page` (`data`, `paging` cursors, `next_url`,
+pages) return one `Social_meta_graph_paging.page` (`data`, `paging` cursors, `next_url`,
 `previous_url`) and take a `?position`: `First`, `After cursor`,
 `Before cursor`, or `Page_url next_url`. Use cursors to rebuild the request
 with your own options, or hand back the `paging.next` URL Meta returned; the
 SDK only follows it to the API's own host and edge and swaps in your
-credentials. Stop when `next_url` is `None` (`Meta_graph_paging.next_after`
+credentials. Stop when `next_url` is `None` (`Social_meta_graph_paging.next_after`
 returns the cursor only while a next page exists).
 
 ### With Lwt Runtime
@@ -191,7 +191,7 @@ The SDK follows a runtime-agnostic design:
 - **URL Extraction**: Parse and handle URLs in content
 - **Media Upload**: Support for images, videos, and GIFs
 - **Thread Posting**: Post threads/reply chains on supported platforms (Twitter, Bluesky, Mastodon, Threads)
-- **Structured Errors**: one `Error_types.error` for every platform, `Error_types.classify_error` (auth / transient / permanent), `Health_status.of_error`, and `Provider_error_detail` for the provider's own code
+- **Structured Errors**: one `Error_types.error` for every platform, `Error_types.classify_error` (auth / transient / permanent), `Health_status.of_error`, and `Social_provider_error_detail` for the provider's own code
 
 ## Supported Platforms
 

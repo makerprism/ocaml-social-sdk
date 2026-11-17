@@ -28,6 +28,15 @@ This package provides the core interfaces and types that all social media provid
 - `Thread_splitter`: Split content into thread posts
 - `Url_extractor`: Extract URLs from text
 
+### Module naming
+
+`social-core` is `(wrapped false)`: every module name lands in the global
+namespace of each consumer. **Modules in an unwrapped library must carry the
+package prefix (`Social_`)**, e.g. `Social_oauth_pkce`, never `Oauth_pkce`. A
+generic name clashes with an application module of the same name. The
+pre-prefix names `Secure_random`, `Oauth_pkce`, `Meta_graph_error`,
+`Provider_error_detail` and `Meta_graph_paging` remain as deprecated aliases.
+
 ## Usage
 
 This package is meant to be used as a dependency for provider implementations. End users should use:

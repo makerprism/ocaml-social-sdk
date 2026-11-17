@@ -1,4 +1,4 @@
-(** Contract tests for {!Provider_error_detail}: one realistic error body per
+(** Contract tests for {!Social_provider_error_detail}: one realistic error body per
     platform envelope the SDK talks to, and the fields read back out of it. *)
 
 let failures = ref 0
@@ -11,7 +11,7 @@ let check name condition =
   end
 
 let detail ?(status_code = 400) ?request_id body =
-  Provider_error_detail.of_response ~status_code ?request_id body
+  Social_provider_error_detail.of_response ~status_code ?request_id body
 
 let expect name ?status_code ?request_id body ~code ~subcode ~error_type
     ~message ~trace_id =
@@ -109,7 +109,7 @@ let test_non_json_and_trace () =
   let exact = String.make 2000 'c' in
   check "excerpt is capped at excerpt_max_bytes"
     ((detail exact).body_excerpt
-     = Some (String.make Provider_error_detail.excerpt_max_bytes 'c'))
+     = Some (String.make Social_provider_error_detail.excerpt_max_bytes 'c'))
 
 let test_of_error () =
   Printf.printf "Test: of_error reads Api_error and only Api_error\n";
@@ -120,7 +120,7 @@ let test_of_error () =
     Error_types.make_api_error ~platform:Platform_types.Instagram ~status_code:400
       ~message:"Instagram API error" ~raw_response:body ()
   in
-  (match Provider_error_detail.of_error api_error with
+  (match Social_provider_error_detail.of_error api_error with
    | Some d ->
        check "Api_error code" (d.code = Some "100");
        check "Api_error subcode" (d.subcode = Some 2207028);
@@ -133,19 +133,19 @@ let test_of_error () =
       ~message:"Gallery posts require at least 2 images" ~request_id:"r-1" ()
   in
   check "Api_error without body keeps status and request id"
-    (Provider_error_detail.of_error without_body
+    (Social_provider_error_detail.of_error without_body
      = Some
-         { Provider_error_detail.http_status = 400; code = None; subcode = None;
+         { Social_provider_error_detail.http_status = 400; code = None; subcode = None;
            error_type = None; message = None; trace_id = Some "r-1";
            body_excerpt = None });
   check "Auth_error has no detail"
-    (Provider_error_detail.of_error (Error_types.Auth_error Error_types.Token_invalid) = None);
+    (Social_provider_error_detail.of_error (Error_types.Auth_error Error_types.Token_invalid) = None);
   check "Network_error has no detail"
-    (Provider_error_detail.of_error
+    (Social_provider_error_detail.of_error
        (Error_types.Network_error Error_types.Timeout) = None)
 
 let () =
-  Printf.printf "Running Provider_error_detail contract tests\n\n";
+  Printf.printf "Running Social_provider_error_detail contract tests\n\n";
   test_envelopes ();
   test_non_json_and_trace ();
   test_of_error ();
@@ -153,4 +153,4 @@ let () =
     Printf.printf "\n%d check(s) failed\n" !failures;
     exit 1
   end
-  else Printf.printf "\nAll Provider_error_detail checks passed\n"
+  else Printf.printf "\nAll Social_provider_error_detail checks passed\n"

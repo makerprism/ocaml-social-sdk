@@ -1,17 +1,12 @@
-(** Cryptographically secure random bytes from the operating system.
+(** Deprecated alias of {!Social_secure_random}, kept so consumers using the pre-prefix
+    name keep compiling. Use {!Social_secure_random}: social-core is [(wrapped false)], so
+    unprefixed module names clash with consumer modules.
 
-    For secrets the SDK generates itself (PKCE verifiers, OAuth 1.0a nonces).
-    [Stdlib.Random] is not suitable: it is a seeded PRNG whose output can be
-    predicted, and its default state is the same in every process unless
-    something calls [Random.self_init].
+    No [@@@deprecated] alert: dune's dev profile turns alerts into errors,
+    which would break the consumers this alias exists to keep building.
 
-    Reads [/dev/urandom], which never blocks once the kernel pool is
-    initialised and needs no extra dependency or runtime-specific setup. *)
+    @deprecated use {!Social_secure_random}. *)
 
-val bytes : int -> string
-(** [bytes n] is [n] bytes from the operating system's CSPRNG.
-
-    @raise Invalid_argument if [n < 0].
-    @raise Failure if [/dev/urandom] cannot be read. That means the platform
-    has no usable entropy source, which no caller can recover from; the SDK
-    refuses to fall back to a predictable generator. *)
+include module type of struct
+  include Social_secure_random
+end

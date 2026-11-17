@@ -39,7 +39,7 @@ let oauth_authorize_url = "https://threads.net/oauth/authorize"
 let token_endpoint = graph_api_host ^ "/oauth/access_token"
 
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
-    reader sends the caller's token to it ({!Meta_graph_paging.resolve_page_url}).
+    reader sends the caller's token to it ({!Social_meta_graph_paging.resolve_page_url}).
     Meta documents both graph hosts for the Threads API. *)
 let paging_url_hosts = [ "graph.threads.net"; "graph.threads.com" ]
 
@@ -124,7 +124,7 @@ let is_sensitive_key key =
   | _ -> false
 
 (* OAuth authorization codes are strings. Graph error codes are numbers and
-   must survive in [raw_response] so {!Provider_error_detail} can read them. *)
+   must survive in [raw_response] so {!Social_provider_error_detail} can read them. *)
 let is_sensitive_field key (value : Yojson.Basic.t) =
   is_sensitive_key key
   &&
@@ -202,7 +202,7 @@ let constant_time_equal a b =
 (* Threads has always appended the Graph code, type and subcode to the
    message as " [code=N;type=T;subcode=S]"; consumers may read it, so it
    stays. *)
-let provider_metadata_suffix (graph : Meta_graph_error.t) =
+let provider_metadata_suffix (graph : Social_meta_graph_error.t) =
   let code = Option.value ~default:0 graph.code in
   let provider_type = Option.value ~default:"" graph.error_type in
   if code <> 0 || provider_type <> "" || graph.subcode <> None then
@@ -234,11 +234,11 @@ let with_message_suffix suffix (error : Error_types.error) =
       error
 
 (** Graph error body as an SDK error, through the table shared with the
-    Facebook and Instagram packages ({!Meta_graph_error}). Secrets are
+    Facebook and Instagram packages ({!Social_meta_graph_error}). Secrets are
     scrubbed from the stored body and the message. *)
 let parse_api_error ~status_code ~headers ~response_body =
   let error =
-    Meta_graph_error.to_error
+    Social_meta_graph_error.to_error
       ~platform:Platform_types.Threads
       ~status_code
       ~required_permissions:["threads_basic"]
@@ -248,12 +248,12 @@ let parse_api_error ~status_code ~headers ~response_body =
       ~redact_message:sanitize_text_if_sensitive
       response_body
   in
-  match Meta_graph_error.of_body response_body with
+  match Social_meta_graph_error.of_body response_body with
   | Some graph -> with_message_suffix (provider_metadata_suffix graph) error
   | None -> error
 
 let network_error err =
-  Meta_graph_error.transport_error (sanitize_text_if_sensitive err)
+  Social_meta_graph_error.transport_error (sanitize_text_if_sensitive err)
 
 module OAuth = struct
   (** Thread OAuth scopes as an ADT with string fallback for future scopes.
@@ -1890,10 +1890,10 @@ module Make (Config : CONFIG) = struct
      from [media_id] and the options. *)
   let reply_edge_url ~edge ~fields ~extra_params ~access_token ~media_id
       ~position ?reverse ~limit () =
-    match (position : Meta_graph_paging.position) with
+    match (position : Social_meta_graph_paging.position) with
     | Page_url url -> (
         match
-          Meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
+          Social_meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
             ~edge url
         with
         | Ok uri ->
@@ -1911,7 +1911,7 @@ module Make (Config : CONFIG) = struct
                | None -> [])
             @ extra_params
             @ [ ("access_token", [ access_token ]) ]
-            @ Meta_graph_paging.cursor_query position
+            @ Social_meta_graph_paging.cursor_query position
           in
           Ok
             (Printf.sprintf "%s/%s/%s?%s" threads_api_base (String.trim media_id)
@@ -1920,7 +1920,7 @@ module Make (Config : CONFIG) = struct
   (* Shared reader for the reply edges of a media object. They take the same
      paging parameters and return the same media-object page shape. *)
   let get_reply_edge_page ~edge ~fields ~extra_params ~access_token ~media_id
-      ?(position = Meta_graph_paging.First) ?reverse ?(limit = 20) on_result =
+      ?(position = Social_meta_graph_paging.First) ?reverse ?(limit = 20) on_result =
     match
       reply_edge_url ~edge ~fields ~extra_params ~access_token ~media_id
         ~position ?reverse ~limit ()
@@ -1930,7 +1930,7 @@ module Make (Config : CONFIG) = struct
         http_get_with_retry url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
-              match Meta_graph_paging.of_body ~item:parse_thread_post response.body with
+              match Social_meta_graph_paging.of_body ~item:parse_thread_post response.body with
               | Ok page -> on_result (Ok page)
               | Error msg ->
                   on_result
@@ -1955,7 +1955,7 @@ module Make (Config : CONFIG) = struct
       ([GET /{media_id}/replies], fields {!reply_fields}), with a token.
       [reverse] (API default [true]) sorts newest first; [limit] is clamped
       to 1..100 (default 20). [position] selects the page by cursor or by a
-      [paging.next] URL, see {!Meta_graph_paging}. Use [has_replies] to
+      [paging.next] URL, see {!Social_meta_graph_paging}. Use [has_replies] to
       decide whether to descend further. Needs [threads_read_replies].
 
       @see <https://developers.facebook.com/docs/threads/retrieve-and-manage-replies/replies-and-conversations> *)
@@ -1998,15 +1998,15 @@ module Make (Config : CONFIG) = struct
         (fun creds ->
           let position =
             match normalize_optional_non_empty after with
-            | Some cursor -> Meta_graph_paging.After cursor
-            | None -> Meta_graph_paging.First
+            | Some cursor -> Social_meta_graph_paging.After cursor
+            | None -> Social_meta_graph_paging.First
           in
           read ~access_token:creds.access_token ~position (function
-            | Ok (page : thread_post Meta_graph_paging.page) ->
+            | Ok (page : thread_post Social_meta_graph_paging.page) ->
                 on_result
                   (Ok
                      ( page.data,
-                       Option.bind page.paging (fun (c : Meta_graph_paging.cursors) ->
+                       Option.bind page.paging (fun (c : Social_meta_graph_paging.cursors) ->
                            c.after) ))
             | Error err -> on_result (Error err)))
         (fun err -> on_result (Error err))
@@ -2014,7 +2014,7 @@ module Make (Config : CONFIG) = struct
   (** Immediate replies to a post or reply ([GET /{media_id}/replies]) with
       the account's stored credentials. Returns the items and
       [paging.cursors.after] (present on the last page too; prefer
-      {!get_replies_page} and {!Meta_graph_paging.next_after}). *)
+      {!get_replies_page} and {!Social_meta_graph_paging.next_after}). *)
   let get_replies ~account_id ~media_id ?after ?reverse ?limit on_result =
     with_account_page ~account_id ~media_id ?after
       (fun ~access_token ~position ->

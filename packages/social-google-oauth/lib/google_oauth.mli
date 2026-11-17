@@ -8,7 +8,7 @@
 
 module Pkce : sig
   (** A fresh 43-character code verifier from the OS CSPRNG
-      ({!Oauth_pkce.generate_verifier}). *)
+      ({!Social_oauth_pkce.generate_verifier}). *)
   val generate_verifier : unit -> string
 
   (** Generate a Base64-URL-encoded SHA256 code challenge from a code verifier *)

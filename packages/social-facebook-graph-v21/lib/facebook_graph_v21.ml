@@ -626,7 +626,7 @@ module Make (Config : CONFIG) = struct
       evidence about the credentials. Consumers routing on the error
       variant, and {!Health_status.of_error}, rely on this distinction. *)
   let transport_error err =
-    Meta_graph_error.transport_error (redact_sensitive_text_if_needed err)
+    Social_meta_graph_error.transport_error (redact_sensitive_text_if_needed err)
   
   (** {1 Rate Limiting} *)
   

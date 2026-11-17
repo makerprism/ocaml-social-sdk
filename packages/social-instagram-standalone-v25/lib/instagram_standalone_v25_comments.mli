@@ -34,7 +34,7 @@ type comment = {
   hidden : bool option;
   parent_id : string option;  (** The top-level comment a reply belongs to. *)
   like_count : int option;
-  replies : comment Meta_graph_paging.page option;
+  replies : comment Social_meta_graph_paging.page option;
       (** First page of the [replies] expansion; [None] on replies and when
           the response has no [replies] object (no replies, or not
           requested). Fetch the rest with [get_comment_replies_page]. *)

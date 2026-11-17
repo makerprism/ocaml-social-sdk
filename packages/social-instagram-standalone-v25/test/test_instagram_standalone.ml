@@ -1726,7 +1726,7 @@ let is_permission_error = function
   | _ -> false
 
 (** Instagram maps Graph codes through the table shared with Facebook and
-    Threads ([Meta_graph_error]). Before, 17/341/368/80002, 3, 100/33 and 506
+    Threads ([Social_meta_graph_error]). Before, 17/341/368/80002, 3, 100/33 and 506
     were plain Api_errors. Instagram's OAuthException-typed media errors must
     not read as token errors. *)
 let test_shared_meta_graph_error_contract () =
@@ -1838,12 +1838,12 @@ let test_get_comments_page_with_replies () =
                          assert (reply.parent_id = Some "17858893269000001");
                          assert (reply.replies = None)
                      | _ -> failwith "expected one reply");
-                    assert (Meta_graph_paging.next_after replies = Some "QVFIUnK")
+                    assert (Social_meta_graph_paging.next_after replies = Some "QVFIUnK")
                 | None -> failwith "expected a replies page");
                assert (second.hidden = Some true);
                assert (second.replies = None)
            | _ -> failwith "expected two comments");
-          assert (Meta_graph_paging.next_after page = Some "QVFIUmG")
+          assert (Social_meta_graph_paging.next_after page = Some "QVFIUmG")
       | Error err -> failwith (Error_types.error_to_string err));
   (match !Mock_http.requests with
    | [ ("GET", url, headers, _) ] ->
@@ -1870,15 +1870,15 @@ let test_get_comment_replies_page_follow_ups () =
       { status = 200; headers = []; body = replies_body } ];
   let expect_last = function
     | Ok page ->
-        assert (List.length page.Meta_graph_paging.data = 1);
-        assert (Meta_graph_paging.next_after page = None)
+        assert (List.length page.Social_meta_graph_paging.data = 1);
+        assert (Social_meta_graph_paging.next_after page = None)
     | Error err -> failwith (Error_types.error_to_string err)
   in
   Instagram.get_comment_replies_page ~comment_id:"17858893269000001" ~access_token:"ig-token"
-    ~position:(Meta_graph_paging.After "QVFIUnK") ~limit:500 expect_last;
+    ~position:(Social_meta_graph_paging.After "QVFIUnK") ~limit:500 expect_last;
   Instagram.get_comment_replies_page ~comment_id:"ignored" ~access_token:"ig-token"
     ~position:
-      (Meta_graph_paging.Page_url
+      (Social_meta_graph_paging.Page_url
          "https://graph.instagram.com/v25.0/17858893269000001/replies?access_token=IGOLD&fields=id%2Ctext%2Cparent_id&limit=1&after=QVFIUnK")
     expect_last;
   (match List.rev !Mock_http.requests with
@@ -1898,7 +1898,7 @@ let test_get_comment_replies_page_follow_ups () =
     (fun url ->
       Mock_config.reset ();
       Instagram.get_comment_replies_page ~comment_id:"c" ~access_token:"ig-token"
-        ~position:(Meta_graph_paging.Page_url url)
+        ~position:(Social_meta_graph_paging.Page_url url)
         (function
           | Error (Error_types.Validation_error _) -> ()
           | _ -> failwith ("expected a rejected paging URL: " ^ url));

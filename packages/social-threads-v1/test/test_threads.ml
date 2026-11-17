@@ -4711,7 +4711,7 @@ let is_permission_error = function
   | _ -> false
 
 (** Threads maps Graph codes through the table shared with Facebook and
-    Instagram ([Meta_graph_error]). Before, 17/341/368/80xxx, 3 and 100/33
+    Instagram ([Social_meta_graph_error]). Before, 17/341/368/80xxx, 3 and 100/33
     were plain Api_errors, and every 190 read as Token_expired. *)
 let test_shared_meta_graph_error_contract () =
   let parse ?(status_code = 400) body =
@@ -4749,7 +4749,7 @@ let test_shared_meta_graph_error_contract () =
   print_endline "ok: shared Meta Graph error contract"
 
 (** The numeric Graph code survives the secret scrubbing of [raw_response],
-    so [Provider_error_detail] can read it back. *)
+    so [Social_provider_error_detail] can read it back. *)
 let test_api_error_detail_survives_redaction () =
   let body =
     {|{"error":{"message":"(#100) Invalid parameter","type":"OAuthException","code":100,"error_subcode":2207028,"fbtrace_id":"AvX3kq0Lm2P"},"access_token":"should-not-leak"}|}
@@ -4758,7 +4758,7 @@ let test_api_error_detail_survives_redaction () =
     Social_threads_v1.parse_api_error ~status_code:400
       ~headers:[ ("x-fb-trace-id", "hdr-trace") ] ~response_body:body
   in
-  (match Provider_error_detail.of_error err with
+  (match Social_provider_error_detail.of_error err with
    | Some detail ->
        assert (detail.code = Some "100");
        assert (detail.subcode = Some 2207028);
@@ -4894,7 +4894,7 @@ let test_get_conversation_page_with_token () =
                assert (top.hide_status = Some Social_threads_v1.Hidden)
            | _ -> failwith "expected two replies");
           assert (page.next_url = Some next);
-          assert (Meta_graph_paging.next_after page = Some "QVFIUkF")
+          assert (Social_meta_graph_paging.next_after page = Some "QVFIUkF")
       | Error err -> failwith (Error_types.error_to_string err));
   (match !Mock_http.requests with
    | [ ("GET", url, _, _) ] ->
@@ -4915,15 +4915,15 @@ let test_reply_page_cursor_positions () =
       { status = 200; headers = []; body = conversation_page_body ~next:None } ];
   let check_page = function
     | Ok page ->
-        assert (not (Meta_graph_paging.has_next page));
+        assert (not (Social_meta_graph_paging.has_next page));
         (* Meta returns an after cursor on the last page too *)
-        assert (Meta_graph_paging.next_after page = None)
+        assert (Social_meta_graph_paging.next_after page = None)
     | Error err -> failwith (Error_types.error_to_string err)
   in
   Threads.get_replies_page ~access_token:"t" ~media_id:"m"
-    ~position:(Meta_graph_paging.After "QVFIUkF") check_page;
+    ~position:(Social_meta_graph_paging.After "QVFIUkF") check_page;
   Threads.get_replies_page ~access_token:"t" ~media_id:"m"
-    ~position:(Meta_graph_paging.Before "QVFIUkJ") check_page;
+    ~position:(Social_meta_graph_paging.Before "QVFIUkJ") check_page;
   (match List.rev !Mock_http.requests with
    | [ ("GET", after_url, _, _); ("GET", before_url, _, _) ] ->
        assert (Uri.path (Uri.of_string after_url) = "/v1.0/m/replies");
@@ -4942,7 +4942,7 @@ let test_reply_page_follows_next_url () =
     "https://graph.threads.com/v1.0/18040000000000001/conversation?fields=id%2Ctext%2Creplied_to&reverse=true&limit=2&access_token=OLD-TOKEN&after=QVFIUkF"
   in
   Threads.get_conversation_page ~access_token:"NEW-TOKEN" ~media_id:"ignored"
-    ~position:(Meta_graph_paging.Page_url next)
+    ~position:(Social_meta_graph_paging.Page_url next)
     (function
       | Ok page -> assert (List.length page.data = 2)
       | Error err -> failwith (Error_types.error_to_string err));
@@ -4963,7 +4963,7 @@ let test_reply_page_rejects_foreign_next_url () =
     (fun url ->
       Mock_config.reset ();
       Threads.get_conversation_page ~access_token:"SECRET" ~media_id:"m"
-        ~position:(Meta_graph_paging.Page_url url)
+        ~position:(Social_meta_graph_paging.Page_url url)
         (function
           | Error (Error_types.Validation_error [ Error_types.Invalid_url _ ]) -> ()
           | _ -> failwith ("expected a validation error for " ^ url));

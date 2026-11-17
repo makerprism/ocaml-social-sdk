@@ -54,7 +54,7 @@ module Comments = Instagram_standalone_v25_comments
 
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it
-    ({!Meta_graph_paging.resolve_page_url}). *)
+    ({!Social_meta_graph_paging.resolve_page_url}). *)
 let paging_url_hosts = [ "graph.instagram.com" ]
 
 (** Profile type for standalone (Instagram Business Login) OAuth flow *)
@@ -227,9 +227,9 @@ module OAuth = struct
     } : credentials)
 
   (** Graph error body as an SDK error, through the table shared with the
-      Facebook and Threads packages ({!Meta_graph_error}). *)
+      Facebook and Threads packages ({!Social_meta_graph_error}). *)
   let parse_api_error ~status_code ~response_body =
-    Meta_graph_error.to_error
+    Social_meta_graph_error.to_error
       ~platform:Platform_types.Instagram
       ~status_code
       ~required_permissions:["instagram_content_publish"]
@@ -248,7 +248,7 @@ module OAuth = struct
         [ "access_token="; "access_token"; "client_secret"; "authorization" ]
     in
     let safe_err = if looks_sensitive then "[REDACTED_SENSITIVE_TEXT]" else err in
-    Meta_graph_error.transport_error safe_err
+    Social_meta_graph_error.transport_error safe_err
 
   (** Platform metadata for Instagram Standalone OAuth *)
   module Metadata = struct
@@ -2191,9 +2191,9 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
   (* Page URL of a comment edge: a checked [Page_url] as Meta returned it, or
      the request rebuilt from the id, fields and options. *)
   let comment_edge_uri ~edge ~id_name ~id ~fields ~limit position =
-    match (position : Meta_graph_paging.position) with
+    match (position : Social_meta_graph_paging.position) with
     | Page_url url ->
-        Meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts ~edge url
+        Social_meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts ~edge url
         |> Result.map_error invalid_input
     | First | After _ | Before _ ->
         if String.trim id = "" then Error (invalid_input (id_name ^ " must not be empty"))
@@ -2203,7 +2203,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
             @ (match limit with
                | Some n -> [ ("limit", [ string_of_int (max 1 (min 50 n)) ]) ]
                | None -> [])
-            @ Meta_graph_paging.cursor_query position
+            @ Social_meta_graph_paging.cursor_query position
           in
           Ok
             (Uri.of_string
@@ -2218,7 +2218,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
         get_comment_json ~uri ~access_token (function
           | Error err -> on_result (Error err)
           | Ok response -> (
-              match Meta_graph_paging.of_body ~item:Comments.parse_comment response.body with
+              match Social_meta_graph_paging.of_body ~item:Comments.parse_comment response.body with
               | Ok page -> on_result (Ok page)
               | Error msg -> on_result (Error (parse_failure edge msg))))
 
@@ -2228,7 +2228,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
 
       [limit] is clamped to 1..50 (Instagram returns at most 50).
       [position] takes a cursor or a [paging.next] URL on
-      [graph.instagram.com] (see {!Meta_graph_paging}); with [Page_url] the
+      [graph.instagram.com] (see {!Social_meta_graph_paging}); with [Page_url] the
       other options come from the URL. Further replies of a comment:
       {!get_comment_replies_page} with [~comment_id] and the cursor or
       [next_url] of its [replies] page.
@@ -2236,7 +2236,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
       @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media/comments>
       @see <https://developers.facebook.com/docs/instagram-platform/comment-moderation> *)
   let get_comments_page ~media_id ~access_token ?(replies_limit = 50)
-      ?(position = Meta_graph_paging.First) ?limit on_result =
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
     get_comment_edge_page ~edge:"comments" ~id_name:"media_id" ~id:media_id
       ~fields:(Comments.comment_fields ~replies_limit:(max 1 replies_limit))
       ~access_token ~limit position on_result
@@ -2248,7 +2248,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
 
       @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/replies> *)
   let get_comment_replies_page ~comment_id ~access_token
-      ?(position = Meta_graph_paging.First) ?limit on_result =
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
     get_comment_edge_page ~edge:"replies" ~id_name:"comment_id" ~id:comment_id
       ~fields:Comments.reply_fields ~access_token ~limit position on_result
 

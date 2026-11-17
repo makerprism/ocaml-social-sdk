@@ -197,17 +197,17 @@ module OAuth = struct
   (** PKCE helpers for OAuth 2.0 with Proof Key for Code Exchange *)
   module Pkce = struct
     (** Generate a code verifier: 128 base64url characters from 96 bytes of
-        the OS CSPRNG ({!Oauth_pkce.generate_verifier}).
+        the OS CSPRNG ({!Social_oauth_pkce.generate_verifier}).
 
         @raise Failure if the OS entropy source cannot be read
     *)
-    let generate_code_verifier () = Oauth_pkce.generate_verifier ~bytes:96 ()
+    let generate_code_verifier () = Social_oauth_pkce.generate_verifier ~bytes:96 ()
 
     (** Generate code_challenge from code_verifier using SHA256 (S256 method)
 
         code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
     *)
-    let generate_code_challenge = Oauth_pkce.challenge_s256
+    let generate_code_challenge = Social_oauth_pkce.challenge_s256
   end
   
   (** Generate authorization URL for Mastodon OAuth 2.0 flow
@@ -956,7 +956,7 @@ module Make (Config : CONFIG) = struct
       (Mastodon keeps idempotency keys for an hour) and be answered with an
       earlier status instead of being published. *)
   let generate_uuid () =
-    let bytes = Secure_random.bytes 16 in
+    let bytes = Social_secure_random.bytes 16 in
     let byte i = Char.code bytes.[i] in
     Printf.sprintf "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
       (byte 0) (byte 1) (byte 2) (byte 3)

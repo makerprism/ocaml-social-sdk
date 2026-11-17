@@ -5,9 +5,9 @@
 *)
 
 module Pkce = struct
-  let generate_verifier () = Oauth_pkce.generate_verifier ()
-  let generate_challenge = Oauth_pkce.challenge_s256
-  let challenge_method = Oauth_pkce.challenge_method
+  let generate_verifier () = Social_oauth_pkce.generate_verifier ()
+  let generate_challenge = Social_oauth_pkce.challenge_s256
+  let challenge_method = Social_oauth_pkce.challenge_method
 end
 
 module Endpoints = struct
