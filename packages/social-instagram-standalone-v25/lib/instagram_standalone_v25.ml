@@ -48,6 +48,15 @@ let long_lived_token_endpoint = graph_api_host ^ "/access_token"
 (** Long-lived token refresh ([ig_refresh_token]); unversioned. *)
 let refresh_endpoint = graph_api_host ^ "/refresh_access_token"
 
+(** Typed media comments and replies; see
+    {!Instagram_standalone_v25_comments}. *)
+module Comments = Instagram_standalone_v25_comments
+
+(** Hosts a [paging.next] / [paging.previous] URL may point at before a
+    reader sends the caller's token to it
+    ({!Meta_graph_paging.resolve_page_url}). *)
+let paging_url_hosts = [ "graph.instagram.com" ]
+
 (** Profile type for standalone (Instagram Business Login) OAuth flow *)
 type standalone_profile = {
   user_id: string;
@@ -2110,6 +2119,226 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_token -> get_permalink ~media_id ~access_token on_result)
       (fun err -> on_result (Error err))
+
+  (** {1 Comment moderation} *)
+
+  let invalid_input message =
+    Error_types.Validation_error [ Error_types.Invalid_url message ]
+
+  let parse_failure what msg =
+    Error_types.Internal_error (Printf.sprintf "Failed to parse %s response: %s" what msg)
+
+  let with_proof ~access_token params =
+    params
+    @ (match compute_app_secret_proof ~access_token with
+       | Some proof -> [ ("appsecret_proof", [ proof ]) ]
+       | None -> [])
+
+  let bearer access_token = [ ("Authorization", Printf.sprintf "Bearer %s" access_token) ]
+
+  (* GET an absolute URL: the token goes in the Authorization header, the
+     app secret proof (if configured) into the query. *)
+  let get_comment_json ~uri ~access_token on_result =
+    let uri = Uri.add_query_params uri (with_proof ~access_token []) in
+    Config.Http.get ~headers:(bearer access_token) (Uri.to_string uri)
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then on_result (Ok response)
+        else on_result (Error (api_error_of_response response)))
+      (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
+
+  let post_comment_form ~path ~access_token ~params on_result =
+    let proof =
+      match compute_app_secret_proof ~access_token with
+      | Some proof -> [ ("appsecret_proof", proof) ]
+      | None -> []
+    in
+    let body = Social_core.form_urlencode_kvs (params @ proof) in
+    let headers =
+      ("Content-Type", "application/x-www-form-urlencoded") :: bearer access_token
+    in
+    Config.Http.post ~headers ~body (Printf.sprintf "%s/%s" graph_api_base path)
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then on_result (Ok response)
+        else on_result (Error (api_error_of_response response)))
+      (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
+
+  (* Instagram answers hide and delete with {"success": true|false}. *)
+  let expect_success ~what (response : Social_core.response) =
+    match Yojson.Basic.from_string response.body with
+    | `Assoc fields -> (
+        match List.assoc_opt "success" fields with
+        | Some (`Bool true) -> Ok ()
+        | Some (`Bool false) ->
+            Error
+              (Error_types.Api_error
+                 { status_code = response.status;
+                   message = Printf.sprintf "Instagram did not %s" what;
+                   platform = Platform_types.Instagram;
+                   raw_response = Some response.body;
+                   request_id = None })
+        | Some _ | None -> Error (parse_failure what "no success flag"))
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Error (parse_failure what "expected a JSON object")
+    | exception Yojson.Json_error msg -> Error (parse_failure what msg)
+
+  let require_id ~name id on_result k =
+    if String.trim id = "" then
+      on_result (Error (invalid_input (name ^ " must not be empty")))
+    else k (Uri.pct_encode (String.trim id))
+
+  (* Page URL of a comment edge: a checked [Page_url] as Meta returned it, or
+     the request rebuilt from the id, fields and options. *)
+  let comment_edge_uri ~edge ~id_name ~id ~fields ~limit position =
+    match (position : Meta_graph_paging.position) with
+    | Page_url url ->
+        Meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts ~edge url
+        |> Result.map_error invalid_input
+    | First | After _ | Before _ ->
+        if String.trim id = "" then Error (invalid_input (id_name ^ " must not be empty"))
+        else
+          let params =
+            [ ("fields", [ fields ]) ]
+            @ (match limit with
+               | Some n -> [ ("limit", [ string_of_int (max 1 (min 50 n)) ]) ]
+               | None -> [])
+            @ Meta_graph_paging.cursor_query position
+          in
+          Ok
+            (Uri.of_string
+               (Printf.sprintf "%s/%s/%s?%s" graph_api_base
+                  (Uri.pct_encode (String.trim id)) edge (Uri.encoded_of_query params)))
+
+  let get_comment_edge_page ~edge ~id_name ~id ~fields ~access_token ~limit
+      position on_result =
+    match comment_edge_uri ~edge ~id_name ~id ~fields ~limit position with
+    | Error err -> on_result (Error err)
+    | Ok uri ->
+        get_comment_json ~uri ~access_token (function
+          | Error err -> on_result (Error err)
+          | Ok response -> (
+              match Meta_graph_paging.of_body ~item:Comments.parse_comment response.body with
+              | Ok page -> on_result (Ok page)
+              | Error msg -> on_result (Error (parse_failure edge msg))))
+
+  (** One page of top-level comments on a media object
+      ([GET /{media_id}/comments]), newest first, each with the first page of
+      its replies ([replies.limit(replies_limit)], default 50).
+
+      [limit] is clamped to 1..50 (Instagram returns at most 50).
+      [position] takes a cursor or a [paging.next] URL on
+      [graph.instagram.com] (see {!Meta_graph_paging}); with [Page_url] the
+      other options come from the URL. Further replies of a comment:
+      {!get_comment_replies_page} with [~comment_id] and the cursor or
+      [next_url] of its [replies] page.
+
+      @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media/comments>
+      @see <https://developers.facebook.com/docs/instagram-platform/comment-moderation> *)
+  let get_comments_page ~media_id ~access_token ?(replies_limit = 50)
+      ?(position = Meta_graph_paging.First) ?limit on_result =
+    get_comment_edge_page ~edge:"comments" ~id_name:"media_id" ~id:media_id
+      ~fields:(Comments.comment_fields ~replies_limit:(max 1 replies_limit))
+      ~access_token ~limit position on_result
+
+  (** One page of replies to a top-level comment
+      ([GET /{comment_id}/replies], fields {!Comments.reply_fields}).
+      [limit] and [position] as {!get_comments_page}; a [replies.paging.next]
+      URL from {!get_comments_page} is accepted as [Page_url].
+
+      @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/replies> *)
+  let get_comment_replies_page ~comment_id ~access_token
+      ?(position = Meta_graph_paging.First) ?limit on_result =
+    get_comment_edge_page ~edge:"replies" ~id_name:"comment_id" ~id:comment_id
+      ~fields:Comments.reply_fields ~access_token ~limit position on_result
+
+  (** Reply to a top-level comment ([POST /{comment_id}/replies] with
+      [message]); returns the new comment's id. Instagram adds a reply to a
+      reply to the top-level comment and rejects replies to hidden comments.
+
+      @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/replies> *)
+  let reply_to_comment ~comment_id ~access_token ~message on_result =
+    require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
+        post_comment_form ~path:(comment_id ^ "/replies") ~access_token
+          ~params:[ ("message", message) ]
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match Yojson.Basic.from_string response.body with
+                | `Assoc fields -> (
+                    match List.assoc_opt "id" fields with
+                    | Some (`String id) -> on_result (Ok id)
+                    | Some _ | None -> on_result (Error (parse_failure "reply" "no id")))
+                | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+                    on_result (Error (parse_failure "reply" "expected a JSON object"))
+                | exception Yojson.Json_error msg ->
+                    on_result (Error (parse_failure "reply" msg)))))
+
+  (** Hide ([hidden:true]) or unhide a comment on the account's media
+      ([POST /{comment_id}] with [hide]). Not supported on live video.
+
+      @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment> *)
+  let set_comment_hidden ~comment_id ~access_token ~hidden on_result =
+    require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
+        post_comment_form ~path:comment_id ~access_token
+          ~params:[ ("hide", string_of_bool hidden) ]
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response ->
+                on_result
+                  (expect_success
+                     ~what:(if hidden then "hide the comment" else "unhide the comment")
+                     response)))
+
+  (** Delete a comment on the account's media ([DELETE /{comment_id}]). Not
+      supported on live video.
+
+      @see <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment> *)
+  let delete_comment ~comment_id ~access_token on_result =
+    require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
+        let uri =
+          Uri.add_query_params
+            (Uri.of_string (Printf.sprintf "%s/%s" graph_api_base comment_id))
+            (with_proof ~access_token [])
+        in
+        Config.Http.delete ~headers:(bearer access_token) (Uri.to_string uri)
+          (fun response ->
+            update_rate_limits response;
+            if response.status >= 200 && response.status < 300 then
+              on_result (expect_success ~what:"delete the comment" response)
+            else on_result (Error (api_error_of_response response)))
+          (fun err -> on_result (Error (network_error_of_string (redact_transport_error err)))))
+
+  let with_account_token ~account_id on_result k =
+    ensure_valid_token ~account_id k (fun err -> on_result (Error err))
+
+  (** {!get_comments_page} using account credentials (auto-refreshes token) *)
+  let get_comments_page_for_account ~account_id ~media_id ?replies_limit ?position
+      ?limit on_result =
+    with_account_token ~account_id on_result (fun access_token ->
+        get_comments_page ~media_id ~access_token ?replies_limit ?position ?limit
+          on_result)
+
+  (** {!get_comment_replies_page} using account credentials *)
+  let get_comment_replies_page_for_account ~account_id ~comment_id ?position ?limit
+      on_result =
+    with_account_token ~account_id on_result (fun access_token ->
+        get_comment_replies_page ~comment_id ~access_token ?position ?limit on_result)
+
+  (** {!reply_to_comment} using account credentials *)
+  let reply_to_comment_for_account ~account_id ~comment_id ~message on_result =
+    with_account_token ~account_id on_result (fun access_token ->
+        reply_to_comment ~comment_id ~access_token ~message on_result)
+
+  (** {!set_comment_hidden} using account credentials *)
+  let set_comment_hidden_for_account ~account_id ~comment_id ~hidden on_result =
+    with_account_token ~account_id on_result (fun access_token ->
+        set_comment_hidden ~comment_id ~access_token ~hidden on_result)
+
+  (** {!delete_comment} using account credentials *)
+  let delete_comment_for_account ~account_id ~comment_id on_result =
+    with_account_token ~account_id on_result (fun access_token ->
+        delete_comment ~comment_id ~access_token on_result)
 
   (** Post Reel (short-form video) *)
   let post_reel ~account_id ~text ~video_url ?(alt_text=None) ?(share_to_feed=None) ?(cover_url=None) ?(thumb_offset=None) ?(audio_name=None) ?(collaborators=[]) ?location_id on_result =
