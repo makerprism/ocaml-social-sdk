@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transport failures are `Network_error`, not `Internal_error`** (same fix
+  as `social-facebook-graph-v25`). Every request that got no HTTP response
+  (connection refused, DNS, TLS, timeout) was reported as `Internal_error`,
+  which the error taxonomy reserves for SDK bugs. They are now
+  `Network_error (Connection_failed msg)`, built by the shared
+  `Meta_graph_error.transport_error`, and the message is redacted on every
+  path (some paths passed it through raw). Page-token recovery turned a failed
+  `/me/accounts` request into `Token_invalid` and, after exhausting the
+  candidates, recorded `token_revoked` on a healthy account during an outage;
+  it now stops on the network error and writes no health status. Behaviour
+  change for code that matched `Internal_error` on these paths; types are
+  unchanged.
 - **`OAuth.Make.get_user_pages` and `OAuth.Make.debug_token` percent-encode
   their tokens.** Both interpolated tokens into the query string raw. An app
   token is `app_id|app_secret`, and opaque tokens can contain `+`, `/`, `=` or

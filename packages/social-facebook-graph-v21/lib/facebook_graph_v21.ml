@@ -620,6 +620,13 @@ module Make (Config : CONFIG) = struct
            "authorization" ]
     then "[REDACTED_SENSITIVE_TEXT]"
     else text
+
+  (** A request that never got an HTTP response (connection refused, DNS,
+      TLS, timeout) is an outage: not an SDK bug ([Internal_error]) and not
+      evidence about the credentials. Consumers routing on the error
+      variant, and {!Health_status.of_error}, rely on this distinction. *)
+  let transport_error err =
+    Meta_graph_error.transport_error (redact_sensitive_text_if_needed err)
   
   (** {1 Rate Limiting} *)
   
@@ -741,7 +748,7 @@ module Make (Config : CONFIG) = struct
             ~response_body:response.body)))
       (fun err ->
         on_result
-          (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
+          (Error (transport_error err)))
   
   (** {1 Token Management} *)
   
@@ -849,7 +856,10 @@ module Make (Config : CONFIG) = struct
                   ~required_permissions:["pages_show_list"]
                   ~status_code:response.status
                   ~response_body:response.body))
-            (fun _ -> on_error_fetch (Error_types.Auth_error Error_types.Token_invalid))
+            (* No response is no evidence about the token. Reporting it as
+               Token_invalid sent a connectivity blip down the "every token
+               was rejected" path, which records token_revoked. *)
+            (fun err -> on_error_fetch (transport_error err))
         in
         let rec try_candidate_tokens ~stored_creds ~last_error = function
           | [] ->
@@ -991,8 +1001,7 @@ module Make (Config : CONFIG) = struct
                     ~status_code:response.status
                     ~response_body:response.body)))
               (fun err ->
-                on_result (Error (Error_types.Internal_error
-                  (redact_sensitive_text_if_needed err)))))
+                on_result (Error (transport_error err))))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
@@ -1087,12 +1096,12 @@ module Make (Config : CONFIG) = struct
                       ~required_permissions:["pages_manage_posts"]
                       ~status_code:response.status
                       ~response_body:response.body)))
-                (fun err -> on_result (Error (Error_types.Internal_error err))))
+                (fun err -> on_result (Error (transport_error err))))
         else
           on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to download image from %s (%d)" image_url image_response.status))))
       (fun err ->
         on_result
-          (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
+          (Error (transport_error err)))
   
   (** Upload video to Facebook Page as a Reel.
 
@@ -1129,7 +1138,7 @@ module Make (Config : CONFIG) = struct
             ~required_permissions:["pages_manage_posts"]
             ~status_code:response.status
             ~response_body:response.body))
-      (fun err -> on_error (Error_types.Internal_error err))
+      (fun err -> on_error (transport_error err))
 
 
   let upload_video_reel ~page_id ~page_access_token ~video_url ~description on_success on_error =
@@ -1232,12 +1241,12 @@ module Make (Config : CONFIG) = struct
                   ~required_permissions:["pages_manage_posts"]
                   ~status_code:response.status
                   ~response_body:response.body)))
-            (fun err -> on_result (Error (Error_types.Internal_error err)))
+            (fun err -> on_result (Error (transport_error err)))
         else
           on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to download image from %s (%d)" image_url image_response.status))))
       (fun err ->
         on_result
-          (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
+          (Error (transport_error err)))
   
   (** Post video story to Facebook Page
       
@@ -1344,13 +1353,13 @@ module Make (Config : CONFIG) = struct
                                 ~required_permissions:["pages_manage_posts"]
                                 ~status_code:finish_response.status
                                 ~response_body:finish_response.body)))
-                          (fun err -> on_result (Error (Error_types.Internal_error err)))
+                          (fun err -> on_result (Error (transport_error err)))
                       else
                         on_result (Error (parse_api_error_with_permissions
                           ~required_permissions:["pages_manage_posts"]
                           ~status_code:upload_response.status
                           ~response_body:upload_response.body)))
-                    (fun err -> on_result (Error (Error_types.Internal_error err)))
+                    (fun err -> on_result (Error (transport_error err)))
                 with e ->
                   on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse video story init response: %s" (Printexc.to_string e))))
               else
@@ -1358,12 +1367,12 @@ module Make (Config : CONFIG) = struct
                   ~required_permissions:["pages_manage_posts"]
                   ~status_code:init_response.status
                   ~response_body:init_response.body)))
-            (fun err -> on_result (Error (Error_types.Internal_error err)))
+            (fun err -> on_result (Error (transport_error err)))
         else
           on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to download video from %s (%d)" video_url video_response.status))))
       (fun err ->
         on_result
-          (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
+          (Error (transport_error err)))
   
   (** Post photo story to Facebook Page (high-level)
       
@@ -1583,7 +1592,7 @@ module Make (Config : CONFIG) = struct
                                 else
                                   on_result (Error_types.Failure parsed_error)))
                           (fun err ->
-                            let parsed_error = Error_types.Internal_error err in
+                            let parsed_error = transport_error err in
                             cleanup_uploaded_photos photo_ids (fun () ->
                               on_result (Error_types.Failure parsed_error))))
                   in
@@ -1965,7 +1974,7 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err ->
         on_result
-          (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
+          (Error (transport_error err)))
 
   let get_account_analytics_canonical ~id ~since ~until ~access_token on_result =
     let time_range =
@@ -2023,7 +2032,7 @@ module Make (Config : CONFIG) = struct
                   ~response_body:response.body)))
       (fun err ->
         on_result
-          (Error (Error_types.Internal_error (redact_sensitive_text_if_needed err))))
+          (Error (transport_error err)))
 
   let get_post_analytics_canonical ~post_id ~access_token on_result =
     get_post_analytics ~post_id ~access_token
@@ -2105,7 +2114,7 @@ module Make (Config : CONFIG) = struct
             ~required_permissions
             ~status_code:response.status
             ~response_body:response.body)))
-      (fun err -> on_result (Error (Error_types.Internal_error err)))
+      (fun err -> on_result (Error (transport_error err)))
   
   (** Generic DELETE request to any Graph API endpoint *)
   let delete ~path ~access_token ?required_permissions on_result =
@@ -2140,7 +2149,7 @@ module Make (Config : CONFIG) = struct
             ~required_permissions
             ~status_code:response.status
             ~response_body:response.body)))
-      (fun err -> on_result (Error (Error_types.Internal_error err)))
+      (fun err -> on_result (Error (transport_error err)))
   
   (** {1 Batch Requests} *)
   
@@ -2239,7 +2248,7 @@ module Make (Config : CONFIG) = struct
               ~required_permissions
               ~status_code:response.status
               ~response_body:response.body)))
-        (fun err -> on_result (Error (Error_types.Internal_error err)))
+        (fun err -> on_result (Error (transport_error err)))
 
   (** {1 Comment Management} *)
 

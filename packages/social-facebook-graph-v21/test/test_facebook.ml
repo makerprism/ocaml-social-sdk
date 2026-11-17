@@ -977,7 +977,7 @@ let test_analytics_network_error_redacts_query_token () =
     ~access_token:"secret_token_123"
     (fun result ->
       match result with
-      | Error (Error_types.Internal_error msg) ->
+      | Error (Error_types.Network_error (Error_types.Connection_failed msg)) ->
           if string_contains msg "secret_token_123" then
             failwith ("Token was not redacted: " ^ msg);
           if not (string_contains msg "REDACTED" || msg = "No mock response set") then
@@ -985,6 +985,27 @@ let test_analytics_network_error_redacts_query_token () =
           print_endline "✓ Analytics network error redacts query token"
       | Ok _ -> failwith "Expected network error"
       | Error err -> failwith ("Unexpected error: " ^ Error_types.error_to_string err))
+
+(** Test: generic POST and DELETE report transport failures as
+    [Network_error], not [Internal_error] (reserved for SDK bugs) *)
+let test_transport_failures_are_network_errors () =
+  let expect_network_error label = function
+    | Error (Error_types.Network_error (Error_types.Connection_failed msg)) ->
+        if string_contains msg "secret_token_123" then
+          failwith (label ^ ": token was not redacted: " ^ msg)
+    | Ok _ -> failwith (label ^ ": expected a network error")
+    | Error err ->
+        failwith (label ^ ": unexpected error: " ^ Error_types.error_to_string err)
+  in
+  Mock_config.reset ();
+  Mock_http.set_errors [ "Connection refused (access_token=secret_token_123)" ];
+  Facebook.post ~path:"123/feed" ~access_token:"secret_token_123"
+    ~params:[ ("message", "hi") ] (expect_network_error "post");
+  Mock_config.reset ();
+  Mock_http.set_errors [ "Connection refused" ];
+  Facebook.delete ~path:"123_456" ~access_token:"secret_token_123"
+    (expect_network_error "delete");
+  print_endline "✓ Transport failures are Network_error"
 
 (** Test: Version policy guard - analytics and OAuth both use v21 *)
 let test_graph_version_policy_guard () =
@@ -2849,6 +2870,7 @@ let () =
   test_post_analytics_parsing ();
   test_canonical_analytics_adapters ();
   test_analytics_network_error_redacts_query_token ();
+  test_transport_failures_are_network_errors ();
   test_graph_version_policy_guard ();
   
   print_endline "\n--- Alt-Text Tests ---";
