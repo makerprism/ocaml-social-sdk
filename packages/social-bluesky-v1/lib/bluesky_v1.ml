@@ -238,6 +238,10 @@ module type CONFIG = sig
   val resize_image : data:string -> mime_type:string -> max_bytes:int -> (string option -> unit) -> unit
 end
 
+(** A non-blocking wait in the consumer's runtime, e.g. with Lwt:
+    [fun ~seconds k _ -> Lwt.async (fun () -> Lwt.map k (Lwt_unix.sleep seconds))]. *)
+type sleep = seconds:float -> (unit -> unit) -> (string -> unit) -> unit
+
 (** Options that are not account- or storage-related.
 
     Kept out of {!CONFIG} so adding one never breaks an existing configuration:
@@ -249,11 +253,18 @@ end
     applied. A trailing slash is ignored. *)
 module type OPTIONS = sig
   val service_url : unit -> string
+
+  (** Wait [seconds], then continue (or report why the wait failed). Polling
+      Bluesky's video service needs it; the SDK never blocks a thread, so it
+      cannot wait without one. [None] uploads video with plain [uploadBlob]
+      (see {!Make_with_options.upload_blob}). *)
+  val sleep : sleep option
 end
 
-(** Defaults: the Bluesky-hosted entryway. *)
+(** Defaults: the Bluesky-hosted entryway, no sleep. *)
 module Default_options = struct
   let service_url () = Auth.Metadata.default_pds_url
+  let sleep : sleep option = None
 end
 
 (** Make functor with explicit {!OPTIONS} (e.g. a self-hosted PDS). *)
@@ -609,28 +620,89 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           on_error (Printf.sprintf "Session creation failed (%d): %s" response.status response.body))
       on_error
   
-  (** Video upload host *)
+  (** Video service host (uploadVideo, getJobStatus). *)
   let video_upload_host = "https://video.bsky.app"
+
+  (** Seconds between getJobStatus polls. Bluesky's own example polls every
+      second; processing a short clip takes several seconds to a minute. *)
+  let video_job_poll_interval_seconds = 2.0
+
+  (** Polls before giving up: 150 x 2 s = 5 minutes of processing. *)
+  let video_job_max_polls = 150
+
+  (** The [#atproto_pds] service endpoint of a DID document, as returned in
+      the [didDoc] of [createSession] / [getSession]. *)
+  let pds_endpoint_of_did_doc did_doc =
+    let field name = function
+      | `Assoc fields -> List.assoc_opt name fields
+      | _ -> None
+    in
+    match field "service" did_doc with
+    | Some (`List services) ->
+        List.find_map
+          (fun service ->
+            match field "id" service, field "serviceEndpoint" service with
+            | Some (`String id), Some (`String endpoint)
+              when String.ends_with ~suffix:"#atproto_pds" id ->
+                Some endpoint
+            | _ -> None)
+          services
+    | _ -> None
+
+  (** The PDS that hosts the session's repo, without a trailing slash.
+
+      A Bluesky-hosted account logs in through the [bsky.social] entryway but
+      lives on a PDS shard; video service auth must name that shard. Read from
+      the [didDoc] of [com.atproto.server.getSession]. Falls back to
+      {!service_url} (which already is the PDS for a self-hosted account) when
+      the session has no DID document or its endpoint is not a public https
+      URL: the endpoint is user-controlled and we send the access JWT there. *)
+  let resolve_pds_endpoint ~access_jwt on_done =
+    let fallback () = on_done (service_url ()) in
+    let url = Printf.sprintf "%s/xrpc/com.atproto.server.getSession" (service_url ()) in
+    Config.Http.get ~headers:[("Authorization", Printf.sprintf "Bearer %s" access_jwt)] url
+      (fun response ->
+        let did_doc =
+          if response.status >= 200 && response.status < 300 then
+            (try
+               match Yojson.Basic.from_string response.body with
+               | `Assoc fields -> List.assoc_opt "didDoc" fields
+               | _ -> None
+             with Yojson.Json_error _ -> None)
+          else None
+        in
+        match Option.bind did_doc pds_endpoint_of_did_doc with
+        | Some endpoint
+          when String.starts_with ~prefix:"https://" endpoint
+               && is_safe_remote_media_url endpoint ->
+            let len = String.length endpoint in
+            on_done
+              (if len > 0 && endpoint.[len - 1] = '/' then String.sub endpoint 0 (len - 1)
+               else endpoint)
+        | Some _ | None -> fallback ())
+      (fun _ -> fallback ())
 
   (** Get a service auth token for video upload
 
       Calls com.atproto.server.getServiceAuth with the user's PDS DID
       as the audience and the uploadBlob lexicon method.
 
-      Per the AT Protocol spec, the aud parameter should be the DID of the
-      user's PDS (e.g. did:web:bsky.social), NOT the video service DID.
-      The video service uses the resulting token to upload the processed
-      blob to the user's PDS on their behalf.
+      Per the AT Protocol docs, [aud] is the DID of the user's PDS
+      ([did:web:<pds host>]), NOT the video service DID: the video service
+      uses the token to store the processed blob on that PDS.
 
+      @param pds_endpoint The account's PDS (see {!resolve_pds_endpoint});
+             the request goes there and [aud] names its host. Default:
+             {!service_url}.
       @param access_jwt Current session JWT for authenticating the request
-      @param did The user's DID (unused; the PDS DID is derived from [service_url ()])
+      @param did The user's DID (unused; the audience comes from the PDS)
       @param on_success Receives the service auth token
       @param on_error Receives error message
   *)
-  let get_service_auth ~access_jwt ~did:_ on_success on_error =
-    (* aud = PDS DID derived from the configured PDS URL host *)
+  let get_service_auth ?pds_endpoint ~access_jwt ~did:_ on_success on_error =
+    let endpoint = Option.value pds_endpoint ~default:(service_url ()) in
     let pds_host =
-      match Uri.host (Uri.of_string (service_url ())) with
+      match Uri.host (Uri.of_string endpoint) with
       | Some h -> h
       | None -> "bsky.social"
     in
@@ -638,7 +710,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     let lxm = "com.atproto.repo.uploadBlob" in
     let exp_seconds = int_of_float (Unix.gettimeofday () +. 1800.0) in (* 30 minutes *)
     let url = Printf.sprintf "%s/xrpc/com.atproto.server.getServiceAuth?aud=%s&lxm=%s&exp=%d"
-      (service_url ()) (Uri.pct_encode aud) (Uri.pct_encode lxm) exp_seconds in
+      endpoint (Uri.pct_encode aud) (Uri.pct_encode lxm) exp_seconds in
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
     ] in
@@ -654,6 +726,50 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         else
           on_error (Printf.sprintf "Service auth request failed (%d): %s" response.status response.body))
       on_error
+
+  (** What an [app.bsky.video] job status says. *)
+  type video_job =
+    | Video_blob of Yojson.Basic.t  (** processed; the blob ref to embed *)
+    | Video_failed of string  (** [JOB_STATE_FAILED], with the reason *)
+    | Video_completed_without_blob
+    | Video_pending of string option  (** still processing; the job id if given *)
+
+  (** Read a [jobStatus] response, or a bare [{blob}] / error body. A blob
+      wins whatever the state or HTTP status: an already-processed video is
+      answered with an error ([already_exists]) that still carries the
+      earlier blob. *)
+  let video_job_of_json json =
+    let field name = function
+      | `Assoc fields ->
+          (match List.assoc_opt name fields with
+           | Some `Null | None -> None
+           | Some v -> Some v)
+      | _ -> None
+    in
+    let string_field name obj =
+      match field name obj with
+      | Some (`String v) -> Some v
+      | _ -> None
+    in
+    let job = Option.value (field "jobStatus" json) ~default:json in
+    match field "blob" json, field "blob" job with
+    | Some blob, _ | None, Some blob -> Video_blob blob
+    | None, None ->
+        let job_id =
+          match string_field "jobId" job with
+          | Some id -> Some id
+          | None -> string_field "jobId" json
+        in
+        (match string_field "state" job with
+         | Some "JOB_STATE_FAILED" ->
+             let reason =
+               [ string_field "failureCode" job; string_field "error" job;
+                 string_field "message" job ]
+               |> List.filter_map Fun.id |> String.concat ": "
+             in
+             Video_failed (if reason = "" then "no reason given" else reason)
+         | Some "JOB_STATE_COMPLETED" -> Video_completed_without_blob
+         | Some _ | None -> Video_pending job_id)
 
   (** Check if blob data looks like text/XML/HTML rather than binary media.
       Bluesky sniffs content and rejects non-media regardless of Content-Type header. *)
@@ -674,8 +790,21 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
 
   (** Upload blob to Bluesky with optional alt text
 
+      Images (and video, when {!OPTIONS.sleep} is [None]) go to the PDS via
+      [com.atproto.repo.uploadBlob]; Bluesky processes such a video only once
+      the post is in the firehose, so it shows as missing for a few seconds.
+
+      With a [sleep], video takes Bluesky's recommended path: a service token
+      for the account's PDS ({!resolve_pds_endpoint}, {!get_service_auth}),
+      [app.bsky.video.uploadVideo] on {!video_upload_host}, then
+      [getJobStatus] every {!video_job_poll_interval_seconds} until the
+      processed blob is ready (at most {!video_job_max_polls} polls). It
+      falls back to [uploadBlob] when no service token can be had or the
+      video service refuses the method or the token (401, 404, 405, 501,
+      [MethodNotFound]); a rejected video or a failed job is an error.
+
       @param access_jwt Session JWT for authentication
-      @param did Optional DID for video uploads (used to get service auth token)
+      @param did The user's DID; required for the video service path
       @param blob_data Raw binary data
       @param mime_type MIME type of the data
       @param alt_text Optional alt text for accessibility
@@ -691,178 +820,116 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         "Blob content appears to be text/markup, not binary media (declared MIME: %s). \
          The media URL likely returned an error page instead of an image." mime_type)
     else
-    let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-      ("Content-Type", mime_type);
-    ] in
-    let is_video = String.starts_with ~prefix:"video/" mime_type in
-    let non_null json key =
-      let open Yojson.Basic.Util in
-      let v = json |> member key in
-      if v = `Null then None else Some v
-    in
-    let parse_blob_from_json json =
-      match non_null json "blob" with
-      | Some blob -> Some blob
-      | None ->
-          (match non_null json "jobStatus" with
-           | Some job_status -> non_null job_status "blob"
-           | None -> None)
-    in
-    let parse_string_field json key =
-      let open Yojson.Basic.Util in
-      match non_null json key with
-      | Some v ->
-          (try Some (to_string v) with _ -> None)
-      | None -> None
-    in
-    let parse_job_id json =
-      match parse_string_field json "jobId" with
-      | Some id -> Some id
-      | None ->
-          (match non_null json "jobStatus" with
-           | Some job_status -> parse_string_field job_status "jobId"
-           | None -> None)
-    in
-    let parse_job_state json =
-      match parse_string_field json "state" with
-      | Some state -> Some state
-      | None ->
-          (match non_null json "jobStatus" with
-           | Some job_status -> parse_string_field job_status "state"
-           | None -> None)
+    let parse_json body =
+      try Some (Yojson.Basic.from_string body) with Yojson.Json_error _ -> None
     in
     let upload_via_blob () =
       let url = Printf.sprintf "%s/xrpc/com.atproto.repo.uploadBlob" (service_url ()) in
+      let headers = [
+        ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
+        ("Content-Type", mime_type);
+      ] in
       Config.Http.post ~headers ~body:blob_data url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
-            try
-              let json = Yojson.Basic.from_string response.body in
-              match parse_blob_from_json json with
-              | Some blob -> on_success (blob, alt_text)
-              | None -> on_error "Blob upload response missing blob field"
-            with e ->
-              on_error (Printf.sprintf "Failed to parse blob response: %s" (Printexc.to_string e))
+            match Option.map video_job_of_json (parse_json response.body) with
+            | Some (Video_blob blob) -> on_success (blob, alt_text)
+            | Some (Video_failed _ | Video_completed_without_blob | Video_pending _) ->
+                on_error "Blob upload response missing blob field"
+            | None -> on_error "Failed to parse blob response"
           else
             on_error (Printf.sprintf "Bluesky blob upload error (%d): %s" response.status response.body))
         on_error
     in
-    let rec poll_video_job job_id attempts_left =
-      if attempts_left <= 0 then
+    (* The job id is the capability here: Bluesky's own client polls
+       getJobStatus without credentials, so no token goes to this host. *)
+    let rec poll_video_job ~sleep job_id polls_left =
+      if polls_left <= 0 then
         on_error (Printf.sprintf "Video processing timeout waiting for job %s" job_id)
       else
-        (* Poll the video service directly for job status, matching the host
-           used for uploadVideo. The PDS can proxy this but direct is preferred. *)
-        let status_url = Printf.sprintf "%s/xrpc/app.bsky.video.getJobStatus?jobId=%s"
-          video_upload_host (Uri.pct_encode job_id) in
-        let should_retry_status status_code =
-          status_code = 429 || status_code >= 500
-        in
-        Config.Http.get ~headers:[("Authorization", Printf.sprintf "Bearer %s" access_jwt)] status_url
-          (fun response ->
-            if response.status >= 200 && response.status < 300 then
-              try
-                let json = Yojson.Basic.from_string response.body in
-                match parse_blob_from_json json with
-                | Some blob -> on_success (blob, alt_text)
-                | None ->
-                    let state = parse_job_state json |> Option.value ~default:"UNKNOWN" in
-                    let upper = String.uppercase_ascii state in
-                    let rec contains token i =
-                      let token_len = String.length token in
-                      if i + token_len > String.length upper then false
-                      else if String.sub upper i token_len = token then true
-                      else contains token (i + 1)
-                    in
-                    if contains "FAIL" 0 || contains "ERROR" 0 || contains "CANCEL" 0 then
-                      on_error (Printf.sprintf "Video processing failed (state=%s)" state)
-                    else if contains "COMPLETE" 0 || contains "DONE" 0 then
-                      on_error (Printf.sprintf "Video processing completed without blob (state=%s)" state)
+        sleep ~seconds:video_job_poll_interval_seconds
+          (fun () ->
+            let status_url = Printf.sprintf "%s/xrpc/app.bsky.video.getJobStatus?jobId=%s"
+              video_upload_host (Uri.pct_encode job_id) in
+            Config.Http.get status_url
+              (fun response ->
+                let ok = response.status >= 200 && response.status < 300 in
+                match Option.map video_job_of_json (parse_json response.body) with
+                | Some (Video_blob blob) -> on_success (blob, alt_text)
+                | Some (Video_failed reason) when ok ->
+                    on_error (Printf.sprintf "Video processing failed: %s" reason)
+                | Some Video_completed_without_blob when ok ->
+                    on_error "Video processing completed without blob"
+                | Some (Video_pending _) when ok -> poll_video_job ~sleep job_id (polls_left - 1)
+                | None when ok -> on_error "Failed to parse video job status"
+                | Some (Video_failed _ | Video_completed_without_blob | Video_pending _) | None ->
+                    if response.status = 429 || response.status >= 500 then
+                      poll_video_job ~sleep job_id (polls_left - 1)
                     else
-                      poll_video_job job_id (attempts_left - 1)
-              with e ->
-                on_error (Printf.sprintf "Failed to parse video job status: %s" (Printexc.to_string e))
-            else
-              if should_retry_status response.status then
-                poll_video_job job_id (attempts_left - 1)
-              else
-                on_error (Printf.sprintf "Video job status failed (%d): %s" response.status response.body))
-          (fun _ -> poll_video_job job_id (attempts_left - 1))
+                      on_error (Printf.sprintf "Video job status failed (%d): %s"
+                        response.status response.body))
+              (fun _ -> poll_video_job ~sleep job_id (polls_left - 1)))
+          (fun err -> on_error (Printf.sprintf "Video job wait failed: %s" err))
     in
-    let should_fallback_from_video_endpoint status_code response_body =
+    (* The video service is not there, or does not accept our service token
+       (e.g. a PDS whose audience we derived wrongly): uploadBlob still
+       publishes the video. *)
+    let video_service_unusable status_code response_body =
       let upper_body = String.uppercase_ascii response_body in
-      let contains token =
-        let token_len = String.length token in
-        let rec loop i =
-          if i + token_len > String.length upper_body then false
-          else if String.sub upper_body i token_len = token then true
-          else loop (i + 1)
-        in
-        loop 0
-      in
-      let method_unavailable_error =
-        status_code = 400
-        && (contains "METHODNOTFOUND"
-            || contains "METHOD_NOT_FOUND"
-            || contains "METHOD NOT FOUND"
-            || contains "UNKNOWNMETHOD"
-            || contains "NOTIMPLEMENTED")
-      in
-      status_code = 404
+      let mentions token = Re.execp (Re.str token |> Re.compile) upper_body in
+      status_code = 401
+      || status_code = 404
       || status_code = 405
       || status_code = 501
-      || method_unavailable_error
+      || (status_code = 400
+          && (mentions "METHODNOTFOUND"
+              || mentions "METHOD_NOT_FOUND"
+              || mentions "METHOD NOT FOUND"
+              || mentions "UNKNOWNMETHOD"
+              || mentions "NOTIMPLEMENTED"))
     in
-    let do_upload_video ~service_token ~user_did attempts_left =
-      let rec upload_via_video attempts_left =
-        let video_url = Printf.sprintf "%s/xrpc/app.bsky.video.uploadVideo?did=%s&name=video.mp4"
-          video_upload_host (Uri.pct_encode user_did) in
-        let video_headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" service_token);
-          ("Content-Type", mime_type);
-        ] in
-        Config.Http.post ~headers:video_headers ~body:blob_data video_url
-          (fun response ->
-            if response.status >= 200 && response.status < 300 then
-              try
-                let json = Yojson.Basic.from_string response.body in
-                match parse_blob_from_json json with
-                | Some blob -> on_success (blob, alt_text)
-                | None ->
-                    (match parse_job_id json with
-                     | Some job_id -> poll_video_job job_id 5
-                     | None -> on_error "Video upload response missing both blob and jobId")
-              with e -> on_error (Printf.sprintf "Failed to parse video upload response: %s" (Printexc.to_string e))
-            else
-              if should_fallback_from_video_endpoint response.status response.body then
+    let rec upload_via_video ~sleep ~service_token ~user_did attempts_left =
+      let video_url = Printf.sprintf "%s/xrpc/app.bsky.video.uploadVideo?did=%s&name=video.mp4"
+        video_upload_host (Uri.pct_encode user_did) in
+      let video_headers = [
+        ("Authorization", Printf.sprintf "Bearer %s" service_token);
+        ("Content-Type", mime_type);
+      ] in
+      Config.Http.post ~headers:video_headers ~body:blob_data video_url
+        (fun response ->
+          let ok = response.status >= 200 && response.status < 300 in
+          match Option.map video_job_of_json (parse_json response.body) with
+          | Some (Video_blob blob) -> on_success (blob, alt_text)
+          | Some (Video_pending (Some job_id)) ->
+              (* Fresh job, or [already_exists] naming the earlier one. *)
+              poll_video_job ~sleep job_id video_job_max_polls
+          | Some (Video_failed reason) when ok ->
+              on_error (Printf.sprintf "Video processing failed: %s" reason)
+          | Some (Video_completed_without_blob | Video_pending None) when ok ->
+              on_error "Video upload response missing both blob and jobId"
+          | None when ok -> on_error "Failed to parse video upload response"
+          | Some (Video_failed _ | Video_completed_without_blob | Video_pending None) | None ->
+              if video_service_unusable response.status response.body then
                 upload_via_blob ()
               else
                 on_error (Printf.sprintf "Video upload failed (%d): %s" response.status response.body))
-          (fun err ->
-            if attempts_left > 1 then
-              upload_via_video (attempts_left - 1)
-            else
-              on_error (Printf.sprintf "Video upload network error: %s" err))
-      in
-      upload_via_video attempts_left
+        (fun err ->
+          if attempts_left > 1 then
+            upload_via_video ~sleep ~service_token ~user_did (attempts_left - 1)
+          else
+            on_error (Printf.sprintf "Video upload network error: %s" err))
     in
-    if is_video then
-      match did with
-      | Some user_did ->
-          (* Get service auth token for video upload *)
-          get_service_auth ~access_jwt ~did:user_did
-            (fun service_token ->
-              do_upload_video ~service_token ~user_did 2)
-            (fun _err ->
-              (* Fall back to regular upload if service auth fails *)
-              do_upload_video ~service_token:access_jwt ~user_did 2)
-      | None ->
-          (* No DID available, use regular JWT with video host *)
-          do_upload_video ~service_token:access_jwt ~user_did:"unknown" 2
-    else
-      upload_via_blob ()
-  
+    let is_video = String.starts_with ~prefix:"video/" mime_type in
+    match is_video, Options.sleep, did with
+    | true, Some sleep, Some user_did ->
+        resolve_pds_endpoint ~access_jwt (fun pds_endpoint ->
+          get_service_auth ~pds_endpoint ~access_jwt ~did:user_did
+            (fun service_token -> upload_via_video ~sleep ~service_token ~user_did 2)
+            (fun _ ->
+              (* Never send the user's access JWT to the video service. *)
+              upload_via_blob ()))
+    | true, Some _, None | true, None, _ | false, _, _ -> upload_via_blob ()
+
   (** Extract OpenGraph meta tag content from HTML *)
   let extract_og_tag html property =
     (* Match: <meta property="og:title" content="..."> or <meta content="..." property="og:title"> *)

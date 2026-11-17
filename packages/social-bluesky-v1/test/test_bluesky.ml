@@ -734,8 +734,12 @@ module Mock_config = struct
     on_result None
 end
 
-(** Create Bluesky provider instance *)
-module Bluesky = Make(Mock_config)
+(** Create Bluesky provider instance. The sleep returns at once, so the
+    video service path (which only runs with a sleep) completes synchronously. *)
+module Bluesky = Make_with_options (Mock_config) (struct
+  include Default_options
+  let sleep = Some (fun ~seconds:_ on_continue _on_error -> on_continue ())
+end)
 
 (** Helper: Extract facets synchronously for testing *)
 let extract_facets_sync text =

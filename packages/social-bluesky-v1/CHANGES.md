@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OPTIONS.sleep`**: a non-blocking wait in the consumer's runtime
+  (`seconds:float -> (unit -> unit) -> (string -> unit) -> unit`).
+  `Default_options.sleep = None`.
+
 - **`reply_to_post ~reply_to`** replies to any post. `reply_to` is a
   `reply_ref` (`root` and `parent`, each a `strong_ref` of `uri` and `cid`);
   text, media, facets and link cards work as in `post_single`. Replying used
@@ -22,6 +26,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Video upload follows Bluesky's documented video-service flow, and works
+  without one.** Three defects meant the `video.bsky.app` path could only
+  succeed for a video the service had already processed:
+  - `getJobStatus` was polled 5 times back to back with no wait, so any real
+    processing (seconds to a minute) ended in "Video processing timeout".
+    With `Options.sleep` the SDK now waits
+    `video_job_poll_interval_seconds` (2 s) between polls, for at most
+    `video_job_max_polls` (150, i.e. 5 minutes).
+  - The service token's audience was `did:web:<service_url host>`
+    (`did:web:bsky.social`), but a Bluesky-hosted account lives on a PDS
+    shard and the video service stores the processed blob there. The
+    audience now comes from the `#atproto_pds` endpoint in the session's
+    DID document (`getSession`, `resolve_pds_endpoint`), and the token is
+    requested from that PDS, as Bluesky's own client does. A non-public or
+    non-https endpoint is ignored in favour of `service_url`.
+  - When service auth failed, the user's access JWT was sent to
+    `video.bsky.app` instead. It now falls back to `uploadBlob`, and job
+    polling sends no credentials at all.
+  Also: a blob in any response wins (an already-processed video is answered
+  with `already_exists` plus the earlier blob or job), job states are read
+  per the lexicon (`JOB_STATE_FAILED` reports `failureCode`/`error`), and a
+  401 from the video service (token refused) falls back to `uploadBlob` like
+  an unavailable method does.
+  **Behaviour change for `Make` without a sleep:** video now goes straight to
+  `uploadBlob` (Bluesky's documented "simple method"; the clip shows as
+  missing for a few seconds after posting) instead of the polling path that
+  could not wait. Pass a `sleep` to use the video service.
 - **Posts and quote posts name the session DID as `repo`.** They used the
   stored identifier, which can be a login email (valid for
   `createSession`, rejected as a record `repo`) or a handle the user has
