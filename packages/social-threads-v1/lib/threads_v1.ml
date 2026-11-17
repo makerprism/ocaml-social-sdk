@@ -360,6 +360,57 @@ module OAuth = struct
   let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
     authorize_url ~client_id ~redirect_uri ~state ~scopes:(List.map scope_to_string scopes) ()
 
+  (** A Threads user profile
+      ({{:https://developers.facebook.com/docs/threads/threads-profiles}}). *)
+  type profile = {
+    id : string;
+    username : string option;
+    name : string option;
+    profile_picture_url : string option;  (** [threads_profile_picture_url] *)
+    biography : string option;  (** [threads_biography] *)
+    is_verified : bool;
+  }
+
+  (** Every documented profile field. *)
+  let profile_fields =
+    [ "id"; "username"; "name"; "threads_profile_picture_url"; "threads_biography"; "is_verified" ]
+
+  (** Parses a [/me] or [/{user_id}] profile body. [Error] without an [id]
+      (string or number). Empty strings read as [None]. *)
+  let parse_profile body : (profile, string) Stdlib.result =
+    let text fields key =
+      match List.assoc_opt key fields with
+      | Some (`String "") | None -> None
+      | Some (`String value) -> Some value
+      | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) -> None
+    in
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("profile response is not JSON: " ^ message)
+    | `Assoc fields -> (
+        let id =
+          match List.assoc_opt "id" fields with
+          | Some (`String id) when id <> "" -> Some id
+          | Some (`Int id) -> Some (string_of_int id)
+          | Some (`String _ | `Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> None
+        in
+        match id with
+        | None -> Stdlib.Error "profile response has no id"
+        | Some id ->
+            Stdlib.Ok
+              {
+                id;
+                username = text fields "username";
+                name = text fields "name";
+                profile_picture_url = text fields "threads_profile_picture_url";
+                biography = text fields "threads_biography";
+                is_verified =
+                  (match List.assoc_opt "is_verified" fields with
+                   | Some (`Bool verified) -> verified
+                   | Some (`Null | `Int _ | `Float _ | `String _ | `List _ | `Assoc _) | None -> false);
+              })
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "profile response is not an object"
+
   module Make (Http : HTTP_CLIENT) = struct
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =
       let body =
@@ -444,6 +495,33 @@ module OAuth = struct
                   response.status
                   response_body))
         on_error
+
+    (** The profile of the token's user, [GET /me?fields=...]
+        ({{:https://developers.facebook.com/docs/threads/threads-profiles}}),
+        token-based so it works in an OAuth callback before an account is
+        stored. Needs [threads_basic].
+
+        @param fields Defaults to {!profile_fields}. Fields left out read as
+          [None] ([false] for [is_verified]); [id] is always requested. *)
+    let get_me ~access_token ?(fields = profile_fields) on_result =
+      let fields = if List.mem "id" fields then fields else "id" :: fields in
+      let query =
+        Uri.encoded_of_query
+          [ ("fields", [ String.concat "," fields ]); ("access_token", [ access_token ]) ]
+      in
+      let url = Printf.sprintf "%s/me?%s" threads_api_base query in
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_profile response.body with
+            | Stdlib.Ok profile -> on_result (Stdlib.Ok profile)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result
+              (Stdlib.Error
+                 (parse_api_error ~status_code:response.status ~headers:response.headers
+                    ~response_body:response.body)))
+        (fun err -> on_result (Stdlib.Error (network_error err)))
 
     (** Inspect a token with [GET /debug_token]
         ({{:https://developers.facebook.com/docs/threads/reference/debug}}):
