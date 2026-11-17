@@ -316,7 +316,144 @@ let test_refresh_rewrites_row_with_did () =
   | None -> fail "refresh: ensure_valid_token never completed");
   expect_refresh_row "refreshed row" !stored_credentials
 
+(* -- Replies and threads ------------------------------------------------------ *)
+
+let creates () =
+  List.filter
+    (fun r -> String.ends_with ~suffix:"com.atproto.repo.createRecord" r.url)
+    (sent ())
+
+let body_json request =
+  match request.body with
+  | Some body -> Yojson.Basic.from_string body
+  | None -> fail "%s had no body" request.url
+
+let reply_field request side field =
+  Yojson.Basic.Util.(
+    body_json request |> member "record" |> member "reply" |> member side
+    |> member field |> to_string)
+
+(** createRecord answers with post n for the n-th call; [fail_at] answers 500. *)
+let numbered_creates ?fail_at () =
+  responder :=
+    fun request ->
+      if String.ends_with ~suffix:"com.atproto.repo.createRecord" request.url then
+        let n = List.length (creates ()) in
+        if Some n = fail_at then
+          json_response ~status:500 {|{"error":"InternalServerError","message":"boom"}|}
+        else
+          json_response
+            (Printf.sprintf
+               {|{"uri":"at://did:plc:alice/app.bsky.feed.post/p%d","cid":"cid%d"}|} n n)
+      else default_responder request
+
+let root_ref = { Social_bluesky_v1.uri = "at://did:plc:bob/app.bsky.feed.post/root"; cid = "rootcid" }
+
+let parent_ref =
+  { Social_bluesky_v1.uri = "at://did:plc:carol/app.bsky.feed.post/parent"; cid = "parentcid" }
+
+let test_reply_to_post_request_shape () =
+  reset ();
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  numbered_creates ();
+  let result = ref None in
+  Default_bluesky.reply_to_post ~account_id:"acct"
+    ~reply_to:{ Social_bluesky_v1.root = root_ref; parent = parent_ref }
+    ~text:"thanks!" ~media_urls:[] ~skip_enrichments:true
+    (fun outcome -> result := Some outcome);
+  let post_id = expect_outcome_success "reply_to_post" !result in
+  assert (post_id = "at://did:plc:alice/app.bsky.feed.post/p1|cid1");
+  match creates () with
+  | [ create ] ->
+      assert (reply_field create "root" "uri" = root_ref.uri);
+      assert (reply_field create "root" "cid" = "rootcid");
+      assert (reply_field create "parent" "uri" = parent_ref.uri);
+      assert (reply_field create "parent" "cid" = "parentcid");
+      let json = body_json create in
+      (* The repo is the session DID, not the stored login identifier. *)
+      assert (Yojson.Basic.Util.(member "repo" json |> to_string) = "did:plc:alice");
+      assert (
+        Yojson.Basic.Util.(member "record" json |> member "text" |> to_string)
+        = "thanks!")
+  | _ -> fail "reply_to_post: expected exactly one createRecord"
+
+let test_post_thread_under_reply_to () =
+  reset ();
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  numbered_creates ();
+  let result = ref None in
+  Default_bluesky.post_thread ~account_id:"acct" ~texts:[ "two"; "three" ]
+    ~media_urls_per_post:[ []; [] ] ~skip_enrichments:true
+    ~reply_to:{ Social_bluesky_v1.root = root_ref; parent = parent_ref }
+    (fun outcome -> result := Some outcome);
+  let thread = expect_outcome_success "post_thread ~reply_to" !result in
+  assert (thread.Error_types.failed_at_index = None);
+  assert (
+    thread.Error_types.posted_ids
+    = [ "at://did:plc:alice/app.bsky.feed.post/p1|cid1";
+        "at://did:plc:alice/app.bsky.feed.post/p2|cid2" ]);
+  match creates () with
+  | [ first; second ] ->
+      assert (reply_field first "root" "uri" = root_ref.uri);
+      assert (reply_field first "parent" "uri" = parent_ref.uri);
+      assert (reply_field first "parent" "cid" = "parentcid");
+      assert (reply_field second "root" "uri" = root_ref.uri);
+      assert (reply_field second "root" "cid" = "rootcid");
+      assert (reply_field second "parent" "uri" = "at://did:plc:alice/app.bsky.feed.post/p1");
+      assert (reply_field second "parent" "cid" = "cid1")
+  | _ -> fail "post_thread ~reply_to: expected two createRecord calls"
+
+let test_post_thread_without_reply_to_starts_a_thread () =
+  reset ();
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  numbered_creates ();
+  let result = ref None in
+  Default_bluesky.post_thread ~account_id:"acct" ~texts:[ "one"; "two" ]
+    ~media_urls_per_post:[ []; [] ] ~skip_enrichments:true
+    (fun outcome -> result := Some outcome);
+  ignore (expect_outcome_success "post_thread" !result);
+  match creates () with
+  | [ first; second ] ->
+      assert (Yojson.Basic.Util.(body_json first |> member "record" |> member "reply") = `Null);
+      assert (reply_field second "root" "uri" = "at://did:plc:alice/app.bsky.feed.post/p1");
+      assert (reply_field second "parent" "uri" = "at://did:plc:alice/app.bsky.feed.post/p1")
+  | _ -> fail "post_thread: expected two createRecord calls"
+
+let test_post_thread_partial_failure_reports_index () =
+  reset ();
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  numbered_creates ~fail_at:2 ();
+  let result = ref None in
+  Default_bluesky.post_thread ~account_id:"acct" ~texts:[ "one"; "two"; "three" ]
+    ~media_urls_per_post:[ []; []; [] ] ~skip_enrichments:true
+    (fun outcome -> result := Some outcome);
+  match !result with
+  | Some (Error_types.Partial_success { result = thread; _ }) ->
+      assert (thread.Error_types.failed_at_index = Some 1);
+      assert (thread.Error_types.posted_ids = [ "at://did:plc:alice/app.bsky.feed.post/p1|cid1" ])
+  | Some (Error_types.Success _) -> fail "partial thread: expected Partial_success"
+  | Some (Error_types.Failure err) ->
+      fail "partial thread: got failure %s" (Error_types.error_to_string err)
+  | None -> fail "partial thread: never completed"
+
+let test_strong_ref_post_id_round_trip () =
+  let id = "at://did:plc:alice/app.bsky.feed.post/p1|cid1" in
+  (match Social_bluesky_v1.strong_ref_of_post_id id with
+  | Some ref_ ->
+      assert (ref_.Social_bluesky_v1.uri = "at://did:plc:alice/app.bsky.feed.post/p1");
+      assert (ref_.Social_bluesky_v1.cid = "cid1");
+      assert (Social_bluesky_v1.post_id_of_strong_ref ref_ = id)
+  | None -> fail "strong_ref_of_post_id rejected a valid id");
+  assert (Social_bluesky_v1.strong_ref_of_post_id "at://no-cid" = None);
+  assert (Social_bluesky_v1.strong_ref_of_post_id "at://x|" = None);
+  assert (Social_bluesky_v1.strong_ref_of_post_id "a|b|c" = None)
+
 let () =
+  test_reply_to_post_request_shape ();
+  test_post_thread_under_reply_to ();
+  test_post_thread_without_reply_to_starts_a_thread ();
+  test_post_thread_partial_failure_reports_index ();
+  test_strong_ref_post_id_round_trip ();
   test_session_to_refresh_credentials_never_stores_password ();
   test_legacy_app_password_row_is_rotated ();
   test_refresh_rewrites_row_with_did ();

@@ -205,6 +205,28 @@ Bluesky.post_thread
         Printf.printf "Error: %s\n" (Social_core.Error_types.error_to_string err))
 ```
 
+### Replying to a Post
+
+```ocaml
+(* root = first post of the thread, parent = the post you answer.
+   For a top-level post both are that post. *)
+let target = { Social_bluesky_v1.uri = "at://did:plc:xyz/app.bsky.feed.post/abc"; cid = "bafy..." } in
+Bluesky.reply_to_post
+  ~account_id:"my_account"
+  ~reply_to:{ Social_bluesky_v1.root = target; parent = target }
+  ~text:"Thanks!"
+  ~media_urls:[]
+  (fun outcome -> ...)
+
+(* Post a thread as a reply, or resume a failed thread: the first post
+   attaches under reply_to, the rest chain under it. *)
+Bluesky.post_thread ~account_id:"my_account" ~reply_to:{ root; parent = last_posted }
+  ~texts:remaining_texts ~media_urls_per_post:remaining_media (fun outcome -> ...)
+```
+
+`post_single`, `reply_to_post` and `post_thread` return ids as `"uri|cid"`;
+`Social_bluesky_v1.strong_ref_of_post_id` parses one into a `strong_ref`.
+
 ### Deleting a Post
 
 ```ocaml
