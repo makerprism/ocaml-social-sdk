@@ -23,3 +23,13 @@
   re
   uri
   unix))
+
+(test
+ (name test_bluesky_reads_contract)
+ (modules test_bluesky_reads_contract)
+ (libraries
+  social-core
+  social-bluesky-v1
+  yojson
+  str
+  uri))

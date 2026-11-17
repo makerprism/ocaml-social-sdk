@@ -26,6 +26,7 @@ Bluesky AT Protocol v1 client for OCaml.
 - ✅ Follow/unfollow users
 
 ### Read Operations
+- ⚠️ Typed reads (`Views`, `Reads.Make`, `*_view` / `*_page` wrappers): post thread with `depth` / `parentHeight`, author feed with `filter`, `getPosts` in batches of 25, notifications with `reasons`, `resolveHandle`
 - ✅ Get post thread
 - ✅ Get user profile (by handle or DID)
 - ✅ Get timeline
@@ -496,6 +497,40 @@ Bluesky.unblock_actor
   (function
     | Ok () -> Printf.printf "Unblocked\n"
     | Error err -> Printf.printf "Error: %s\n" (Social_core.Error_types.error_to_string err))
+```
+
+### Typed Reads
+
+`Social_bluesky_v1.Views` holds typed post, thread, feed and notification
+views. `Reads.Make (Http)` sends the calls to any service URL, with or
+without a session; `Make_with_options` has account-bound versions
+(`get_post_thread_view`, `get_author_feed_page`, `get_posts`,
+`list_notifications_page`) that use the configured PDS.
+
+```ocaml
+module Reads = Social_bluesky_v1.Reads.Make (Social_lwt.Cohttp_client.Make)
+module V = Social_bluesky_v1.Views
+
+(* Whole conversation under a post: the default depth (6) truncates it *)
+let rec count_replies = function
+  | V.Post { V.replies; _ } -> List.fold_left (fun n r -> n + 1 + count_replies r) 0 replies
+  | V.Not_found_post _ | V.Blocked_post _ | V.Unknown_post _ -> 0
+
+let () =
+  Reads.get_post_thread ~service_url:Social_bluesky_v1.Reads.public_api_url
+    ~post_uri:"at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3l6oveex3ii2l"
+    ~depth:100 ~parent_height:0
+    (function
+      | Ok thread -> Printf.printf "%d replies\n" (count_replies thread)
+      | Error err -> prerr_endline (Error_types.error_to_string err))
+
+(* Replies and mentions since the last page *)
+let () =
+  Reads.list_notifications ~service_url:"https://bsky.social" ~access_jwt
+    ~reasons:[ V.Reply; V.Mention ] ?cursor:last_cursor
+    (function
+      | Ok page -> (* page.notifications, page.cursor *) ignore page
+      | Error _ -> ())
 ```
 
 ## Examples

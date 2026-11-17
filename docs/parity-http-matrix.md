@@ -5,7 +5,7 @@ Scope: current implementation in `packages/social-*/lib/*.ml` and contract-style
 Interpretation:
 - This document tracks endpoint/request-shape parity and contract-test coverage.
 - It does not imply production hardening; align with the root `README.md` status legend (`⚠️` = implemented + automated tests, limited production validation).
-- Current matrix coverage is partial and focuses on: Facebook, Instagram, Threads, Pinterest, LinkedIn, TikTok, Twitter v2, YouTube, and the typed Mastodon reads.
+- Current matrix coverage is partial and focuses on: Facebook, Instagram, Threads, Pinterest, LinkedIn, TikTok, Twitter v2, YouTube, and the typed Mastodon and Bluesky reads.
 
 ## Facebook
 
@@ -168,3 +168,20 @@ Known subtle bug traps:
 - A 404 from these reads is `Resource_not_found`; the older untyped readers (`Make.get_status`, `lookup_account_by_acct`) still report it as `Api_error`.
 - Notification and status ids are only ordered within one instance; page with the `Link` cursors rather than comparing ids across instances.
 - `webfinger` fetches a domain taken from user input; consumers must reject private and loopback hosts first.
+
+## Bluesky
+
+Rows describe the typed reads in `social-bluesky-v1` (`Reads.Make (Http)`; the `Make_with_options` wrappers send the same requests to the configured `service_url` with the account's session). `{service}` is a PDS, or `https://public.api.bsky.app` for unauthenticated reads.
+
+| Capability | Method | Path/query contract | Required headers | Payload shape | SDK function(s) | Contract test name(s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Post thread | GET | `{service}/xrpc/app.bsky.feed.getPostThread?uri&depth&parentHeight` | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_post_thread`, `get_post_thread_view` | `test_post_thread`, `test_post_thread_parent_chain_and_defaults`, `test_post_thread_errors` |
+| Author feed | GET | `{service}/xrpc/app.bsky.feed.getAuthorFeed?actor&limit&cursor&filter&includePins` | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_author_feed`, `get_author_feed_page` | `test_author_feed` |
+| Posts by URI | GET | `{service}/xrpc/app.bsky.feed.getPosts?uris=..&uris=..` (at most 25 per call; longer lists are split) | `Authorization: Bearer <accessJwt>` when given | none | `Reads.get_posts`, `get_posts` | `test_get_posts_batches` |
+| Notifications | GET | `{service}/xrpc/app.bsky.notification.listNotifications?limit&cursor&reasons=..&reasons=..` | `Authorization: Bearer <accessJwt>` | none | `Reads.list_notifications`, `list_notifications_page` | `test_list_notifications` |
+| Resolve handle | GET | `{service}/xrpc/com.atproto.identity.resolveHandle?handle` | none | none | `Reads.resolve_handle` | `test_resolve_handle` |
+
+Known subtle bug traps:
+- XRPC array parameters repeat the key (`uris=a&uris=b`); `Uri.with_query` with a value list would send `uris=a,b`.
+- `getPostThread` defaults to `depth=6`, which cuts long conversations off; a thread node at the cut has no `replies` even when `replyCount` is positive.
+- A deleted thread root is HTTP 400 `NotFound` (`Resource_not_found`), not 404.
