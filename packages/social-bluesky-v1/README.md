@@ -124,6 +124,29 @@ Bluesky.post_single
         Printf.printf "Error: %s\n" (Social_core.Error_types.error_to_string err))
 ```
 
+### Self-hosted PDS
+
+`Make` talks to `https://bsky.social`. For an account on another PDS (or a
+local mock server), pass options. `service_url` is read on every call, so it
+can come from configuration loaded after the functor is applied.
+
+```ocaml
+module My_options = struct
+  include Social_bluesky_v1.Default_options  (* future options keep defaults *)
+  let service_url () = "https://pds.example.org"
+end
+
+module Bluesky = Social_bluesky_v1.Make_with_options (My_config) (My_options)
+```
+
+### Errors
+
+XRPC errors are mapped by their atproto error name first: `ExpiredToken` and
+`InvalidToken` become `Auth_error`, `NotFound` and `RecordNotFound` become
+`Resource_not_found`. Other failures map by HTTP status (401 `Auth_error`,
+429 `Rate_limited`, otherwise `Api_error`). `atproto_error_name` exposes the
+raw name for anything finer.
+
 ### With Validation
 
 ```ocaml
