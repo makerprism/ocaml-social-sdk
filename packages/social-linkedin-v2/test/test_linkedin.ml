@@ -6134,7 +6134,44 @@ let test_ltf_annotation_with_bracket_in_name () =
   print_endline "✓ LTF escapes parens inside an annotation name"
 
 (** Run all tests *)
+module Linkedin_oauth = Social_linkedin_v2.OAuth.Make (Mock_http)
+
+let test_oauth_get_userinfo () =
+  Mock_http.reset ();
+  Mock_http.set_response
+    { Social_core.status = 200;
+      body = {|{"sub":"782bbtaQ","name":"John Doe","given_name":"John","family_name":"Doe",
+               "picture":"https://media.licdn.com/x","locale":{"country":"US","language":"en"},
+               "email":"doe@email.com","email_verified":true}|};
+      headers = [] };
+  Linkedin_oauth.get_userinfo ~access_token:"tok" (function
+    | Stdlib.Ok profile ->
+        assert (profile.Social_linkedin_v2.sub = "782bbtaQ");
+        assert (profile.name = Some "John Doe");
+        assert (profile.locale = Some "en-US");
+        assert (profile.email_verified = Some true);
+        (match !Mock_http.requests with
+         | [ ("GET", url, headers, _) ] ->
+             assert (url = "https://api.linkedin.com/v2/userinfo");
+             assert (List.assoc_opt "Authorization" headers = Some "Bearer tok")
+         | _ -> failwith "expected one GET")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  (match Social_linkedin_v2.parse_userinfo {|{"sub":"a","locale":"en-US"}|} with
+   | Stdlib.Ok profile -> assert (profile.locale = Some "en-US" && profile.email = None)
+   | Stdlib.Error message -> failwith message);
+  assert (Result.is_error (Social_linkedin_v2.parse_userinfo {|{"name":"x"}|}));
+  Mock_http.reset ();
+  Mock_http.set_response
+    { Social_core.status = 403; body = {|{"message":"Not enough permissions","status":403}|}; headers = [] };
+  Linkedin_oauth.get_userinfo ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Auth_error
+                      (Error_types.Insufficient_permissions { required; _ })) ->
+        assert (required = [ "openid"; "profile" ])
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Insufficient_permissions");
+  print_endline "✓ OAuth.get_userinfo reads the OIDC profile before an account exists"
+
 let () =
+  test_oauth_get_userinfo ();
   print_endline "\n=== LinkedIn Provider Tests ===\n";
   
   print_endline "--- OAuth Flow Tests ---";

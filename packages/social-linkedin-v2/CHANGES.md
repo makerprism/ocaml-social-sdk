@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.Make(Http).get_userinfo ~access_token`**: token-based `GET /v2/userinfo` (OpenID Connect) returning `profile_info`, for OAuth callbacks before an account is stored. Errors: 401 `Token_expired`, 403 `Insufficient_permissions ["openid"; "profile"]`, 429 `Rate_limited`, else `Api_error` with the body. Pure `parse_userinfo` and `userinfo_error` are exported.
+
 - `post_single` / `post_thread` take `?link_preview` (default `true`, the
   existing behaviour). With `~link_preview:false` a text-only post sends no
   `article` content block, so no link card is generated from the first URL.
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `social-core/CHANGES.md` for the breaking variant change.
 
 ### Fixed
+
+- `Make.get_profile` parses with `parse_userinfo`: a `locale` sent as `{"language","country"}` is read as `"en-US"` instead of failing the whole profile with `Internal_error`, and a member of an unexpected type reads as `None`. `profile_info` moved above `OAuth` in the module (same name and fields).
 
 - Article payloads (`content.article`) now include the required `title` field.
   LinkedIn's `/rest/posts` endpoint rejects articles without a title (HTTP 422,

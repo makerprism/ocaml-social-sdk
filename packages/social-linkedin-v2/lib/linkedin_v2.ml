@@ -100,6 +100,84 @@ let escape_little_text_format text =
       (escape_ltf_segment (String.sub text !pos (String.length text - !pos)));
   Buffer.contents buf
 
+(** Profile information from userinfo endpoint (OpenID Connect) *)
+type profile_info = {
+  sub: string;                    (** Subject identifier (user ID) *)
+  name: string option;            (** User's full name *)
+  given_name: string option;      (** First name *)
+  family_name: string option;     (** Last name *)
+  picture: string option;         (** Profile picture URL *)
+  email: string option;           (** Email address *)
+  email_verified: bool option;    (** Email verification status *)
+  locale: string option;
+      (** User's locale, e.g. ["en-US"]. Documented as a string; an object
+          [{"language": "en", "country": "US"}] is read as ["en-US"]. *)
+}
+
+(** Parses a [GET /v2/userinfo] body
+    ({{:https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2}}:
+    [sub], [name], [given_name], [family_name], [picture], [locale],
+    optional [email] / [email_verified]). [Error] without a non-empty
+    [sub]. A member of an unexpected type reads as [None] instead of
+    failing the whole profile. *)
+let parse_userinfo body : (profile_info, string) Stdlib.result =
+  match Yojson.Basic.from_string body with
+  | exception Yojson.Json_error message -> Stdlib.Error ("userinfo response is not JSON: " ^ message)
+  | `Assoc fields -> (
+      let text_of = function
+        | Some (`String value) when String.trim value <> "" -> Some value
+        | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+      in
+      let text key = text_of (List.assoc_opt key fields) in
+      let locale =
+        match List.assoc_opt "locale" fields with
+        | Some (`Assoc parts) -> (
+            match text_of (List.assoc_opt "language" parts), text_of (List.assoc_opt "country" parts) with
+            | Some language, Some country -> Some (language ^ "-" ^ country)
+            | Some language, None -> Some language
+            | None, (Some _ | None) -> None)
+        | (Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _) | None) as value -> text_of value
+      in
+      match text "sub" with
+      | None -> Stdlib.Error "userinfo response has no sub"
+      | Some sub ->
+          Stdlib.Ok
+            { sub;
+              name = text "name";
+              given_name = text "given_name";
+              family_name = text "family_name";
+              picture = text "picture";
+              email = text "email";
+              email_verified =
+                (match List.assoc_opt "email_verified" fields with
+                 | Some (`Bool verified) -> Some verified
+                 | Some (`Null | `Int _ | `Float _ | `String _ | `List _ | `Assoc _) | None -> None);
+              locale })
+  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> Stdlib.Error "userinfo response is not an object"
+
+(** The SDK error for a failed userinfo read, with the package's usual
+    mapping: 401 [Token_expired], 403 [Insufficient_permissions [openid;
+    profile]], 429 [Rate_limited], otherwise [Api_error] with the body. *)
+let userinfo_error ~status_code body =
+  let message =
+    match Yojson.Basic.from_string body with
+    | `Assoc fields -> (
+        match List.assoc_opt "message" fields with
+        | Some (`String message) -> Some message
+        | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None)
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+    | exception Yojson.Json_error _ -> None
+  in
+  match status_code with
+  | 401 -> Error_types.Auth_error Error_types.Token_expired
+  | 403 ->
+      Error_types.Auth_error
+        (Error_types.Insufficient_permissions { required = [ "openid"; "profile" ]; platform_message = message })
+  | 429 -> Error_types.make_rate_limited ()
+  | _ ->
+      Error_types.make_api_error ~platform:Platform_types.LinkedIn ~status_code
+        ~message:(Option.value message ~default:"API error") ~raw_response:body ()
+
 (** OAuth 2.0 module for LinkedIn
     
     LinkedIn uses standard OAuth 2.0 WITHOUT PKCE support.
@@ -443,6 +521,21 @@ module OAuth = struct
             in
             on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status error_msg))
         on_error
+
+    (** The OpenID Connect profile of a token, [GET /v2/userinfo], before
+        any account is stored (OAuth callback). Needs [openid] and
+        [profile]; [email] also needs [email]. *)
+    let get_userinfo ~access_token on_result =
+      Http.get
+        ~headers:[ ("Authorization", "Bearer " ^ access_token) ]
+        "https://api.linkedin.com/v2/userinfo"
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_userinfo response.body with
+            | Stdlib.Ok profile -> on_result (Stdlib.Ok profile)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else on_result (Stdlib.Error (userinfo_error ~status_code:response.status response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
   end
 end
 
@@ -460,18 +553,6 @@ type 'a collection_response = {
   elements: 'a list;         (** List of entities in this page *)
   paging: paging option;      (** Paging metadata *)
   metadata: Yojson.Basic.t option; (** Optional response metadata *)
-}
-
-(** Profile information from userinfo endpoint (OpenID Connect) *)
-type profile_info = {
-  sub: string;                    (** Subject identifier (user ID) *)
-  name: string option;            (** User's full name *)
-  given_name: string option;      (** First name *)
-  family_name: string option;     (** Last name *)
-  picture: string option;         (** Profile picture URL *)
-  email: string option;           (** Email address *)
-  email_verified: bool option;    (** Email verification status *)
-  locale: string option;          (** User's locale *)
 }
 
 (** Post/share information *)
@@ -1833,22 +1914,10 @@ module Make (Config : CONFIG) = struct
         Config.Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
-              try
-                let json = Yojson.Basic.from_string response.body in
-                let open Yojson.Basic.Util in
-                let profile = {
-                  sub = json |> member "sub" |> to_string;
-                  name = json |> member "name" |> to_string_option;
-                  given_name = json |> member "given_name" |> to_string_option;
-                  family_name = json |> member "family_name" |> to_string_option;
-                  picture = json |> member "picture" |> to_string_option;
-                  email = json |> member "email" |> to_string_option;
-                  email_verified = json |> member "email_verified" |> to_bool_option;
-                  locale = json |> member "locale" |> to_string_option;
-                } in
-                on_result (Ok profile)
-              with e ->
-                on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse profile: %s" (Printexc.to_string e))))
+              (match parse_userinfo response.body with
+               | Stdlib.Ok profile -> on_result (Ok profile)
+               | Stdlib.Error message ->
+                   on_result (Error (Error_types.Internal_error ("Failed to parse profile: " ^ message))))
             else
               on_result (Error (parse_api_error ~required_scopes:["openid"; "profile"] ~status_code:response.status ~body:response.body)))
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
