@@ -38,37 +38,11 @@ let oauth_authorize_url = "https://threads.net/oauth/authorize"
 (** Authorization-code exchange endpoint. *)
 let token_endpoint = graph_api_host ^ "/oauth/access_token"
 
-let parse_expires_in json =
-  let normalize_expires_in seconds =
-    if seconds < 0 then 0 else if seconds > 31536000 then 31536000 else seconds
-  in
-  let normalize_expires_in_float value =
-    match classify_float value with
-    | FP_nan -> None
-    | FP_infinite ->
-        if value > 0.0 then Some 31536000 else Some 0
-    | FP_zero | FP_normal | FP_subnormal ->
-        let normalized_value = if value > 0.0 then ceil value else value in
-        Some (normalize_expires_in (int_of_float normalized_value))
-  in
-  let open Yojson.Basic.Util in
-  try Some (json |> member "expires_in" |> to_int |> normalize_expires_in)
-  with _ ->
-    try
-      json
-      |> member "expires_in"
-      |> to_float
-      |> normalize_expires_in_float
-    with _ -> None
+(* [Token_expiry] clamps to one year and also accepts a numeric string. *)
+let parse_expires_in json = Token_expiry.expires_in_of_json json
 
 let expires_at_of_expires_in expires_in =
-  match expires_in with
-  | None -> None
-  | Some seconds ->
-      let now = Ptime_clock.now () in
-      (match Ptime.add_span now (Ptime.Span.of_int_s seconds) with
-       | Some expiry -> Some (Ptime.to_rfc3339 expiry)
-       | None -> None)
+  Option.bind expires_in (fun seconds -> Token_expiry.expires_at_of_expires_in seconds)
 
 let parse_credentials_from_json json =
   let open Yojson.Basic.Util in

@@ -32,3 +32,13 @@
  (name test_provider_error_detail)
  (modules test_provider_error_detail)
  (libraries social-core))
+
+(test
+ (name test_oauth_scope)
+ (modules test_oauth_scope)
+ (libraries social-core))
+
+(test
+ (name test_token_expiry)
+ (modules test_token_expiry)
+ (libraries social-core yojson ptime))
