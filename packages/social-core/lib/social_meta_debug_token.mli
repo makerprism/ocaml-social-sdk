@@ -68,7 +68,7 @@ val of_body : string -> (t, string) result
 (** {!of_json} on a response body; [Error] for a body that is not JSON. *)
 
 val expires_at_rfc3339 : t -> string option
-(** The [expires_at] instant as RFC 3339 ({!Token_expiry} format); [None]
+(** The [expires_at] instant as RFC 3339 ({!Social_token_expiry} format); [None]
     when absent or {!Never_expires}. *)
 
 val target_ids : scope:string -> t -> string list option

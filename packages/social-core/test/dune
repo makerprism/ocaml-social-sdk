@@ -34,18 +34,18 @@
  (libraries social-core))
 
 (test
- (name test_oauth_scope)
- (modules test_oauth_scope)
+ (name test_social_oauth_scope)
+ (modules test_social_oauth_scope)
  (libraries social-core))
 
 (test
- (name test_token_expiry)
- (modules test_token_expiry)
+ (name test_social_token_expiry)
+ (modules test_social_token_expiry)
  (libraries social-core yojson ptime))
 
 (test
- (name test_meta_debug_token)
- (modules test_meta_debug_token)
+ (name test_social_meta_debug_token)
+ (modules test_social_meta_debug_token)
  (libraries social-core))
 
 (test

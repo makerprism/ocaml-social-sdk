@@ -127,12 +127,12 @@ let expires_at_rfc3339 t =
 let target_ids ~scope t =
   List.find_map
     (fun (entry : granular_scope) ->
-      if Oauth_scope.equal entry.scope scope then Some entry.target_ids else None)
+      if Social_oauth_scope.equal entry.scope scope then Some entry.target_ids else None)
     t.granular_scopes
   |> Option.join
 
 let granted_for_target ~target_id ~scope t =
-  Oauth_scope.mem scope t.scopes
+  Social_oauth_scope.mem scope t.scopes
   &&
   match target_ids ~scope t with
   | None -> true

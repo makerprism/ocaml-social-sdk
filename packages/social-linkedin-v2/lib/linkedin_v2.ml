@@ -858,7 +858,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    Token_expiry.is_expired ~buffer_seconds expires_at_opt
+    Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
   
   (** {1 Platform Constants} *)
   

@@ -4835,7 +4835,7 @@ let test_debug_token_info () =
                  "expires_at":1767225600,"scopes":["threads_basic","threads_read_replies"],
                  "user_id":"1784"}}|};
         headers = [] } ];
-  let app_access_token = Meta_debug_token.threads_app_access_token ~app_id:"99" ~app_secret:"s&cret" in
+  let app_access_token = Social_meta_debug_token.threads_app_access_token ~app_id:"99" ~app_secret:"s&cret" in
   OAuth_http.debug_token_info ~app_access_token ~input_token:"THtok+/=" (function
     | Ok info ->
         (match !Mock_http.requests with
@@ -4844,10 +4844,10 @@ let test_debug_token_info () =
              assert (query_param url "input_token" = "THtok+/=");
              assert (query_param url "access_token" = "TH|99|s&cret")
          | _ -> failwith "expected one GET for debug_token_info");
-        assert info.Meta_debug_token.is_valid;
+        assert info.Social_meta_debug_token.is_valid;
         assert (info.user_id = Some "1784");
-        assert (Oauth_scope.mem "threads_read_replies" info.scopes);
-        assert (info.expires_at = Some (Meta_debug_token.Expires_at 1767225600))
+        assert (Social_oauth_scope.mem "threads_read_replies" info.scopes);
+        assert (info.expires_at = Some (Social_meta_debug_token.Expires_at 1767225600))
     | Error err -> failwith (Error_types.error_to_string err));
   Mock_http.reset ();
   Mock_http.set_responses
