@@ -98,7 +98,9 @@ type media_insight = { metric : media_metric; value : int }
 
 val parse_media_insights : string -> (media_insight list, string) result
 (** Reads [values[0].value], else [total_value.value]. Unknown metric names
-    are skipped; an entry with neither value is [Error]. *)
+    are skipped, and so is an entry with neither value (no figure yet), so
+    one empty metric never costs the others. [Error] only when the body is
+    not JSON or has no [data] array. *)
 
 (** {1 Account totals} *)
 
@@ -131,8 +133,8 @@ type account_total = { metric : account_metric; total : int }
 
 val parse_account_totals : string -> (account_total list, string) result
 (** Reads [total_value.value] (the [metric_type=total_value] shape). A
-    metric Meta has no data for is left out (Meta answers with an empty
-    set rather than [0]). *)
+    metric Meta has no data for, or whose [total_value] has no integer, is
+    left out (Meta answers with an empty set rather than [0]). *)
 
 (** {1 Followers} *)
 
@@ -143,7 +145,8 @@ type follower_change = { end_time : string option; change : int }
 
 val parse_follower_changes : string -> (follower_change list, string) result
 (** The [follower_count] entry's [values], in the order Meta sent them;
-    [Ok []] when the response has none (e.g. under 100 followers). *)
+    [Ok []] when the response has none (e.g. under 100 followers). A day
+    without an integer value is left out. *)
 
 (** Absolute counts from the profile ([GET /{id}?fields=...]). [None] when
     Meta does not return the field. *)

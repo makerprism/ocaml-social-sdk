@@ -2120,6 +2120,43 @@ let test_follower_change_vs_followers_count () =
           = Some Analytics_types.Follows);
   print_endline "✓ follower_count changes vs followers_count total"
 
+(* A metric or day Meta left without a value carries no figure. It is left
+   out and the rest of the read still arrives (it used to fail as a whole). *)
+let test_insights_skip_missing_values () =
+  let module I = Insights in
+  (match
+     I.parse_media_insights
+       {|{"data":[
+         {"name":"views","period":"lifetime","values":[{"value":812}]},
+         {"name":"reach","period":"lifetime","values":[{"value":null}]},
+         {"name":"likes","period":"lifetime"},
+         {"name":"saved","period":"lifetime","values":[],"total_value":{"value":5}}]}|}
+   with
+   | Ok insights ->
+       assert (insights = [ { I.metric = I.Views; value = 812 }; { I.metric = I.Saved; value = 5 } ])
+   | Error msg -> failwith msg);
+  (match
+     I.parse_account_totals
+       {|{"data":[
+         {"name":"views","period":"day","total_value":{"value":5120}},
+         {"name":"reach","period":"day","total_value":{}},
+         {"name":"likes","period":"day"}]}|}
+   with
+   | Ok totals -> assert (totals = [ { I.metric = I.Account_views; total = 5120 } ])
+   | Error msg -> failwith msg);
+  (match
+     I.parse_follower_changes
+       {|{"data":[{"name":"follower_count","period":"day","values":[
+         {"value":4,"end_time":"2026-11-15T08:00:00+0000"},
+         {"value":null,"end_time":"2026-11-16T08:00:00+0000"},
+         {"end_time":"2026-11-17T08:00:00+0000"}]}]}|}
+   with
+   | Ok [ { I.change = 4; end_time = Some "2026-11-15T08:00:00+0000" } ] -> ()
+   | Ok _ -> failwith "expected the one day with a value"
+   | Error msg -> failwith msg);
+  assert (Result.is_error (I.parse_media_insights {|{"error":{"message":"x"}}|}));
+  print_endline "✓ Insights parsers skip values Meta left empty"
+
 let () =
   print_endline "\n=== Instagram Standalone Provider Tests ===\n";
 
@@ -2133,6 +2170,7 @@ let () =
   test_media_insights_story_subset ();
   test_account_totals_total_value ();
   test_follower_change_vs_followers_count ();
+  test_insights_skip_missing_values ();
   test_standalone_auth_url_enable_fb_login ();
   test_standalone_auth_url_scopes_comma_separated ();
   test_standalone_auth_url_response_type ();

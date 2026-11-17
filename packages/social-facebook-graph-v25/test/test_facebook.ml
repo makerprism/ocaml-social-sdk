@@ -3736,12 +3736,27 @@ let test_post_insights_by_type () =
        assert (Uri.get_query_param uri "metric" = Some (String.concat "," Insights.post_metrics));
        assert (Uri.get_query_param uri "period" = None)
    | _ -> failwith "expected one GET");
+  (* A value Meta left empty or unreadable carries no figure: that point is
+     left out and the other metrics still arrive (the read used to fail as
+     a whole). *)
   Mock_config.reset ();
   Mock_http.set_response
-    { status = 200; headers = []; body = {|{"data":[{"name":"post_clicks","values":[{"value":"many"}]}]}|} };
+    { status = 200; headers = [];
+      body = {|{"data":[
+        {"name":"post_clicks","values":[{"value":"many"}]},
+        {"name":"post_media_view","values":[{"value":null}]},
+        {"name":"post_total_media_view_unique","values":[{}]},
+        {"name":"post_reactions_by_type_total","values":[{"value":{"like":2,"love":null}}]},
+        {"name":"post_clicks_by_type","values":[{"value":{"link clicks":4}}]}]}|} };
   Facebook.get_post_insights ~post_id:"1_2" ~access_token:"t" (function
-    | Error (Error_types.Internal_error msg) -> assert (string_contains msg "post_clicks")
-    | _ -> failwith "a non-numeric value is a parse error");
+    | Error e -> failwith (Error_types.error_to_string e)
+    | Ok metrics ->
+        assert (List.length metrics = 5);
+        assert (Insights.latest_count "post_clicks" metrics = None);
+        assert (Insights.latest_count "post_media_view" metrics = None);
+        assert (Insights.latest_count "post_total_media_view_unique" metrics = None);
+        assert (Insights.by_type "post_reactions_by_type_total" metrics = None);
+        assert (Insights.by_type "post_clicks_by_type" metrics = Some [ ("link clicks", 4) ]));
   print_endline "✓ Post insights by-type values"
 
 let test_video_insights_reels () =

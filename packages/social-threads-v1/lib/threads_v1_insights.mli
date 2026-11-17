@@ -81,9 +81,14 @@ type insight = {
 
 val parse_insights : string -> (insight list, string) result
 (** Parses an insights response body ([{"data": [...]}]). Entries naming a
-    metric this module does not model are skipped. [Error] when the body is
-    not JSON, has no [data] array, or a modelled entry carries none of the
-    three value shapes or a non-integer value. *)
+    metric this module does not model are skipped. A bucket, link total or
+    [total_value] without an integer value carries no figure and is left
+    out (Threads leaves the day still being computed empty); an entry left
+    with none of the three value shapes is skipped, so one empty metric
+    never costs the others. An entry with a non-empty [values] array is read
+    as a time series even when it also carries [total_value]; with an empty
+    one, [total_value] (or [link_total_values]) is read instead. [Error]
+    only when the body is not JSON or has no [data] array. *)
 
 val find : metric -> insight list -> insight option
 
