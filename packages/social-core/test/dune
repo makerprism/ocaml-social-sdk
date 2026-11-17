@@ -47,3 +47,8 @@
  (name test_meta_debug_token)
  (modules test_meta_debug_token)
  (libraries social-core))
+
+(test
+ (name test_meta_graph_paging)
+ (modules test_meta_graph_paging)
+ (libraries social-core uri))

@@ -38,6 +38,11 @@ let oauth_authorize_url = "https://threads.net/oauth/authorize"
 (** Authorization-code exchange endpoint. *)
 let token_endpoint = graph_api_host ^ "/oauth/access_token"
 
+(** Hosts a [paging.next] / [paging.previous] URL may point at before a
+    reader sends the caller's token to it ({!Meta_graph_paging.resolve_page_url}).
+    Meta documents both graph hosts for the Threads API. *)
+let paging_url_hosts = [ "graph.threads.net"; "graph.threads.com" ]
+
 (* [Token_expiry] clamps to one year and also accepts a numeric string. *)
 let parse_expires_in json = Token_expiry.expires_in_of_json json
 
@@ -1784,41 +1789,62 @@ module Make (Config : CONFIG) = struct
     in
     (posts, next_after)
 
+  let invalid_input message =
+    Error_types.Validation_error [ Error_types.Invalid_url message ]
+
+  (* URL of one page of a reply edge. A [Page_url] is used as Meta returned
+     it (after the host and edge checks), with the caller's token in place of
+     the one Meta echoed into it; the other positions rebuild the request
+     from [media_id] and the options. *)
+  let reply_edge_url ~edge ~fields ~extra_params ~access_token ~media_id
+      ~position ?reverse ~limit () =
+    match (position : Meta_graph_paging.position) with
+    | Page_url url -> (
+        match
+          Meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
+            ~edge url
+        with
+        | Ok uri ->
+            Ok (Uri.to_string (Uri.add_query_param uri ("access_token", [ access_token ])))
+        | Error message -> Error (invalid_input message))
+    | First | After _ | Before _ ->
+        if String.trim media_id = "" then
+          Error (invalid_input "media_id must not be empty")
+        else
+          let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
+          let params =
+            [ ("fields", [ fields ]); ("limit", [ string_of_int limit ]) ]
+            @ (match reverse with
+               | Some reverse -> [ ("reverse", [ string_of_bool reverse ]) ]
+               | None -> [])
+            @ extra_params
+            @ [ ("access_token", [ access_token ]) ]
+            @ Meta_graph_paging.cursor_query position
+          in
+          Ok
+            (Printf.sprintf "%s/%s/%s?%s" threads_api_base (String.trim media_id)
+               edge (Uri.encoded_of_query params))
+
   (* Shared reader for the reply edges of a media object. They take the same
      paging parameters and return the same media-object page shape. *)
-  let get_reply_edge ~edge ~fields ~extra_params ~account_id ~media_id ?after
-      ?reverse ?(limit = 20) on_result =
-    if String.trim media_id = "" then
-      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "media_id must not be empty" ]))
-    else
-    with_valid_credentials ~account_id
-      (fun creds ->
-        let limit = if limit < 1 then 1 else if limit > 100 then 100 else limit in
-        let params =
-          [ ("fields", [fields]);
-            ("limit", [string_of_int limit]) ]
-          @ (match reverse with
-             | Some reverse -> [ ("reverse", [string_of_bool reverse]) ]
-             | None -> [])
-          @ extra_params
-          @ [ ("access_token", [creds.access_token]) ]
-          @ (match normalize_optional_non_empty after with
-             | Some cursor -> [ ("after", [cursor]) ]
-             | None -> [])
-        in
-        let query = Uri.encoded_of_query params in
-        let url = Printf.sprintf "%s/%s/%s?%s" threads_api_base (String.trim media_id) edge query in
+  let get_reply_edge_page ~edge ~fields ~extra_params ~access_token ~media_id
+      ?(position = Meta_graph_paging.First) ?reverse ?(limit = 20) on_result =
+    match
+      reply_edge_url ~edge ~fields ~extra_params ~access_token ~media_id
+        ~position ?reverse ~limit ()
+    with
+    | Error err -> on_result (Error err)
+    | Ok url ->
         http_get_with_retry url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
-              (try
-                let posts, next_after = parse_posts_response response.body in
-                on_result (Ok (posts, next_after))
-              with exn ->
-                on_result
-                  (Error
-                     (Error_types.Internal_error
-                        (Printf.sprintf "Failed to parse %s response: %s" edge (Printexc.to_string exn)))))
+              match Meta_graph_paging.of_body ~item:parse_thread_post response.body with
+              | Ok page -> on_result (Ok page)
+              | Error msg ->
+                  on_result
+                    (Error
+                       (Error_types.Internal_error
+                          (Printf.sprintf "Failed to parse %s response: %s" edge msg)))
             else
               on_result
                 (Error
@@ -1826,36 +1852,102 @@ module Make (Config : CONFIG) = struct
                       ~status_code:response.status
                       ~headers:response.headers
                       ~response_body:response.body)))
-          (fun err -> on_result (Error (network_error err))))
-      (fun err -> on_result (Error err))
+          (fun err -> on_result (Error (network_error err)))
 
-  (** Immediate replies to a post or reply ([GET /{media_id}/replies]).
-      [reverse] (API default [true]) sorts newest first. Use [has_replies]
-      to decide whether to descend further. *)
+  let pending_replies_extra_params = function
+    | Some status ->
+        [ ("approval_status", [ string_of_reply_approval_status status ]) ]
+    | None -> []
+
+  (** One page of the immediate replies to a post or reply
+      ([GET /{media_id}/replies], fields {!reply_fields}), with a token.
+      [reverse] (API default [true]) sorts newest first; [limit] is clamped
+      to 1..100 (default 20). [position] selects the page by cursor or by a
+      [paging.next] URL, see {!Meta_graph_paging}. Use [has_replies] to
+      decide whether to descend further. Needs [threads_read_replies].
+
+      @see <https://developers.facebook.com/docs/threads/retrieve-and-manage-replies/replies-and-conversations> *)
+  let get_replies_page ~access_token ~media_id ?position ?reverse ?limit on_result =
+    get_reply_edge_page ~edge:"replies" ~fields:reply_fields ~extra_params:[]
+      ~access_token ~media_id ?position ?reverse ?limit on_result
+
+  (** One page of every reply under a top-level post, at any depth, as one
+      flat list ([GET /{media_id}/conversation], fields {!reply_fields}).
+      Rebuild the tree with [replied_to_id]; [root_post_id] names the
+      top-level post. Options as {!get_replies_page}.
+
+      @see <https://developers.facebook.com/docs/threads/retrieve-and-manage-replies/replies-and-conversations> *)
+  let get_conversation_page ~access_token ~media_id ?position ?reverse ?limit
+      on_result =
+    get_reply_edge_page ~edge:"conversation" ~fields:reply_fields
+      ~extra_params:[] ~access_token ~media_id ?position ?reverse ?limit
+      on_result
+
+  (** One page of the replies held for approval on a post that has reply
+      approvals enabled ([GET /{media_id}/pending_replies], fields
+      {!pending_reply_fields}). [approval_status] filters to pending or
+      ignored replies; omitted, both are returned. Options as
+      {!get_replies_page}.
+
+      @see <https://developers.facebook.com/docs/threads/reply-management> *)
+  let get_pending_replies_page ~access_token ~media_id ?position ?reverse
+      ?approval_status ?limit on_result =
+    get_reply_edge_page ~edge:"pending_replies" ~fields:pending_reply_fields
+      ~extra_params:(pending_replies_extra_params approval_status)
+      ~access_token ~media_id ?position ?reverse ?limit on_result
+
+  (* The account-bound readers keep their original result: the items and
+     [paging.cursors.after], which Meta also returns on the last page. *)
+  let with_account_page ~account_id ~media_id ?after read on_result =
+    if String.trim media_id = "" then
+      on_result (Error (invalid_input "media_id must not be empty"))
+    else
+      with_valid_credentials ~account_id
+        (fun creds ->
+          let position =
+            match normalize_optional_non_empty after with
+            | Some cursor -> Meta_graph_paging.After cursor
+            | None -> Meta_graph_paging.First
+          in
+          read ~access_token:creds.access_token ~position (function
+            | Ok (page : thread_post Meta_graph_paging.page) ->
+                on_result
+                  (Ok
+                     ( page.data,
+                       Option.bind page.paging (fun (c : Meta_graph_paging.cursors) ->
+                           c.after) ))
+            | Error err -> on_result (Error err)))
+        (fun err -> on_result (Error err))
+
+  (** Immediate replies to a post or reply ([GET /{media_id}/replies]) with
+      the account's stored credentials. Returns the items and
+      [paging.cursors.after] (present on the last page too; prefer
+      {!get_replies_page} and {!Meta_graph_paging.next_after}). *)
   let get_replies ~account_id ~media_id ?after ?reverse ?limit on_result =
-    get_reply_edge ~edge:"replies" ~fields:reply_fields ~extra_params:[]
-      ~account_id ~media_id ?after ?reverse ?limit on_result
+    with_account_page ~account_id ~media_id ?after
+      (fun ~access_token ~position ->
+        get_replies_page ~access_token ~media_id ~position ?reverse ?limit)
+      on_result
 
   (** All replies under a top-level post at any depth, flattened
-      ([GET /{media_id}/conversation]). Use [replied_to_id] to rebuild the
-      tree. *)
+      ([GET /{media_id}/conversation]), with the account's stored
+      credentials. Result as {!get_replies}; see {!get_conversation_page}. *)
   let get_conversation ~account_id ~media_id ?after ?reverse ?limit on_result =
-    get_reply_edge ~edge:"conversation" ~fields:reply_fields ~extra_params:[]
-      ~account_id ~media_id ?after ?reverse ?limit on_result
+    with_account_page ~account_id ~media_id ?after
+      (fun ~access_token ~position ->
+        get_conversation_page ~access_token ~media_id ~position ?reverse ?limit)
+      on_result
 
-  (** Replies held for approval ([GET /{media_id}/pending_replies]).
-      [approval_status] filters to pending or ignored replies; omitted, both
-      are returned. *)
+  (** Replies held for approval ([GET /{media_id}/pending_replies]), with the
+      account's stored credentials. Result as {!get_replies}; see
+      {!get_pending_replies_page}. *)
   let get_pending_replies ~account_id ~media_id ?after ?reverse ?approval_status
       ?limit on_result =
-    let extra_params =
-      match approval_status with
-      | Some status ->
-          [ ("approval_status", [string_of_reply_approval_status status]) ]
-      | None -> []
-    in
-    get_reply_edge ~edge:"pending_replies" ~fields:pending_reply_fields
-      ~extra_params ~account_id ~media_id ?after ?reverse ?limit on_result
+    with_account_page ~account_id ~media_id ?after
+      (fun ~access_token ~position ->
+        get_pending_replies_page ~access_token ~media_id ~position ?reverse
+          ?approval_status ?limit)
+      on_result
 
   let get_publishing_limit ~account_id on_result =
     with_valid_credentials ~account_id
@@ -1969,34 +2061,58 @@ module Make (Config : CONFIG) = struct
     | Manage_reply -> "manage_reply"
     | Manage_pending_reply -> "manage_pending_reply"
 
+  let reply_moderation ~access_token ~reply_id ~edge ~params on_result =
+    if String.trim reply_id = "" then
+      on_result (Error (invalid_input "reply_id must not be empty"))
+    else
+      let body =
+        Social_core.form_urlencode_kvs (params @ [ ("access_token", access_token) ])
+      in
+      let url =
+        Printf.sprintf "%s/%s/%s" threads_api_base (String.trim reply_id)
+          (reply_moderation_edge_path edge)
+      in
+      let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+      http_post_no_retry ~headers ~body url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            on_result (Ok ())
+          else
+            on_result
+              (Error
+                 (parse_api_error
+                    ~status_code:response.status
+                    ~headers:response.headers
+                    ~response_body:response.body)))
+        (fun err -> on_result (Error (network_error err)))
+
+  (** Hide ([hide:true]) or unhide a top-level reply with a token
+      ([POST /{reply_id}/manage_reply]). Nested replies follow their parent
+      and cannot be hidden on their own. Needs [threads_manage_replies].
+
+      @see <https://developers.facebook.com/docs/threads/reply-management> *)
+  let manage_reply ~access_token ~reply_id ~hide on_result =
+    reply_moderation ~access_token ~reply_id ~edge:Manage_reply
+      ~params:[ ("hide", string_of_bool hide) ] on_result
+
+  (** Approve ([approve:true]) or ignore a reply held for approval with a
+      token ([POST /{reply_id}/manage_pending_reply]). Ignored replies can
+      still be approved later. Needs [threads_manage_replies].
+
+      @see <https://developers.facebook.com/docs/threads/reply-management> *)
+  let manage_pending_reply ~access_token ~reply_id ~approve on_result =
+    reply_moderation ~access_token ~reply_id ~edge:Manage_pending_reply
+      ~params:[ ("approve", string_of_bool approve) ] on_result
+
   let reply_action ~account_id ~reply_id ~edge ~params on_result =
     if String.trim reply_id = "" then
-      on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "reply_id must not be empty" ]))
+      on_result (Error (invalid_input "reply_id must not be empty"))
     else
-    with_valid_credentials ~account_id
-      (fun creds ->
-        let body =
-          Social_core.form_urlencode_kvs
-            (params @ [ ("access_token", creds.access_token) ])
-        in
-        let url =
-          Printf.sprintf "%s/%s/%s" threads_api_base (String.trim reply_id)
-            (reply_moderation_edge_path edge)
-        in
-        let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
-        http_post_no_retry ~headers ~body url
-          (fun response ->
-            if response.status >= 200 && response.status < 300 then
-              on_result (Ok ())
-            else
-              on_result
-                (Error
-                   (parse_api_error
-                      ~status_code:response.status
-                      ~headers:response.headers
-                      ~response_body:response.body)))
-          (fun err -> on_result (Error (network_error err))))
-      (fun err -> on_result (Error err))
+      with_valid_credentials ~account_id
+        (fun creds ->
+          reply_moderation ~access_token:creds.access_token ~reply_id ~edge
+            ~params on_result)
+        (fun err -> on_result (Error err))
 
   (** Approve a reply held for approval
       ([POST /{reply_id}/manage_pending_reply], [approve=true]). *)

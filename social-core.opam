@@ -17,6 +17,7 @@ depends: [
   "digestif"
   "base64"
   "ptime"
+  "uri"
   "odoc" {with-doc}
 ]
 build: [

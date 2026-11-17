@@ -37,7 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, except that Threads now also reads a numeric-string
   `expires_in`.
 - New dependency: `ptime` (already a dependency of every provider package).
-
+- `Meta_graph_paging` (with `.mli`): the page shape of Meta Graph list edges
+  shared by the Facebook, Instagram and Threads packages. `'a page = { data;
+  paging : cursors option; next_url; previous_url }`, `position = First |
+  After of string | Before of string | Page_url of string`, `parse` /
+  `of_body ~item`, `has_next`, `next_after` (the after cursor only while a
+  `paging.next` exists; Meta also returns one on the last page),
+  `cursor_query`, and `resolve_page_url ~allowed_hosts ~edge`, which accepts
+  a `paging.next` URL only over https on an allowed host and for the expected
+  edge, and strips `access_token` / `appsecret_proof` so the reader attaches
+  its own credentials. social-core now depends on `uri` (already a
+  dependency of every Meta package).
 - `Provider_error_detail` (issue #63): the provider's own error detail of an
   `Api_error`, read back from its `raw_response`. `of_error : Error_types.error
   -> t option`, `of_api_error`, and `of_response ~status_code ?request_id
