@@ -384,6 +384,75 @@ let test_get_organization_access () =
         print_endline "✓ Get organization access")
       (fun err -> failwith ("Get organization access failed: " ^ err)))
 
+(** Test: organization names by id through organizationsLookup, batched,
+    with ids LinkedIn could not resolve left out *)
+let test_get_organizations () =
+  Mock_config.reset ();
+  Mock_http.set_response {
+    status = 200;
+    body =
+      {|{"results":{"79988552":{"vanityName":"firstdemocompany","localizedName":"FirstDemoCompany","id":79988552},"90966477":{"localizedName":"Devtestco","id":90966477}},"statuses":{"79988552":200,"90966477":200,"1":404},"errors":{"1":{"message":"Organization 1 is inactive","status":404}}}|};
+    headers = [];
+  };
+  let result = ref None in
+  LinkedIn.get_organizations ~access_token:"tok" ~ids:[ "79988552"; " 90966477 "; "1"; "79988552" ]
+    (fun r -> result := Some r);
+  (match !result with
+   | Some (Ok orgs) ->
+       let sorted = List.sort (fun (a : organization) b -> compare a.id b.id) orgs in
+       (match sorted with
+        | [ first; second ] ->
+            assert (first.id = "79988552");
+            assert (first.localized_name = Some "FirstDemoCompany");
+            assert (first.vanity_name = Some "firstdemocompany");
+            assert (second.id = "90966477");
+            assert (second.vanity_name = None)
+        | _ -> failwith "expected two organizations")
+   | Some (Error e) -> failwith (Error_types.error_to_string e)
+   | None -> failwith "no result");
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       assert (url = "https://api.linkedin.com/rest/organizationsLookup?ids=List(79988552,90966477,1)");
+       assert (find_header_exact headers "Authorization" = Some "Bearer tok");
+       assert (find_header_exact headers "X-Restli-Protocol-Version" = Some "2.0.0");
+       assert (find_header_exact headers "LinkedIn-Version" = Some "202601")
+   | _ -> failwith "expected one GET");
+  (* More ids than one batch: one request per batch, results concatenated. *)
+  Mock_config.reset ();
+  Mock_http.set_responses [
+    { status = 200; headers = []; body = {|{"results":{"1":{"id":1,"localizedName":"One"}}}|} };
+    { status = 200; headers = []; body = {|{"results":{"60":{"id":60,"localizedName":"Sixty"}}}|} };
+  ];
+  let ids = List.init 60 (fun i -> string_of_int (i + 1)) in
+  LinkedIn.get_organizations ~access_token:"tok" ~ids (function
+    | Ok [ { id = "1"; _ }; { id = "60"; _ } ] -> ()
+    | Ok _ -> failwith "expected both batches' organizations in order"
+    | Error e -> failwith (Error_types.error_to_string e));
+  (match List.rev !Mock_http.requests with
+   | [ (_, first, _, _); (_, second, _, _) ] ->
+       assert (string_contains first "ids=List(1,2,");
+       assert (string_contains first ",50)");
+       assert (string_contains second "ids=List(51,");
+       assert (string_contains second ",60)")
+   | _ -> failwith "expected two requests");
+  (* No ids: no request. A non-numeric id: no request either. *)
+  Mock_config.reset ();
+  LinkedIn.get_organizations ~access_token:"tok" ~ids:[] (function
+    | Ok [] -> ()
+    | _ -> failwith "no ids, no organizations");
+  LinkedIn.get_organizations ~access_token:"tok" ~ids:[ "urn:li:organization:1" ] (function
+    | Error (Error_types.Validation_error _) -> ()
+    | _ -> failwith "a URN is not an id");
+  assert (!Mock_http.requests = []);
+  (* An HTTP error fails the call with the package's error mapping. *)
+  Mock_config.reset ();
+  Mock_http.set_response { status = 401; headers = []; body = {|{"message":"Invalid access token","status":401}|} };
+  LinkedIn.get_organizations ~access_token:"tok" ~ids:[ "1" ] (function
+    | Error (Error_types.Auth_error _) -> ()
+    | Error e -> failwith ("expected an auth error, got " ^ Error_types.error_to_string e)
+    | Ok _ -> failwith "expected an error");
+  print_endline "✓ Get organizations (organizationsLookup)"
+
 (** Test: get_organization_access parser tolerates malformed/partial ACL elements *)
 let test_get_organization_access_parsing_resilience () =
   Mock_config.reset ();
@@ -6382,6 +6451,7 @@ let test_oauth_get_userinfo () =
 
 let () =
   test_oauth_get_userinfo ();
+  test_get_organizations ();
   print_endline "\n=== LinkedIn Provider Tests ===\n";
   
   print_endline "--- OAuth Flow Tests ---";

@@ -621,6 +621,68 @@ type organization_access_info = {
   state: string option;
 }
 
+(** {1 Organization lookup}
+
+    An organization's public names, from
+    [GET /rest/organizationsLookup?ids=List(...)]
+    ({{:https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-lookup-api}
+    Organization Lookup API}, checked 2026-11-17). [organizationsLookup]
+    returns the non-admin fields ([id], [localizedName], [vanityName], ...)
+    for any organization, without the member being its administrator;
+    [GET /rest/organizations?ids=] would answer 403 per organization the
+    member does not administer. The batch response is
+    [{"results": {"<id>": {...}}, "statuses": {"<id>": 200}, "errors": {"<id>": {...}}}]. *)
+
+type organization = {
+  id : string;  (** Numeric organization id, as in [urn:li:organization:<id>]. *)
+  localized_name : string option;  (** [localizedName] *)
+  vanity_name : string option;  (** [vanityName]: the name in the Page URL. *)
+}
+
+(** Ids per [organizationsLookup] request. LinkedIn documents no batch
+    limit; this keeps request URLs short. *)
+let organizations_lookup_batch_size = 50
+
+(** Parses an [organizationsLookup] (or batch [organizations]) body: one
+    {!organization} per entry of [results]. An id LinkedIn could not
+    resolve (listed under [errors]) has no entry. [Error] when the body is
+    not JSON or has no [results] object. *)
+let parse_organizations_lookup body : (organization list, string) Stdlib.result =
+  let text = function
+    | Some (`String value) when String.trim value <> "" -> Some value
+    | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+  in
+  let organization_of (key, value) =
+    match value with
+    | `Assoc fields ->
+        let id =
+          match List.assoc_opt "id" fields with
+          | Some (`Int id) -> string_of_int id
+          | Some (`String id) when String.trim id <> "" -> String.trim id
+          | Some (`String _ | `Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> key
+        in
+        Some
+          { id;
+            localized_name = text (List.assoc_opt "localizedName" fields);
+            vanity_name = text (List.assoc_opt "vanityName" fields) }
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+  in
+  match Yojson.Basic.from_string body with
+  | exception Yojson.Json_error message ->
+      Stdlib.Error ("organization lookup response is not JSON: " ^ message)
+  | `Assoc fields -> (
+      match List.assoc_opt "results" fields with
+      | Some (`Assoc results) -> Stdlib.Ok (List.filter_map organization_of results)
+      | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _) | None ->
+          Stdlib.Error "organization lookup response has no results object")
+  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+      Stdlib.Error "organization lookup response is not an object"
+
+(** [true] for a non-empty all-digit organization id, the only shape the
+    Rest.li [List(...)] parameter can carry unescaped. *)
+let is_organization_id id =
+  id <> "" && String.for_all (fun c -> c >= '0' && c <= '9') id
+
 (** {1 Media kinds}
 
     LinkedIn uploads images, videos and documents through three different
@@ -1256,6 +1318,72 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
     in
     fetch_page ~start:0 ~acc:[] ~pages_fetched:0
+
+  (** Names of organizations by id ({!organization}): batches of
+      {!organizations_lookup_batch_size} ids to
+      [GET /rest/organizationsLookup?ids=List(...)], one request after the
+      other, results in request order. Duplicate ids are asked once. An id
+      LinkedIn cannot resolve is left out of the result; a failed request
+      fails the whole call. Ids that are not all digits are a
+      [Validation_error] and nothing is sent; an empty list is [Ok []]
+      without a request.
+
+      Pairs with {!fetch_organization_accesses_by_token}, whose
+      [organization_id]s are the ids this takes. The token needs one of the
+      Community Management scopes ([r_organization_admin],
+      [rw_organization_admin]). *)
+  let get_organizations ~access_token ~ids on_result =
+    let ids =
+      List.fold_left
+        (fun acc id -> let id = String.trim id in if List.mem id acc then acc else id :: acc)
+        [] ids
+      |> List.rev
+    in
+    match List.find_opt (fun id -> not (is_organization_id id)) ids with
+    | Some bad ->
+        on_result
+          (Error
+             (Error_types.Validation_error
+                [ Error_types.Invalid_url (Printf.sprintf "not a LinkedIn organization id: %S" bad) ]))
+    | None ->
+        let headers =
+          [ ("Authorization", Printf.sprintf "Bearer %s" access_token);
+            ("X-Restli-Protocol-Version", "2.0.0");
+            ("LinkedIn-Version", linkedin_version_header ()) ]
+        in
+        (* Rest.li 2.0 list syntax: the parentheses and commas stay literal;
+           the ids are digits, so nothing needs escaping. *)
+        let url batch =
+          Printf.sprintf "%s/organizationsLookup?ids=List(%s)" linkedin_rest_base
+            (String.concat "," batch)
+        in
+        let rec batches acc current count = function
+          | [] -> List.rev (if current = [] then acc else List.rev current :: acc)
+          | id :: rest when count = organizations_lookup_batch_size ->
+              batches (List.rev current :: acc) [ id ] 1 rest
+          | id :: rest -> batches acc (id :: current) (count + 1) rest
+        in
+        let rec fetch acc = function
+          | [] -> on_result (Ok (List.concat (List.rev acc)))
+          | batch :: rest ->
+              Config.Http.get ~headers (url batch)
+                (fun response ->
+                  if response.status >= 200 && response.status < 300 then
+                    match parse_organizations_lookup response.body with
+                    | Ok organizations -> fetch (organizations :: acc) rest
+                    | Error msg ->
+                        on_result
+                          (Error
+                             (Error_types.Internal_error
+                                (Printf.sprintf "Failed to parse organization lookup response: %s" msg)))
+                  else
+                    on_result
+                      (Error
+                         (parse_api_error ~required_scopes:[ "r_organization_admin" ]
+                            ~status_code:response.status ~body:response.body)))
+                (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
+        in
+        fetch [] (batches [] [] 0 ids)
   
   (** Refresh OAuth 2.0 access token (PARTNER PROGRAM ONLY)
       

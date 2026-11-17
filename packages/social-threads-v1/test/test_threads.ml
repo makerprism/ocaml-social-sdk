@@ -5022,6 +5022,81 @@ let test_get_permalink () =
     | Ok _ -> failwith "expected an error");
   print_endline "ok: get_permalink"
 
+(* Location search: GET /location_search with q and/or latitude+longitude,
+   every documented field, the token in the query. The guide shows the id
+   as a number. *)
+let test_search_locations () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body =
+          {|{"data":[{"id":12345,"name":"Menlo Park","address":"1 Hacker Way","city":"Menlo Park","country":"US","latitude":37.48,"longitude":-122.15,"postal_code":"94025"},{"id":"678","name":"No point"}]}|} } ];
+  let token = "tok+en/with=&reserved" in
+  Threads.search_locations ~access_token:token ~query:" Menlo Park "
+    ~coordinates:{ Social_threads_v1.Locations.latitude = 37.4848; longitude = -122.1484 }
+    (function
+      | Ok [ first; second ] ->
+          assert (first.id = "12345");
+          assert (first.name = Some "Menlo Park");
+          assert (first.address = Some "1 Hacker Way");
+          assert (first.postal_code = Some "94025");
+          assert (first.coordinates = Some { latitude = 37.48; longitude = -122.15 });
+          assert (second.id = "678");
+          assert (second.city = None);
+          assert (second.coordinates = None)
+      | Ok _ -> failwith "expected two locations"
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v1.0/location_search");
+       assert (Uri.get_query_param uri "q" = Some "Menlo Park");
+       assert (Uri.get_query_param uri "latitude" = Some "37.484800");
+       assert (Uri.get_query_param uri "longitude" = Some "-122.148400");
+       assert (Uri.get_query_param uri "fields" = Some Social_threads_v1.Locations.fields);
+       assert (Uri.get_query_param uri "access_token" = Some token)
+   | _ -> failwith "expected one GET");
+  (* Coordinates alone are a valid search. *)
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"data":[]}|} } ];
+  Threads.search_locations ~access_token:"t"
+    ~coordinates:{ Social_threads_v1.Locations.latitude = 1.; longitude = 2. }
+    (function Ok [] -> () | _ -> failwith "expected no locations");
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] -> assert (Uri.get_query_param (Uri.of_string url) "q" = None)
+   | _ -> failwith "expected one GET");
+  (* Neither a query nor a point: no request. *)
+  Mock_config.reset ();
+  Threads.search_locations ~access_token:"t" ~query:"  " (function
+    | Error (Error_types.Validation_error [ Error_types.Text_empty ]) -> ()
+    | _ -> failwith "a blank search must be rejected");
+  assert (!Mock_http.requests = []);
+  (* A Graph error is classified like every other read. *)
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 403; headers = [];
+        body = {|{"error":{"message":"Application does not have permission for this action","type":"OAuthException","code":10}}|} } ];
+  Threads.search_locations ~access_token:"t" ~query:"x" (function
+    | Error (Error_types.Auth_error (Error_types.Insufficient_permissions _)) -> ()
+    | Error err -> failwith ("expected Insufficient_permissions, got " ^ Error_types.error_to_string err)
+    | Ok _ -> failwith "expected an error");
+  (* A body without data is a parse failure, not an empty result. *)
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"id":"1"}|} } ];
+  Threads.search_locations ~access_token:"t" ~query:"x" (function
+    | Error (Error_types.Internal_error _) -> ()
+    | _ -> failwith "expected Internal_error");
+  print_endline "ok: search_locations"
+
+let test_search_locations_for_account () =
+  with_reply_account ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"data":[{"id":"9"}]}|} } ];
+  Threads.search_locations_for_account ~account_id:"acct-1" ~query:"Berlin" (function
+    | Ok [ { id = "9"; name = None; _ } ] -> ()
+    | Ok _ -> failwith "expected one location"
+    | Error err -> failwith (Error_types.error_to_string err));
+  print_endline "ok: search_locations_for_account"
+
 let test_get_permalink_for_account () =
   with_reply_account ();
   Mock_http.set_responses
@@ -5484,6 +5559,8 @@ let () =
   test_get_replies_requests_reply_fields ();
   test_get_pending_replies_approval_status ();
   test_get_permalink ();
+  test_search_locations ();
+  test_search_locations_for_account ();
   test_get_permalink_for_account ();
   test_parse_permalink_response ();
   test_get_conversation_page_with_token ();

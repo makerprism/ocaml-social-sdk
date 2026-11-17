@@ -3564,6 +3564,186 @@ let test_get_comments_page_error () =
     | Ok _ -> failwith "expected an error");
   print_endline "✓ Get comments page (permission error)"
 
+(* Place search: GET /pages/search with q and Places.fields, Bearer token
+   and appsecret_proof; Pages without a location are kept, with no
+   coordinates. *)
+let test_search_places () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body =
+        {|{"data":[
+          {"id":"309968765748101","name":"Facebook HQ","location":{"city":"Menlo Park","country":"United States","latitude":37.4851,"longitude":-122.1483,"state":"CA","street":"1 Hacker Way","zip":"94025"}},
+          {"id":"42","name":"Online only"},
+          {"id":"43","name":"Half","location":{"city":"Berlin","latitude":52}}]}|} };
+  Facebook.search_places ~access_token:"page-token" ~query:" Facebook HQ " (function
+    | Ok [ hq; online; half ] ->
+        assert (hq.Places.id = "309968765748101");
+        assert (hq.name = Some "Facebook HQ");
+        assert (Places.coordinates hq = Some (37.4851, -122.1483));
+        (match hq.location with
+         | Some { city = Some "Menlo Park"; zip = Some "94025"; street = Some "1 Hacker Way"; _ } -> ()
+         | _ -> failwith "expected the HQ location");
+        assert (online.location = None);
+        assert (Places.coordinates online = None);
+        assert (Places.coordinates half = None)
+    | Ok _ -> failwith "expected three places"
+    | Error e -> failwith (Error_types.error_to_string e));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v25.0/pages/search");
+       assert (Uri.get_query_param uri "q" = Some "Facebook HQ");
+       assert (Uri.get_query_param uri "fields" = Some Places.fields);
+       assert (Uri.get_query_param uri "type" = None);
+       assert (Uri.get_query_param uri "access_token" = None);
+       assert (Uri.get_query_param uri "appsecret_proof" <> None);
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer page-token")
+   | _ -> failwith "expected one GET");
+  Mock_config.reset ();
+  Facebook.search_places ~access_token:"t" ~query:"   " (function
+    | Error (Error_types.Validation_error [ Error_types.Text_empty ]) -> ()
+    | _ -> failwith "a blank query must be rejected");
+  assert (!Mock_http.requests = []);
+  Mock_config.reset ();
+  Mock_http.set_response
+    { status = 400; headers = [];
+      body = {|{"error":{"message":"Invalid OAuth access token.","type":"OAuthException","code":190}}|} };
+  Facebook.search_places ~access_token:"t" ~query:"x" (function
+    | Error (Error_types.Auth_error _) -> ()
+    | Error e -> failwith ("expected an auth error, got " ^ Error_types.error_to_string e)
+    | Ok _ -> failwith "expected an error");
+  Mock_config.reset ();
+  Mock_http.set_response { status = 200; headers = []; body = {|{"data":[{"name":"no id"}]}|} };
+  Facebook.search_places ~access_token:"t" ~query:"x" (function
+    | Error (Error_types.Internal_error _) -> ()
+    | _ -> failwith "an item without an id must fail the parse");
+  print_endline "✓ Search places (pages/search, typed, unlocated kept)"
+
+let page_posts_body ~next =
+  Printf.sprintf
+    {|{"data":[
+      {"id":"104857_1","message":"Hello","created_time":"2026-11-16T09:12:44+0000","permalink_url":"https://www.facebook.com/104857/posts/1",
+       "full_picture":"https://scontent.example/p.jpg",
+       "attachments":{"data":[{"type":"photo","media_type":"photo","url":"https://www.facebook.com/photo/1","media":{"image":{"src":"https://scontent.example/p.jpg"}},"target":{"id":"555"}}]},
+       "insights":{"data":[{"name":"post_impressions_unique","period":"lifetime","values":[{"value":120}]},{"name":"post_reactions_by_type_total","period":"lifetime","values":[{"value":{"like":3,"love":1}}]}]},
+       "comments_summary":{"data":[],"summary":{"total_count":4}},
+       "reactions_summary":{"data":[],"summary":{"total_count":5}},
+       "shares":{"count":2}},
+      {"id":"104857_2","created_time":"2026-11-15T09:00:00+0000","permalink_url":"https://www.facebook.com/reel/777",
+       "attachments":{"data":[{"type":"video_inline","media_type":"video","target":{"id":"777"}}]}},
+      {"id":"104857_3","message":"Album","attachments":{"data":[{"type":"album","media_type":"album","subattachments":{"data":[{"media_type":"photo","target":{"id":"8"}},{"media_type":"photo","target":{"id":"9"}}]}}]},
+       "insights":{"error":"dropped"}}],
+     "paging":{"cursors":{"before":"QkVG","after":"QUZU"}%s}}|}
+    (match next with Some url -> Printf.sprintf {|,"next":%S|} url | None -> "")
+
+let page_posts_next_url =
+  "https://graph.facebook.com/v25.0/104857/posts?access_token=EAAOLD&fields=id%2Cmessage&limit=3&after=QUZU"
+
+let test_get_page_posts_page () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  Mock_http.set_response
+    { status = 200; headers = []; body = page_posts_body ~next:(Some page_posts_next_url) };
+  Facebook.get_page_posts_page ~page_id:"104857" ~access_token:"page-token" ~limit:500
+    (function
+      | Ok page ->
+          (match page.data with
+           | [ photo; reel; album ] ->
+               assert (photo.Page_posts.message = Some "Hello");
+               assert (Page_posts.media_type photo = Some "photo");
+               assert (not (Page_posts.is_reel photo));
+               assert (Page_posts.video_id_of photo = None);
+               (match photo.attachments with
+                | [ { image_src = Some "https://scontent.example/p.jpg"; target_id = Some "555";
+                      attachment_type = Some "photo"; _ } ] -> ()
+                | _ -> failwith "expected the photo attachment");
+               assert (Insights.latest_count "post_impressions_unique" photo.insights = Some 120);
+               assert (Insights.by_type "post_reactions_by_type_total" photo.insights
+                       = Some [ ("like", 3); ("love", 1) ]);
+               assert (photo.comment_count = Some 4);
+               assert (photo.reaction_count = Some 5);
+               assert (photo.share_count = Some 2);
+               assert (Page_posts.is_reel reel);
+               assert (Page_posts.video_id_of reel = Some "777");
+               assert (reel.message = None);
+               assert (reel.insights = []);
+               assert (reel.comment_count = None);
+               (match album.attachments with
+                | [ { subattachments = [ { target_id = Some "8"; _ }; { target_id = Some "9"; _ } ]; _ } ] -> ()
+                | _ -> failwith "expected the album's subattachments");
+               assert (album.insights = [])
+           | _ -> failwith "expected three posts");
+          assert (Social_meta_graph_paging.next_after page = Some "QUZU")
+      | Error e -> failwith (Error_types.error_to_string e));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v25.0/104857/posts");
+       assert (Uri.get_query_param uri "fields" = Some Page_posts.basic_fields);
+       assert (Uri.get_query_param uri "limit" = Some "100");
+       assert (Uri.get_query_param uri "access_token" = None);
+       assert (Uri.get_query_param uri "appsecret_proof" <> None);
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer page-token")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ Get page posts page (typed, /posts, limit clamped)"
+
+let test_get_page_posts_page_positions () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = page_posts_body ~next:None };
+      { status = 200; headers = []; body = page_posts_body ~next:None } ];
+  let expect_last = function
+    | Ok page -> assert (Social_meta_graph_paging.next_after page = None)
+    | Error e -> failwith (Error_types.error_to_string e)
+  in
+  Facebook.get_page_posts_page ~page_id:"104857" ~access_token:"page-token"
+    ~edge:Page_posts.Feed ~fields:Page_posts.analytics_fields
+    ~position:(Social_meta_graph_paging.After "QUZU") expect_last;
+  Facebook.get_page_posts_page ~page_id:"ignored" ~access_token:"page-token"
+    ~position:(Social_meta_graph_paging.Page_url page_posts_next_url) expect_last;
+  (match List.rev !Mock_http.requests with
+   | [ ("GET", cursor_url, _, _); ("GET", followed_url, _, _) ] ->
+       let cursor_uri = Uri.of_string cursor_url in
+       assert (Uri.path cursor_uri = "/v25.0/104857/feed");
+       assert (Uri.get_query_param cursor_uri "after" = Some "QUZU");
+       assert (Uri.get_query_param cursor_uri "fields" = Some Page_posts.analytics_fields);
+       assert (Uri.get_query_param cursor_uri "limit" = None);
+       let uri = Uri.of_string followed_url in
+       assert (Uri.path uri = "/v25.0/104857/posts");
+       assert (Uri.get_query_param uri "after" = Some "QUZU");
+       assert (Uri.get_query_param uri "access_token" = None)
+   | _ -> failwith "expected two GETs");
+  (* A paging URL of another edge is refused before any request. *)
+  Mock_config.reset ();
+  Facebook.get_page_posts_page ~page_id:"104857" ~access_token:"t" ~edge:Page_posts.Feed
+    ~position:(Social_meta_graph_paging.Page_url page_posts_next_url)
+    (function
+      | Error (Error_types.Validation_error _) -> ()
+      | _ -> failwith "expected a /posts URL to be refused for /feed");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ Get page posts page (edge, cursor, next URL)"
+
+let test_get_page_posts_page_for_account () =
+  Mock_config.reset ();
+  Mock_config.set_credentials ~account_id:"acct"
+    ~credentials:{ access_token = "stored-page-token"; refresh_token = None;
+                   expires_at = None; auth_type = Bearer; scope = None };
+  Mock_config._set_page_id ~account_id:"acct" ~page_id:"104857";
+  Mock_http.set_response { status = 200; headers = []; body = {|{"data":[]}|} };
+  Facebook.get_page_posts_page_for_account ~account_id:"acct" ~edge:Page_posts.Published_posts
+    (function
+      | Ok { data = []; _ } -> ()
+      | Ok _ -> failwith "expected no posts"
+      | Error e -> failwith (Error_types.error_to_string e));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       assert (Uri.path (Uri.of_string url) = "/v25.0/104857/published_posts");
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer stored-page-token")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ Get page posts page for account"
+
 let test_comment_moderation () =
   Mock_config.reset ();
   Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
@@ -3933,6 +4113,10 @@ let () =
   test_get_comments_page_stream ();
   test_get_comments_page_positions ();
   test_get_comments_page_error ();
+  test_search_places ();
+  test_get_page_posts_page ();
+  test_get_page_posts_page_positions ();
+  test_get_page_posts_page_for_account ();
   test_comment_moderation ();
   test_comment_moderation_failures ();
 
