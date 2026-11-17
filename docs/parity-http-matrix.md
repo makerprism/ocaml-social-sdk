@@ -207,6 +207,7 @@ Rows describe the typed reads in `social-mastodon-v1` (`Reads.Make (Http)`; the 
 | Notifications | GET | `{instance}/api/v1/notifications?limit&max_id&since_id&min_id&types[]&exclude_types[]&account_id` | `Authorization: Bearer <token>` (`read:notifications`) | none; cursors from `Link` | `Reads.get_notifications`, `Make.get_notifications_page` | `test_notifications_request_and_parse`, `test_notifications_last_page_and_scope_error` |
 | Account statuses | GET | `{instance}/api/v1/accounts/{id}/statuses?limit&max_id&since_id&min_id&exclude_replies&exclude_reblogs&only_media&pinned` | `Authorization: Bearer <token>` when given | none; cursors from `Link` | `Reads.get_account_statuses`, `Make.get_account_statuses_page` | `test_account_statuses` |
 | Account lookup | GET | `{instance}/api/v1/accounts/lookup?acct` | `Authorization: Bearer <token>` when given | none | `Reads.lookup_account` | `test_lookup_account` |
+| Account with counts | GET | `{instance}/api/v1/accounts/:id`; own account `{instance}/api/v1/accounts/verify_credentials` | `Authorization: Bearer <token>` when given (required for `verify_credentials`) | none | `Reads.get_account`, `Reads.verify_credentials`, `get_account_entity`, `get_own_account` (`Entities.account`) | `test_get_account_counts`, `test_account_wrappers` |
 | WebFinger | GET | `https://{domain}/.well-known/webfinger?resource=acct:{username}@{domain}` | `Accept: application/jrd+json, application/json` | none | `Reads.webfinger` | `test_webfinger`, `test_webfinger_pure` |
 
 Known subtle bug traps:

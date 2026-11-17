@@ -148,6 +148,39 @@ let account_summary_of_json_result json =
   let* url = non_empty_string_opt "url" json in
   Ok ({ id; acct; username; display_name; url } : account_summary)
 
+type account = {
+  summary : account_summary;
+  followers_count : int;
+  following_count : int;
+  statuses_count : int;
+  last_status_at : string option;
+  created_at : string;
+  locked : bool;
+  bot : bool;
+  hide_collections : bool option;
+}
+
+let bool_opt name json =
+  match field name json with
+  | None -> Ok None
+  | Some (`Bool value) -> Ok (Some value)
+  | Some (`Null | `String _ | `Int _ | `Float _ | `Assoc _ | `List _) -> type_error name "a boolean"
+
+let account_of_json json =
+  let* summary = account_summary_of_json_result json in
+  (let* followers_count = int_req "followers_count" json in
+   let* following_count = int_req "following_count" json in
+   let* statuses_count = int_req "statuses_count" json in
+   let* last_status_at = string_opt "last_status_at" json in
+   let* created_at = string_req "created_at" json in
+   let* locked = bool_req "locked" json in
+   let* bot = bool_req "bot" json in
+   let* hide_collections = bool_opt "hide_collections" json in
+   Ok
+     { summary; followers_count; following_count; statuses_count; last_status_at; created_at;
+       locked; bot; hide_collections })
+  |> prefix_error ("account " ^ summary.id)
+
 type pagination_cursors = {
   next_max_id : string option;
   prev_since_id : string option;
