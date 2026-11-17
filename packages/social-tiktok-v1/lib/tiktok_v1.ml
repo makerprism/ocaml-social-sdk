@@ -154,6 +154,225 @@ module OAuth = struct
     let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
   
+  (** {2 Typed token responses and user info} *)
+
+  (** A token endpoint answer ([POST /v2/oauth/token/], authorization code
+      or refresh grant,
+      {{:https://developers.tiktok.com/doc/oauth-user-access-token-management}}). *)
+  type token_response = {
+    credentials : credentials;
+        (** [scope] is the {e granted} scope string TikTok returned. *)
+    open_id : string;  (** The user's id for this app. *)
+    scopes : string list;  (** [scope], split ({!Oauth_scope.split}). *)
+    expires_in : int option;  (** Access token lifetime, seconds (about 24 h). *)
+    refresh_expires_in : int option;  (** Refresh token lifetime, seconds (about 365 days). *)
+    refresh_expires_at : string option;  (** [refresh_expires_in] as RFC 3339. *)
+  }
+
+  let tiktok_error_of_oauth_body ~status_code body json =
+    match tiktok_oauth_error_of_json json with
+    | Some message ->
+        let log_id =
+          match json with
+          | `Assoc fields -> (
+              match List.assoc_opt "log_id" fields with
+              | Some (`String log_id) when log_id <> "" -> Some log_id
+              | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None)
+          | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+        in
+        Some
+          (Error_types.Api_error
+             { status_code = (if status_code >= 200 && status_code < 300 then 400 else status_code);
+               message;
+               platform = Platform_types.TikTok;
+               raw_response = Some body;
+               request_id = log_id })
+    | None -> None
+
+  (** Parses a token endpoint answer. TikTok reports OAuth failures with
+      HTTP 200 and [{"error", "error_description", "log_id"}]; those become
+      [Api_error] (status 400 when TikTok sent 200, the raw body kept for
+      {!Provider_error_detail}). [previous_refresh_token] is kept when a
+      refresh answer omits [refresh_token]. *)
+  let parse_token_response ?previous_refresh_token ~status_code body
+      : (token_response, Error_types.error) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message ->
+        Stdlib.Error (Error_types.Internal_error ("TikTok token response is not JSON: " ^ message))
+    | json -> (
+        match tiktok_error_of_oauth_body ~status_code body json with
+        | Some error -> Stdlib.Error error
+        | None -> (
+            let field key =
+              match json with
+              | `Assoc fields -> List.assoc_opt key fields
+              | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+            in
+            let text key =
+              match field key with
+              | Some (`String value) when value <> "" -> Some value
+              | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+            in
+            let seconds key =
+              Token_expiry.expires_in_of_json (`Assoc [ ("expires_in", Option.value (field key) ~default:`Null) ])
+            in
+            match text "access_token", text "open_id" with
+            | Some access_token, Some open_id ->
+                let expires_in = seconds "expires_in" in
+                let refresh_expires_in = seconds "refresh_expires_in" in
+                let scope = text "scope" in
+                let credentials =
+                  ({ access_token;
+                     refresh_token =
+                       (match text "refresh_token" with
+                        | Some _ as fresh -> fresh
+                        | None -> previous_refresh_token);
+                     expires_at =
+                       Token_expiry.expires_at_of_expires_in (Option.value expires_in ~default:86400);
+                     auth_type = Bearer;
+                     scope }
+                    : credentials)
+                in
+                Stdlib.Ok
+                  { credentials;
+                    open_id;
+                    scopes = (match scope with Some raw -> Oauth_scope.split raw | None -> []);
+                    expires_in;
+                    refresh_expires_in;
+                    refresh_expires_at = Option.bind refresh_expires_in Token_expiry.expires_at_of_expires_in }
+            | None, _ -> Stdlib.Error (Error_types.Internal_error "TikTok token response has no access_token")
+            | Some _, None -> Stdlib.Error (Error_types.Internal_error "TikTok token response has no open_id")))
+
+  (** A TikTok user from [GET /v2/user/info/]
+      ({{:https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info}}).
+      Each field needs the scope noted; fields not requested or not
+      granted are [None]. *)
+  type user_info = {
+    open_id : string;  (** [user.info.basic] *)
+    union_id : string option;  (** [user.info.basic] *)
+    avatar_url : string option;  (** [user.info.basic] *)
+    avatar_url_100 : string option;  (** [user.info.basic] *)
+    avatar_large_url : string option;  (** [user.info.basic] *)
+    display_name : string option;  (** [user.info.basic] *)
+    bio_description : string option;  (** [user.info.profile] *)
+    profile_deep_link : string option;  (** [user.info.profile] *)
+    is_verified : bool option;  (** [user.info.profile] *)
+    username : string option;  (** [user.info.profile] *)
+    follower_count : int option;  (** [user.info.stats] *)
+    following_count : int option;  (** [user.info.stats] *)
+    likes_count : int option;  (** [user.info.stats] *)
+    video_count : int option;  (** [user.info.stats] *)
+  }
+
+  (** Fields readable with [user.info.basic]. *)
+  let user_fields_basic =
+    [ "open_id"; "union_id"; "avatar_url"; "avatar_url_100"; "avatar_large_url"; "display_name" ]
+
+  (** Fields that need [user.info.profile]. *)
+  let user_fields_profile = [ "bio_description"; "profile_deep_link"; "is_verified"; "username" ]
+
+  (** Fields that need [user.info.stats]. *)
+  let user_fields_stats = [ "follower_count"; "following_count"; "likes_count"; "video_count" ]
+
+  (** The SDK error for a TikTok API v2 error object
+      ({{:https://developers.tiktok.com/doc/tiktok-api-v2-error-handling}}):
+      [access_token_invalid] is [Token_invalid], [scope_not_authorized] and
+      [scope_permission_missed] are [Insufficient_permissions], and
+      [rate_limit_exceeded] (or HTTP 429) is [Rate_limited]; anything else is
+      an [Api_error] with the body kept. *)
+  let api_v2_error ~status_code ~code ~message ~log_id ~required_scopes body =
+    match code with
+    | "access_token_invalid" -> Error_types.Auth_error Error_types.Token_invalid
+    | "scope_not_authorized" | "scope_permission_missed" ->
+        Error_types.Auth_error
+          (Error_types.Insufficient_permissions { required = required_scopes; platform_message = message })
+    | "rate_limit_exceeded" ->
+        Error_types.Rate_limited { retry_after_seconds = None; limit = None; remaining = Some 0; reset_at = None }
+    | _ when status_code = 429 ->
+        Error_types.Rate_limited { retry_after_seconds = None; limit = None; remaining = Some 0; reset_at = None }
+    | _ ->
+        Error_types.Api_error
+          { status_code;
+            message = (match message with Some m when m <> "" -> code ^ ": " ^ m | Some _ | None -> code);
+            platform = Platform_types.TikTok;
+            raw_response = Some body;
+            request_id = log_id }
+
+  (** Parses a user info answer [{"data": {"user": {...}}, "error":
+      {"code": "ok", ...}}]. An [error.code] other than ["ok"] is an error
+      even under HTTP 200. *)
+  let parse_user_info ~status_code ~required_scopes body
+      : (user_info, Error_types.error) Stdlib.result =
+    let member key = function
+      | `Assoc fields -> List.assoc_opt key fields
+      | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+    in
+    let text key json =
+      match member key json with
+      | Some (`String value) when value <> "" -> Some value
+      | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+    in
+    let count key json =
+      match member key json with
+      | Some (`Int value) -> Some value
+      | Some (`Float value) -> Some (int_of_float value)
+      | Some (`String _ | `Null | `Bool _ | `List _ | `Assoc _) | None -> None
+    in
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error _ ->
+        if status_code >= 200 && status_code < 300 then
+          Stdlib.Error (Error_types.Internal_error "TikTok user info response is not JSON")
+        else
+          Stdlib.Error
+            (api_v2_error ~status_code ~code:(string_of_int status_code) ~message:None ~log_id:None
+               ~required_scopes body)
+    | json -> (
+        let error = Option.value (member "error" json) ~default:`Null in
+        match text "code" error with
+        | Some code when code <> "ok" ->
+            Stdlib.Error
+              (api_v2_error ~status_code ~code ~message:(text "message" error)
+                 ~log_id:(text "log_id" error) ~required_scopes body)
+        | Some _ | None -> (
+            let user = Option.bind (member "data" json) (member "user") in
+            match user with
+            | None ->
+                if status_code >= 200 && status_code < 300 then
+                  Stdlib.Error (Error_types.Internal_error "TikTok user info response has no data.user")
+                else
+                  Stdlib.Error
+                    (api_v2_error ~status_code ~code:(string_of_int status_code) ~message:None
+                       ~log_id:None ~required_scopes body)
+            | Some user -> (
+                match text "open_id" user with
+                | None -> Stdlib.Error (Error_types.Internal_error "TikTok user info has no open_id")
+                | Some open_id ->
+                    Stdlib.Ok
+                      { open_id;
+                        union_id = text "union_id" user;
+                        avatar_url = text "avatar_url" user;
+                        avatar_url_100 = text "avatar_url_100" user;
+                        avatar_large_url = text "avatar_large_url" user;
+                        display_name = text "display_name" user;
+                        bio_description = text "bio_description" user;
+                        profile_deep_link = text "profile_deep_link" user;
+                        is_verified =
+                          (match member "is_verified" user with
+                           | Some (`Bool verified) -> Some verified
+                           | Some (`Null | `Int _ | `Float _ | `String _ | `List _ | `Assoc _) | None -> None);
+                        username = text "username" user;
+                        follower_count = count "follower_count" user;
+                        following_count = count "following_count" user;
+                        likes_count = count "likes_count" user;
+                        video_count = count "video_count" user })))
+
+  (** Scopes a user info request with [fields] needs. *)
+  let scopes_for_user_fields fields =
+    let needs group = List.exists (fun field -> List.mem field group) fields in
+    [ "user.info.basic" ]
+    @ (if needs user_fields_profile then [ "user.info.profile" ] else [])
+    @ (if needs user_fields_stats then [ "user.info.stats" ] else [])
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Exchange authorization code for access token
@@ -334,6 +553,65 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Get user info failed (%d): %s" response.status response.body))
         on_error
+
+    let post_token_form params ?previous_refresh_token on_result =
+      let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+      Http.post ~headers ~body:(Social_core.form_urlencode_kvs params) Metadata.token_endpoint
+        (fun response ->
+          on_result
+            (parse_token_response ?previous_refresh_token ~status_code:response.status response.body))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+    (** Exchange an authorization code and keep the whole answer:
+        credentials, [open_id], the {e granted} scopes and both lifetimes
+        ({!token_response}). Same request as {!exchange_code}, which drops
+        [open_id] and [refresh_expires_in] and stays for compatibility.
+
+        @param code_verifier The PKCE verifier, when the authorization URL
+          carried a challenge. TikTok requires it for desktop and mobile
+          apps ({{:https://developers.tiktok.com/doc/oauth-get-a-user-access-token}}). *)
+    let exchange_code_full ?code_verifier ~client_key ~client_secret ~redirect_uri ~code on_result =
+      post_token_form
+        ([ ("client_key", client_key);
+           ("client_secret", client_secret);
+           ("code", code);
+           ("grant_type", "authorization_code");
+           ("redirect_uri", redirect_uri) ]
+         @ match code_verifier with
+           | Some verifier when verifier <> "" -> [ ("code_verifier", verifier) ]
+           | Some _ | None -> [])
+        on_result
+
+    (** Refresh with the whole answer. TikTok rotates refresh tokens: the
+        answer's [refresh_token] replaces the one sent
+        ({{:https://developers.tiktok.com/doc/oauth-refresh-a-user-access-token}});
+        the old one is kept only if the answer has none. *)
+    let refresh_token_full ~client_key ~client_secret ~refresh_token on_result =
+      post_token_form ~previous_refresh_token:refresh_token
+        [ ("client_key", client_key);
+          ("client_secret", client_secret);
+          ("grant_type", "refresh_token");
+          ("refresh_token", refresh_token) ]
+        on_result
+
+    (** Typed [GET /v2/user/info/?fields=...]. Successor of {!get_user_info},
+        which returns raw JSON and stays.
+
+        @param fields Defaults to {!user_fields_basic}. Add
+          {!user_fields_profile} (needs [user.info.profile], includes
+          [username]) or {!user_fields_stats} (needs [user.info.stats]). *)
+    let get_user ~access_token ?(fields = user_fields_basic) on_result =
+      let fields = if List.mem "open_id" fields then fields else "open_id" :: fields in
+      let url =
+        Printf.sprintf "%s/user/info/?%s" Metadata.api_base
+          (Uri.encoded_of_query [ ("fields", [ String.concat "," fields ]) ])
+      in
+      Http.get ~headers:[ ("Authorization", "Bearer " ^ access_token) ] url
+        (fun response ->
+          on_result
+            (parse_user_info ~status_code:response.status
+               ~required_scopes:(scopes_for_user_fields fields) response.body))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
   end
 end
 
@@ -895,6 +1173,35 @@ let parse_single_video_analytics_response json =
   | Ok [] -> Error "No video analytics returned"
 
 (** {1 OAuth URL Generation} *)
+
+(** The scopes {!Make.get_oauth_url} requests when given none. *)
+let default_oauth_scopes = [ "user.info.basic"; "video.publish"; "video.upload" ]
+
+(** How the authorization URL carries a PKCE challenge. *)
+type pkce_method =
+  | Pkce_plain
+      (** [code_challenge=<verifier>], [code_challenge_method=plain]: what
+          {!Make.get_oauth_url} has always sent. TikTok's docs do not
+          describe it. *)
+  | Pkce_s256_hex
+      (** [code_challenge=hex(SHA256(verifier))],
+          [code_challenge_method=S256]. TikTok's documented form for
+          desktop apps ({{:https://developers.tiktok.com/doc/login-kit-desktop}}:
+          "we only support S256 as code_challenge_method" and "use hex
+          encoding of SHA256"), which differs from RFC 7636's base64url.
+          Login Kit for Web ({{:https://developers.tiktok.com/doc/login-kit-web}})
+          does not mention PKCE. *)
+
+(** [pkce_challenge_s256_hex verifier] is the lowercase hex SHA-256 of
+    [verifier], TikTok's [code_challenge] for [S256]. *)
+let pkce_challenge_s256_hex verifier = Digestif.SHA256.(to_hex (digest_string verifier))
+
+let pkce_params ~pkce_method ~code_verifier =
+  match pkce_method with
+  | Pkce_plain -> [ ("code_challenge", [ code_verifier ]); ("code_challenge_method", [ "plain" ]) ]
+  | Pkce_s256_hex ->
+      [ ("code_challenge", [ pkce_challenge_s256_hex code_verifier ]);
+        ("code_challenge_method", [ "S256" ]) ]
 
 let get_authorization_url ~client_id ~redirect_uri ~scope ~state =
   let query = Uri.encoded_of_query [
@@ -2185,8 +2492,21 @@ module Make (Config : CONFIG) = struct
             on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["user.info.basic"; "video.publish"] ())))
         (fun err -> on_result (Error (Error_types.Internal_error err)))
   
-  (** Get OAuth URL *)
-  let get_oauth_url ~redirect_uri ~state ~code_verifier on_result =
+  (** Authorization URL for [TIKTOK_CLIENT_KEY]
+      ({{:https://developers.tiktok.com/doc/login-kit-web}}).
+
+      @param scopes Scope names to request, sent comma-separated. Defaults to
+        {!default_oauth_scopes} ([user.info.basic], [video.publish],
+        [video.upload]). Documented names
+        ({{:https://developers.tiktok.com/doc/tiktok-api-scopes}}) include
+        [user.info.profile] and [user.info.stats] (see {!OAuth.get_user}) and
+        [video.list].
+      @param pkce_method Used when [code_verifier] is not empty; defaults to
+        {!Pkce_plain}, the form this function has always sent. Desktop apps
+        should pass {!Pkce_s256_hex}.
+      @param code_verifier [""] sends no PKCE parameters. *)
+  let get_oauth_url ?(scopes = default_oauth_scopes) ?(pkce_method = Pkce_plain)
+      ~redirect_uri ~state ~code_verifier on_result =
     let client_key = Config.get_env "TIKTOK_CLIENT_KEY" |> Option.value ~default:"" in
     if client_key = "" then
       on_result (Error (Error_types.Internal_error "TikTok OAuth client key not configured"))
@@ -2194,18 +2514,28 @@ module Make (Config : CONFIG) = struct
       let url = get_authorization_url
         ~client_id:client_key
         ~redirect_uri
-        ~scope:"user.info.basic,video.publish,video.upload"
+        ~scope:(Oauth_scope.join Oauth_scope.Comma scopes)
         ~state
       in
       if code_verifier = "" then
         on_result (Ok url)
       else
         let uri = Uri.of_string url in
-        let query = Uri.query uri @ [
-          ("code_challenge", [code_verifier]);
-          ("code_challenge_method", ["plain"]);
-        ] in
+        let query = Uri.query uri @ pkce_params ~pkce_method ~code_verifier in
         on_result (Ok (Uri.with_query uri query |> Uri.to_string))
+
+  (** {!OAuth.Make.exchange_code_full} with [TIKTOK_CLIENT_KEY] /
+      [TIKTOK_CLIENT_SECRET]: credentials plus [open_id], granted scopes and
+      [refresh_expires_in]. {!exchange_code} is unchanged. *)
+  let exchange_code_full ?code_verifier ~code ~redirect_uri on_result =
+    let client_key = Config.get_env "TIKTOK_CLIENT_KEY" |> Option.value ~default:"" in
+    let client_secret = Config.get_env "TIKTOK_CLIENT_SECRET" |> Option.value ~default:"" in
+    if client_key = "" || client_secret = "" then
+      on_result (Stdlib.Error (Error_types.Internal_error "TikTok OAuth credentials not configured"))
+    else
+      let module Oauth_http = OAuth.Make (Config.Http) in
+      Oauth_http.exchange_code_full ?code_verifier ~client_key ~client_secret ~redirect_uri ~code
+        on_result
   
   (** Validate content *)
   let validate_content ~text =

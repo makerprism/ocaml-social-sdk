@@ -758,6 +758,129 @@ let test_get_oauth_url_includes_pkce_when_code_verifier_present () =
         failwith ("Unexpected error: " ^ err)));
   assert !success_called
 
+module Tiktok_oauth = Social_tiktok_v1.OAuth.Make (Mock_http)
+
+let string_contains haystack needle =
+  let n = String.length needle and h = String.length haystack in
+  let rec scan i = i + n <= h && (String.sub haystack i n = needle || scan (i + 1)) in
+  scan 0
+
+let test_get_oauth_url_scopes_and_s256 () =
+  print_string "Test: get_oauth_url honours scopes and S256 hex PKCE... ";
+  reset_mock_state ();
+  TikTok.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"s" ~code_verifier:""
+    (handle_api_result
+       (fun url ->
+         let uri = Uri.of_string url in
+         assert (Uri.get_query_param uri "scope" = Some "user.info.basic,video.publish,video.upload");
+         assert (Uri.get_query_param uri "code_challenge" = None))
+       (fun err -> failwith err));
+  TikTok.get_oauth_url
+    ~scopes:[ "user.info.basic"; "user.info.profile"; "user.info.stats"; "video.list"; "video.publish"; "video.upload" ]
+    ~pkce_method:Social_tiktok_v1.Pkce_s256_hex ~redirect_uri:"https://example.com/callback" ~state:"s"
+    ~code_verifier:"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    (handle_api_result
+       (fun url ->
+         let uri = Uri.of_string url in
+         assert (Uri.get_query_param uri "scope"
+                 = Some "user.info.basic,user.info.profile,user.info.stats,video.list,video.publish,video.upload");
+         assert (Uri.get_query_param uri "code_challenge_method" = Some "S256");
+         (* hex(SHA256) of the RFC 7636 appendix B verifier *)
+         assert (Uri.get_query_param uri "code_challenge"
+                 = Some "13d31e961a1ad8ec2f16b10c4c982e0876a878ad6df144566ee1894acb70f9c3"))
+       (fun err -> failwith err));
+  print_endline "PASSED"
+
+let test_exchange_code_full () =
+  print_string "Test: exchange_code_full keeps open_id, scopes, refresh lifetime... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun _url _headers _body ->
+    { Social_core.status = 200;
+      headers = [];
+      body = {|{"access_token":"act","expires_in":86400,"open_id":"oid-1","refresh_expires_in":31536000,
+               "refresh_token":"rft","scope":"user.info.basic,video.publish","token_type":"Bearer"}|} });
+  Tiktok_oauth.exchange_code_full ~code_verifier:"v" ~client_key:"ck" ~client_secret:"cs"
+    ~redirect_uri:"https://e.com/cb" ~code:"c" (function
+    | Stdlib.Ok token ->
+        assert (token.Social_tiktok_v1.OAuth.open_id = "oid-1");
+        assert (token.scopes = [ "user.info.basic"; "video.publish" ]);
+        assert (token.credentials.scope = Some "user.info.basic,video.publish");
+        assert (token.credentials.refresh_token = Some "rft");
+        assert (token.expires_in = Some 86400);
+        assert (token.refresh_expires_in = Some 31536000);
+        assert (token.refresh_expires_at <> None);
+        (match !Mock_http.post_calls with
+         | [ { url; body = Some body; _ } ] ->
+             assert (url = "https://open.tiktokapis.com/v2/oauth/token/");
+             assert (string_contains body "code_verifier=v");
+             assert (string_contains body "grant_type=authorization_code")
+         | _ -> failwith "expected one POST")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  (* HTTP 200 carrying an OAuth error *)
+  Mock_http.set_custom_post_handler (fun _ _ _ ->
+    { Social_core.status = 200; headers = [];
+      body = {|{"error":"invalid_grant","error_description":"Authorization code is expired.","log_id":"L1"}|} });
+  Tiktok_oauth.exchange_code_full ~client_key:"ck" ~client_secret:"cs" ~redirect_uri:"r" ~code:"c" (function
+    | Stdlib.Error (Error_types.Api_error { status_code = 400; request_id = Some "L1"; raw_response = Some _; _ }) -> ()
+    | Stdlib.Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected an error");
+  (* Make variant reads env and refresh keeps the old token when none returned *)
+  Mock_http.set_custom_post_handler (fun _ _ _ ->
+    { Social_core.status = 200; headers = [];
+      body = {|{"access_token":"a2","open_id":"oid-1","scope":"user.info.basic"}|} });
+  Tiktok_oauth.refresh_token_full ~client_key:"ck" ~client_secret:"cs" ~refresh_token:"old" (function
+    | Stdlib.Ok token -> assert (token.Social_tiktok_v1.OAuth.credentials.refresh_token = Some "old")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  TikTok.exchange_code_full ~code:"c" ~redirect_uri:"r" (function
+    | Stdlib.Ok token -> assert (token.Social_tiktok_v1.OAuth.open_id = "oid-1")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  print_endline "PASSED"
+
+let test_get_user_typed () =
+  print_string "Test: OAuth.get_user typed user info... ";
+  reset_mock_state ();
+  Mock_http.set_custom_get_handler (fun _ ->
+    { Social_core.status = 200; headers = [];
+      body = {|{"data":{"user":{"open_id":"oid","union_id":"uid","avatar_url":"https://a","display_name":"Maker",
+               "username":"maker","is_verified":false,"follower_count":10,"likes_count":5}},
+               "error":{"code":"ok","message":"","log_id":"L"}}|} });
+  let fields =
+    Social_tiktok_v1.OAuth.user_fields_basic @ Social_tiktok_v1.OAuth.user_fields_profile
+    @ Social_tiktok_v1.OAuth.user_fields_stats
+  in
+  Tiktok_oauth.get_user ~access_token:"tok" ~fields (function
+    | Stdlib.Ok user ->
+        assert (user.Social_tiktok_v1.OAuth.open_id = "oid");
+        assert (user.username = Some "maker");
+        assert (user.is_verified = Some false);
+        assert (user.follower_count = Some 10 && user.video_count = None);
+        (match !Mock_http.get_calls with
+         | [ { url; headers } ] ->
+             let uri = Uri.of_string url in
+             assert (Uri.path uri = "/v2/user/info/");
+             assert (Uri.get_query_param uri "fields"
+                     = Some "open_id,union_id,avatar_url,avatar_url_100,avatar_large_url,display_name,bio_description,profile_deep_link,is_verified,username,follower_count,following_count,likes_count,video_count");
+             assert (List.assoc_opt "Authorization" headers = Some "Bearer tok")
+         | _ -> failwith "expected one GET")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.set_custom_get_handler (fun _ ->
+    { Social_core.status = 401; headers = [];
+      body = {|{"data":{},"error":{"code":"scope_not_authorized","message":"The user did not authorize the scope required for completing this request.","log_id":"L"}}|} });
+  Tiktok_oauth.get_user ~access_token:"tok" ~fields:[ "username" ] (function
+    | Stdlib.Error (Error_types.Auth_error
+                      (Error_types.Insufficient_permissions { required; _ })) ->
+        assert (required = [ "user.info.basic"; "user.info.profile" ])
+    | Stdlib.Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected an error");
+  Mock_http.set_custom_get_handler (fun _ ->
+    { Social_core.status = 401; headers = [];
+      body = {|{"error":{"code":"access_token_invalid","message":"bad","log_id":"L"}}|} });
+  Tiktok_oauth.get_user ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Auth_error Error_types.Token_invalid) -> ()
+    | Stdlib.Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected an error");
+  print_endline "PASSED"
+
 let get_query_param_exn uri key =
   match Uri.get_query_param uri key with
   | Some v -> v
@@ -3243,6 +3366,9 @@ let () =
   test_exchange_code_403_scope_mapping ();
   test_get_oauth_url ();
   test_get_oauth_url_includes_pkce_when_code_verifier_present ();
+  test_get_oauth_url_scopes_and_s256 ();
+  test_exchange_code_full ();
+  test_get_user_typed ();
   test_oauth_exchange_request_contract ();
   test_oauth_exchange_request_includes_code_verifier_when_present ();
   test_oauth_refresh_triggered_within_buffer ();
