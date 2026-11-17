@@ -688,6 +688,87 @@ let test_post_single () =
         print_endline "PASS Post single (full flow)")
       (fun err -> failwith ("Post single failed: " ^ err)))
 
+
+(** Mock config for [Make_nonblocking]: [sleep] only records the timer,
+    the way a cooperative runtime schedules it, and the test fires it. *)
+module Nonblocking_mock_config = struct
+  include Mock_config
+
+  let pending_sleeps : (float * (unit -> unit) * (string -> unit)) list ref =
+    ref []
+
+  let sleep ~seconds on_continue on_error =
+    pending_sleeps := (seconds, on_continue, on_error) :: !pending_sleeps
+end
+
+module Instagram_nonblocking = Make_nonblocking (Nonblocking_mock_config)
+
+let take_single_pending_sleep () =
+  match !Nonblocking_mock_config.pending_sleeps with
+  | [ timer ] ->
+      Nonblocking_mock_config.pending_sleeps := [];
+      timer
+  | timers ->
+      failwith
+        (Printf.sprintf "expected one pending sleep, got %d"
+           (List.length timers))
+
+let setup_nonblocking_post () =
+  Mock_config.reset ();
+  Nonblocking_mock_config.pending_sleeps := [];
+  let expires_at =
+    match
+      Ptime.add_span (Ptime_clock.now ()) (Ptime.Span.of_int_s (30 * 86400))
+    with
+    | Some t -> Some (Ptime.to_rfc3339 t)
+    | None -> failwith "Failed to calculate future time"
+  in
+  Mock_config.set_credentials ~account_id:"test_account"
+    ~credentials:
+      { access_token = "valid_token"; refresh_token = None; expires_at;
+        auth_type = Bearer; scope = None };
+  Mock_config.set_ig_user_id ~account_id:"test_account" ~ig_user_id:"ig_123";
+  Mock_http.set_responses [
+    { status = 200; body = {|{"id": "container_12345"}|}; headers = [] };
+    { status = 200; body = {|{"status_code": "FINISHED", "status": "OK"}|}; headers = [] };
+    { status = 200; body = {|{"id": "media_67890"}|}; headers = [] };
+  ]
+
+(** Test: container polling waits through the runtime's sleep and returns
+    to the caller instead of blocking until the timer fires *)
+let test_post_single_nonblocking_sleep () =
+  setup_nonblocking_post ();
+  let result = ref None in
+  Instagram_nonblocking.post_single ~account_id:"test_account"
+    ~text:"Test post" ~media_urls:["https://example.com/image.jpg"]
+    (fun outcome -> result := Some outcome);
+  assert (!result = None);
+  assert (List.length !Mock_http.requests = 1);
+  let seconds, on_continue, _on_error = take_single_pending_sleep () in
+  assert (seconds = 2.0);
+  on_continue ();
+  (match !result with
+   | Some (Error_types.Success "media_67890") -> ()
+   | _ -> failwith "post_single should publish once the timer fires");
+  assert (List.length !Mock_http.requests = 3);
+  print_endline "PASS Container polling uses the non-blocking sleep"
+
+(** Test: a timer the runtime cannot schedule fails the post instead of
+    publishing or hanging *)
+let test_post_single_nonblocking_sleep_error () =
+  setup_nonblocking_post ();
+  let result = ref None in
+  Instagram_nonblocking.post_single ~account_id:"test_account"
+    ~text:"Test post" ~media_urls:["https://example.com/image.jpg"]
+    (fun outcome -> result := Some outcome);
+  let _seconds, _on_continue, on_error = take_single_pending_sleep () in
+  on_error "timer cancelled";
+  (match !result with
+   | Some (Error_types.Failure _) -> ()
+   | _ -> failwith "a failed sleep should fail the post");
+  assert (List.length !Mock_http.requests = 1);
+  print_endline "PASS Failed sleep fails the post without publishing"
+
 (** Test: Post requires media *)
 let test_post_requires_media () =
   Mock_config.reset ();
@@ -1339,6 +1420,8 @@ let () =
   test_check_status ();
   test_content_validation ();
   test_post_single ();
+  test_post_single_nonblocking_sleep ();
+  test_post_single_nonblocking_sleep_error ();
   test_post_requires_media ();
   test_post_single_rejects_unsupported_media ();
   test_polling_no_publish_on_status_error ();

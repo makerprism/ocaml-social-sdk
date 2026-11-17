@@ -52,11 +52,12 @@ module Config = struct
   let get_env = Sys.getenv_opt
   let get_credentials ~account_id on_success on_error = (* ... *)
   let get_ig_user_id ~account_id on_success on_error = (* ... *)
-  let sleep duration on_continue = (* Wait for duration seconds *)
+  (* Container polling waits through this; it must not block the runtime. *)
+  let sleep = Social_lwt.Lwt_adapter.sleep
   (* ... other required functions *)
 end
 
-module Instagram = Instagram_graph_v21.Make(Config)
+module Instagram = Instagram_graph_v21.Make_nonblocking(Config)
 
 (* Post single image *)
 let post_image account_id =
