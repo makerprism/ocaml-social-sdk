@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Oauth_scope`: one reading of granted-scope strings for every provider.
+  `split` accepts comma-, space- or mixed-delimited strings (Meta/TikTok/
+  Pinterest commas, RFC 6749 spaces) and keeps case; `join Comma|Space`
+  builds the request parameter; `mem`, `granted ~scope`, `contains_all
+  ~required`, `missing ~requested ~granted` and `dedup` compare names
+  case-insensitively.
+- `Token_expiry`: `expires_in_of_json` (int, float or numeric string,
+  clamped to `0 .. max_expires_in` = one year), `expires_at_of_expires_in
+  ?now`, `seconds_until ?now` and `is_expired ?buffer_seconds ?now`
+  (`None` never expires, an unparseable instant counts as expired). The
+  per-package `is_token_expired_buffer` copies (Facebook v21/v25, Instagram
+  standalone v21/v25, Instagram graph v21, LinkedIn, TikTok), Threads'
+  `parse_expires_in` / `expires_at_of_expires_in` and Google OAuth's
+  `expires_at_of_expires_in` now delegate to it; their results are
+  unchanged, except that Threads now also reads a numeric-string
+  `expires_in`.
+- New dependency: `ptime` (already a dependency of every provider package).
+
 - `Provider_error_detail` (issue #63): the provider's own error detail of an
   `Api_error`, read back from its `raw_response`. `of_error : Error_types.error
   -> t option`, `of_api_error`, and `of_response ~status_code ?request_id

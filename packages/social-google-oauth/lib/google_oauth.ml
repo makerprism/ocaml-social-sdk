@@ -38,10 +38,7 @@ let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
 
 (** Parse expires_in from token response into RFC 3339 timestamp *)
 let expires_at_of_expires_in expires_in =
-  let now = Ptime_clock.now () in
-  match Ptime.add_span now (Ptime.Span.of_int_s expires_in) with
-  | Some exp -> Some (Ptime.to_rfc3339 exp)
-  | None -> None
+  Token_expiry.expires_at_of_expires_in expires_in
 
 module Make (Http : Social_core.HTTP_CLIENT) = struct
   let exchange_code ~client_id ~client_secret ~redirect_uri ~code ~code_verifier on_success on_error =

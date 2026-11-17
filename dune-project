@@ -19,7 +19,8 @@
   yojson
   re
   digestif
-  base64))
+  base64
+  ptime))
 
 (package
  (name social-lwt)

@@ -560,19 +560,7 @@ module Make (Config : CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    match expires_at_opt with
-    | None -> false
-    | Some expires_at_str ->
-        try
-          match Ptime.of_rfc3339 expires_at_str with
-          | Ok (expires_at, _, _) ->
-              let now = Ptime_clock.now () in
-              let buffer = Ptime.Span.of_int_s buffer_seconds in
-              (match Ptime.add_span now buffer with
-               | Some future -> not (Ptime.is_later expires_at ~than:future)
-               | None -> false)
-          | Error _ -> true
-        with _ -> true
+    Token_expiry.is_expired ~buffer_seconds expires_at_opt
   
   (** {1 Platform Constants} *)
   
