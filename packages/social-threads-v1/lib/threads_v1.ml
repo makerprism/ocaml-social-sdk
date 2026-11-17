@@ -330,21 +330,35 @@ module OAuth = struct
   let authorization_endpoint = oauth_authorize_url
   let token_endpoint = token_endpoint
 
-  (* Use comma-separated scope format (?scope=scope1,scope2) instead of
-     Meta's new params[scope]=["scope1","scope2"] JSON format. The new format
-     causes "InvalidScopeRequested" errors. *)
-  let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
-    let scope_list = List.map scope_to_string scopes in
-    let scope = String.concat "," scope_list in
-    let query =
-      Uri.encoded_of_query
-        [ ("client_id", [client_id]);
-          ("redirect_uri", [redirect_uri]);
-          ("scope", [scope]);
-          ("response_type", ["code"]);
-          ("state", [state]) ]
+  (** The Threads authorization window URL: the one supported builder,
+      shared with {!get_authorization_url} and [Make.get_oauth_url].
+
+      [GET {!oauth_authorize_url}?client_id&redirect_uri&scope=a,b&response_type=code&state]
+      as documented in
+      {{:https://developers.facebook.com/docs/threads/get-started/get-access-tokens-and-permissions}}
+      ("[scope]: A comma-separated list, or URL-encoded space-separated
+      list"). Plain [scope], not [params[scope]]: the JSON-array form makes
+      Threads answer [InvalidScopeRequested]. The host stays
+      {!oauth_authorize_url}; see its note about EU consent redirects.
+
+      @param scopes Permission names; use [List.map scope_to_string] for
+        typed scopes.
+      @param extra_params Appended as given. *)
+  let authorize_url ~client_id ~redirect_uri ~state ~scopes ?(extra_params = []) () =
+    let params =
+      [ ("client_id", client_id);
+        ("redirect_uri", redirect_uri);
+        ("scope", Oauth_scope.join Oauth_scope.Comma scopes);
+        ("response_type", "code");
+        ("state", state) ]
+      @ extra_params
     in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [ v ])) params) in
     Printf.sprintf "%s?%s" authorization_endpoint query
+
+  (** Typed-scope form of {!authorize_url}. *)
+  let get_authorization_url ~client_id ~redirect_uri ~state ~scopes =
+    authorize_url ~client_id ~redirect_uri ~state ~scopes:(List.map scope_to_string scopes) ()
 
   module Make (Http : HTTP_CLIENT) = struct
     let exchange_code ~client_id ~client_secret ~redirect_uri ~code on_success on_error =

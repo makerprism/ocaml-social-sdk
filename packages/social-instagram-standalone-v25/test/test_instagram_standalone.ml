@@ -193,6 +193,27 @@ let test_standalone_auth_url_endpoint () =
   assert (string_contains url "https://api.instagram.com/oauth/authorize");
   print_endline "PASS Standalone auth URL starts with correct endpoint"
 
+let test_standalone_authorize_url () =
+  let url =
+    OAuth.authorize_url ~client_id:"app" ~redirect_uri:"https://e.com/cb" ~state:"st"
+      ~scopes:[ "instagram_business_basic"; "instagram_business_content_publish" ]
+      ~enable_fb_login:false ()
+  in
+  assert (String.starts_with ~prefix:"https://api.instagram.com/oauth/authorize?" url);
+  assert (query_param url "scope" = Some "instagram_business_basic,instagram_business_content_publish");
+  assert (query_param url "params[scope]" = None);
+  assert (query_param url "response_type" = Some "code");
+  assert (query_param url "state" = Some "st");
+  assert (query_param url "enable_fb_login" = Some "0");
+  assert (query_param url "force_reauth" = None);
+  let url =
+    OAuth.authorize_url ~client_id:"app" ~redirect_uri:"https://e.com/cb" ~state:"st"
+      ~scopes:[ "instagram_business_basic" ] ~force_reauth:true ()
+  in
+  assert (query_param url "enable_fb_login" = None);
+  assert (query_param url "force_reauth" = Some "true");
+  print_endline "PASS authorize_url sends plain comma-separated scope and optional flags"
+
 (** Test: Standalone OAuth authorization URL includes enable_fb_login=0 *)
 let test_standalone_auth_url_enable_fb_login () =
   let url = OAuth.get_authorization_url
@@ -1697,6 +1718,7 @@ let () =
   print_endline "--- OAuth Standalone Tests ---";
   test_exported_api_constants ();
   test_standalone_auth_url_endpoint ();
+  test_standalone_authorize_url ();
   test_standalone_auth_url_enable_fb_login ();
   test_standalone_auth_url_scopes_comma_separated ();
   test_standalone_auth_url_response_type ();

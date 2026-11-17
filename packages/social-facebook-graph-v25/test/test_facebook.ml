@@ -581,6 +581,35 @@ let test_get_all_business_pages () =
     | Stdlib.Error (Error_types.Auth_error _) -> print_endline "✓ business list failure is an error"
     | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected an auth error")
 
+let test_authorize_url () =
+  let url =
+    OAuth.authorize_url ~client_id:"123" ~redirect_uri:"https://e.com/cb?x=1" ~state:"s&t"
+      ~scopes:[ "pages_show_list"; "pages_manage_posts" ] ()
+  in
+  assert (String.starts_with ~prefix:"https://www.facebook.com/v25.0/dialog/oauth?" url);
+  assert (query_param url "client_id" = "123");
+  assert (query_param url "redirect_uri" = "https://e.com/cb?x=1");
+  assert (query_param url "state" = "s&t");
+  assert (query_param url "response_type" = "code");
+  assert (query_param url "scope" = "pages_show_list,pages_manage_posts");
+  assert (Uri.get_query_param (Uri.of_string url) "params[scope]" = None);
+  assert (Uri.get_query_param (Uri.of_string url) "auth_type" = None);
+  let url =
+    OAuth.authorize_url ~client_id:"123" ~redirect_uri:"https://e.com/cb" ~state:"s"
+      ~scopes:[ "email" ] ~auth_type:OAuth.Reauthorize ~extra_params:[ ("config_id", "9") ] ()
+  in
+  assert (query_param url "auth_type" = "reauthorize");
+  assert (query_param url "config_id" = "9");
+  (* Make.get_oauth_url delegates and keeps auth_type=rerequest. *)
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_ID" "app";
+  Facebook.get_oauth_url ~redirect_uri:"https://e.com/cb" ~state:"s" ~scopes:[ "a"; "b" ]
+    (fun url ->
+      assert (query_param url "scope" = "a,b");
+      assert (query_param url "auth_type" = "rerequest"))
+    (fun err -> failwith err);
+  print_endline "✓ authorize_url builds the documented plain-scope Login URL"
+
 (** Test: Field selection *)
 let test_field_selection () =
   Mock_config.reset ();
@@ -3554,9 +3583,11 @@ let () =
   test_get_permissions ();
   test_app_secret_proof_known_answer ();
 
+  test_authorize_url ();
+
   print_endline "\n--- Login Discovery Tests ---";
   test_get_me_id ();
   test_get_managed_pages_follows_paging ();
   test_get_all_business_pages ();
 
-  print_endline "\n=== All 87 tests passed! ===\n"
+  print_endline "\n=== All 88 tests passed! ===\n"

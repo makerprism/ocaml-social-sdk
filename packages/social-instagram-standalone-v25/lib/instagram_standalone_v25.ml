@@ -301,11 +301,12 @@ module OAuth = struct
 
   (** Generate authorization URL for Instagram Standalone OAuth 2.0 flow
 
+      {b Deprecated}: use {!authorize_url}. This builder sends the scopes as
+      [params[scope]=["..."]], a form the Business Login documentation does
+      not describe. Kept unchanged for existing callers.
+
       Note: This uses Instagram's own OAuth dialog (not Facebook's).
       The user will log in directly to Instagram and grant permissions.
-
-      Uses Meta's new params[scope] JSON array format instead of the legacy
-      ?scope=xxx format.
 
       @param client_id Instagram App ID (same as Facebook App ID)
       @param redirect_uri Registered callback URL
@@ -324,6 +325,47 @@ module OAuth = struct
       ("state", state);
     ] in
     let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+
+  (** The Business Login authorization URL: the one supported builder.
+
+      [GET {!oauth_authorize_url}?client_id&redirect_uri&response_type=code&scope=a,b&state]
+      with the parameters of
+      {{:https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login}}
+      ("[scope]: A comma-separated or URL-encoded space-separated list").
+      Scopes go out comma-separated in the plain [scope] parameter.
+
+      Meta's page shows the dialog on [www.instagram.com/oauth/authorize];
+      {!oauth_authorize_url} stays on [api.instagram.com], which this
+      package and its consumers have used in production. Change the host
+      only with a live authorization test.
+
+      @param scopes Permission names, e.g. [["instagram_business_basic"]];
+        use [List.map scope_to_string] for typed scopes.
+      @param enable_fb_login [false] hides the "Log in with Facebook" option
+        (sent as [enable_fb_login=0]); omitted by default (Meta's default
+        shows it).
+      @param force_reauth [true] asks for Instagram credentials even when
+        the user is logged in.
+      @param extra_params Appended as given. *)
+  let authorize_url ~client_id ~redirect_uri ~state ~scopes ?enable_fb_login ?force_reauth
+      ?(extra_params = []) () =
+    let flag name = function
+      | Some true -> [ (name, "1") ]
+      | Some false -> [ (name, "0") ]
+      | None -> []
+    in
+    let params =
+      [ ("client_id", client_id);
+        ("redirect_uri", redirect_uri);
+        ("response_type", "code");
+        ("scope", Oauth_scope.join Oauth_scope.Comma scopes);
+        ("state", state) ]
+      @ flag "enable_fb_login" enable_fb_login
+      @ (match force_reauth with Some true -> [ ("force_reauth", "true") ] | Some false | None -> [])
+      @ extra_params
+    in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [ v ])) params) in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
 
   (** Make functor for Standalone OAuth operations that need HTTP client *)
@@ -2107,7 +2149,9 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
           | Error_types.Failure err ->
               on_result (Error_types.Failure err))
 
-  (** OAuth authorization URL *)
+  (** OAuth authorization URL with [INSTAGRAM_APP_ID]. Builds it with the
+      deprecated {!OAuth.get_authorization_url} ([params[scope]]), unchanged
+      for existing callers; new code should call {!OAuth.authorize_url}. *)
   let get_oauth_url ~redirect_uri ~state ~scopes on_success on_error =
     let client_id = Config.get_env "INSTAGRAM_APP_ID" |> Option.value ~default:"" in
 

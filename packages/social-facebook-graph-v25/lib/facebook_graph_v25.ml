@@ -118,6 +118,7 @@ module OAuth = struct
     (** Helper to create custom scopes from strings. *)
     let custom_scope s = Custom s
 
+
     (** Scopes required for basic read operations *)
     let read = [Public_profile; Email]
 
@@ -189,10 +190,12 @@ module OAuth = struct
   
   (** Generate authorization URL for Facebook OAuth 2.0 flow
 
-      Note: Facebook does NOT support PKCE.
+      {b Deprecated}: use {!authorize_url}. This builder sends the scopes as
+      [params[scope]=["..."]], a form Meta's Login documentation does not
+      describe, and always forces [auth_type=rerequest]. Kept unchanged for
+      existing callers.
 
-      Uses Meta's new params[scope] JSON array format instead of the legacy
-      ?scope=xxx format.
+      Note: Facebook does NOT support PKCE.
 
       @param client_id Facebook App ID
       @param redirect_uri Registered callback URL
@@ -211,6 +214,53 @@ module OAuth = struct
       ("auth_type", "rerequest");
     ] in
     let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
+    Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
+
+  (** [auth_type] of the Login dialog. *)
+  type auth_type =
+    | Rerequest
+        (** Ask again for permissions the user declined
+            ({{:https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow}}). *)
+    | Reauthenticate
+        (** Ask for the password again
+            ({{:https://developers.facebook.com/docs/facebook-login/guides/advanced/re-authentication}}). *)
+    | Reauthorize
+        (** Renew data access after it expired
+            ({{:https://developers.facebook.com/docs/facebook-login/auth-vs-data}}). *)
+
+  let auth_type_to_string = function
+    | Rerequest -> "rerequest"
+    | Reauthenticate -> "reauthenticate"
+    | Reauthorize -> "reauthorize"
+
+  (** The Facebook Login dialog URL: the one supported builder.
+
+      [GET {!oauth_authorize_url}?client_id&redirect_uri&state&response_type=code&scope=a,b]
+      as documented for the manual Login flow
+      ({{:https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow}}:
+      "[scope]: A comma or space separated list of Permissions"). Scopes go
+      out comma-separated in the plain [scope] parameter; Facebook does not
+      support PKCE.
+
+      @param scopes Permission names, e.g. [["pages_show_list"]]; use
+        [List.map Scopes.scope_to_string] for typed scopes. Empty names are
+        dropped.
+      @param auth_type Omitted by default (Meta's default dialog).
+      @param extra_params Appended as given, e.g. [("config_id", id)] for
+        Facebook Login for Business. *)
+  let authorize_url ~client_id ~redirect_uri ~state ~scopes ?auth_type ?(extra_params = []) () =
+    let params =
+      [ ("client_id", client_id);
+        ("redirect_uri", redirect_uri);
+        ("state", state);
+        ("response_type", "code");
+        ("scope", Oauth_scope.join Oauth_scope.Comma scopes) ]
+      @ (match auth_type with
+         | Some auth_type -> [ ("auth_type", auth_type_to_string auth_type) ]
+         | None -> [])
+      @ extra_params
+    in
+    let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [ v ])) params) in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
   
   (** {2 Token tooling helpers} *)
@@ -2227,19 +2277,10 @@ module Make (Config : CONFIG) = struct
     if client_id = "" then
       on_error "Facebook App ID not configured"
     else (
-      let scope_str = String.concat "," scopes in
-      let params = [
-        ("client_id", client_id);
-        ("redirect_uri", redirect_uri);
-        ("state", state);
-        ("scope", scope_str);
-        ("response_type", "code");
-        ("auth_type", "rerequest");  (* Force re-authentication for account selection *)
-      ] in
-      
-      let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
-      let url = Printf.sprintf "%s?%s" oauth_authorize_url query in
-      on_success url
+      (* Same URL as before: plain comma-separated scope, auth_type=rerequest. *)
+      on_success
+        (OAuth.authorize_url ~client_id ~redirect_uri ~state ~scopes
+           ~auth_type:OAuth.Rerequest ())
     )
   
   (** Exchange OAuth code for a long-lived access token (~60 days).

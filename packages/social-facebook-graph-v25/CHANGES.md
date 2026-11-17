@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.authorize_url ~client_id ~redirect_uri ~state ~scopes ?auth_type ?extra_params ()`**: the one documented Login dialog builder (plain comma-separated `scope`, `response_type=code`, optional `auth_type = Rerequest | Reauthenticate | Reauthorize`). `Make.get_oauth_url` now builds its URL with it (same parameters as before, including `auth_type=rerequest`).
+- **Deprecated**: `OAuth.get_authorization_url` (sends the undocumented `params[scope]=[...]` and always `auth_type=rerequest`); use `OAuth.authorize_url`. Unchanged.
 - **Login discovery in `OAuth.Make(Http)`**, token-based (no `Config`), each with optional `?app_secret` for `appsecret_proof`:
   - `get_me_id ~access_token`: `GET /me?fields=id`.
   - `get_managed_pages ~access_token ?fields ?max_pages`: `GET /me/accounts`, following `paging.cursors.after` while `paging.next` is present, returning typed `OAuth.page {id; name; access_token; category; about; picture_url; tasks}`. Successor of `get_user_pages`, which reads only the first page and stays.
