@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Meta_debug_token`: the typed answer of Meta's `debug_token` endpoint,
+  shared by the Facebook and Threads packages. `t` carries `is_valid`,
+  `app_id`, `application`, `token_type`, `user_id`, `profile_id`, `scopes`,
+  `granular_scopes` (`{scope; target_ids : string list option}`, ids read
+  from strings or integers), `expires_at` (`Never_expires` for `0` |
+  `Expires_at unix`), `data_access_expires_at`, `issued_at` and `error`.
+  `of_json` / `of_body`, `expires_at_rfc3339`, `target_ids ~scope`,
+  `granted_for_target ~target_id ~scope` (per-object grants: a
+  `pages_manage_posts` grant limited to Pages A and B is not a grant for
+  Page C), and the app tokens `app_access_token` (`id|secret`) and
+  `threads_app_access_token` (`TH|id|secret`).
 - `Oauth_scope`: one reading of granted-scope strings for every provider.
   `split` accepts comma-, space- or mixed-delimited strings (Meta/TikTok/
   Pinterest commas, RFC 6749 spaces) and keeps case; `join Comma|Space`

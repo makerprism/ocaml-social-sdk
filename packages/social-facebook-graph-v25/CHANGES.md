@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OAuth.Make(Http).debug_token_info ~app_access_token ~input_token`**: typed `GET /debug_token`, returning `Meta_debug_token.t api_result` (scopes, granular per-Page scopes, validity, expiry, user id). Graph failures go through `Meta_graph_error`, transport failures are `Network_error`. The JSON-returning `debug_token` stays for compatibility.
+- **`OAuth.Make(Http).get_permissions ~access_token ?app_secret`**: typed `GET /me/permissions`, returning `{permission; status = Granted | Declined | Expired | Unknown_status _}` list; `OAuth.granted_permissions` / `declined_permissions` split it. `?app_secret` adds `appsecret_proof`.
+- `OAuth.app_secret_proof ~app_secret ~access_token` (lowercase-hex HMAC-SHA256), `OAuth.token_query`, `OAuth.parse_permissions`, usable without a `Config`.
 - **`get_permalink ~post_id ~access_token`** and **`get_permalink_for_account ~account_id ~post_id`**: fetch an object's `permalink_url` by id (`GET /{id}?fields=permalink_url`, with `appsecret_proof` when an app secret is configured). The result is `string option api_result`: `Ok None` when Meta returns no permalink for an object that exists. The pure parser is exported as `parse_permalink_response`.
 - Top-level API constants, usable without applying `Make`: `api_version`
   (`"v25.0"`), `graph_api_base`, `rupload_base`, `oauth_authorize_url`,

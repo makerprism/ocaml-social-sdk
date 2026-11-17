@@ -17,7 +17,8 @@
   secure_random
   oauth_pkce
   oauth_scope
-  token_expiry)
+  token_expiry
+  meta_debug_token)
  (libraries
   yojson
   re
