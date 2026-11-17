@@ -953,7 +953,7 @@ Returns metrics including:
 ### Text
 - Maximum length: 3,000 characters
 - Minimum length: 1 character
-- URLs are automatically converted to link previews
+- Without media, the first URL becomes a link-preview article card. Pass `~link_preview:false` to `post_single` / `post_thread` to post the text alone (the URL stays clickable; the text is Little Text Format-escaped either way)
 
 ### Images
 - Maximum file size: 8 MB

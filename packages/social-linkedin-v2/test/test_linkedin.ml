@@ -3478,6 +3478,48 @@ let test_post_with_url_preview () =
         print_endline "✓ Post with URL preview (article)")
       (fun err -> failwith ("Post with URL failed: " ^ err)))
 
+(** Test: link_preview:false publishes text only, still LTF-escaped *)
+let test_post_without_link_preview () =
+  Mock_config.reset ();
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:{
+    access_token = "valid_token";
+    refresh_token = Some "refresh_token";
+    expires_at = Some future_time;
+    auth_type = Bearer;
+    scope = None;
+  };
+  Mock_http.set_responses [
+    { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+    { status = 201; body = {|{"id": "urn:li:share:790"}|}; headers = [] };
+  ];
+  let text = "Read this (really) https://example.com/ocaml-article #ocaml" in
+  LinkedIn.post_single ~account_id:"test_account" ~text ~media_urls:[]
+    ~link_preview:false
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "urn:li:share:790");
+        let (_, _, _, body) =
+          List.find (fun (method_, url, _, _) ->
+            method_ = "POST" && string_contains url "/rest/posts")
+            (List.rev !Mock_http.requests)
+        in
+        let json = Yojson.Basic.from_string body in
+        let open Yojson.Basic.Util in
+        (* No article card: no content block at all *)
+        assert (json |> member "content" = `Null);
+        (* Commentary is escaped exactly as on the preview path *)
+        assert (json |> member "commentary" |> to_string
+                = Social_linkedin_v2.escape_little_text_format text);
+        assert (string_contains (json |> member "commentary" |> to_string) "\\(really\\)");
+        print_endline "✓ Post with link_preview:false sends escaped text and no article")
+      (fun err -> failwith ("Post without link preview failed: " ^ err)))
+
 (** Test: Explicit title is forwarded to article payload *)
 let test_post_with_url_preview_explicit_title () =
   Mock_config.reset ();
@@ -6226,6 +6268,7 @@ let () =
   test_get_account_analytics ();
   test_get_account_analytics_rejects_invalid_entity_urn ();
   test_post_with_url_preview ();
+  test_post_without_link_preview ();
   test_post_with_url_preview_explicit_title ();
   test_post_with_url_preview_utf8_truncation ();
   test_post_single_insufficient_permissions_error ();

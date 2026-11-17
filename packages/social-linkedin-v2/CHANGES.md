@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Added
+
+- `post_single` / `post_thread` take `?link_preview` (default `true`, the
+  existing behaviour). With `~link_preview:false` a text-only post sends no
+  `article` content block, so no link card is generated from the first URL.
+  The commentary still goes through `escape_little_text_format`, so callers
+  that only wanted to avoid the card no longer need to build their own
+  `/rest/posts` request (and lose the escaping).
+
 ### Changed
 
 - 403 responses now carry LinkedIn's verbatim `message` text via the new
