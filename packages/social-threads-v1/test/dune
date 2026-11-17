@@ -4,5 +4,6 @@
   social-threads-v1
   social-core
   str
+  uri
   ptime
   ptime.clock.os))
