@@ -5036,8 +5036,52 @@ let test_authorize_url () =
         ~scopes:[ "threads_basic"; "threads_read_replies" ] ());
   print_endline "ok: Threads authorize_url keeps the plain scope parameter and host"
 
+let test_oauth_get_me () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { Social_core.status = 200;
+        body = {|{"id":"1784","username":"maker","name":"","threads_profile_picture_url":"https://p/x.jpg",
+                 "threads_biography":"bio","is_verified":true}|};
+        headers = [] } ];
+  OAuth_http.get_me ~access_token:"tok+/=" (function
+    | Ok profile ->
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] ->
+             assert (string_contains url "https://graph.threads.net/v1.0/me?");
+             assert (query_param url "fields"
+                     = "id,username,name,threads_profile_picture_url,threads_biography,is_verified");
+             assert (query_param url "access_token" = "tok+/=")
+         | _ -> failwith "expected one GET");
+        assert (profile.Social_threads_v1.OAuth.id = "1784");
+        assert (profile.username = Some "maker");
+        assert (profile.name = None);
+        assert (profile.profile_picture_url = Some "https://p/x.jpg");
+        assert (profile.biography = Some "bio");
+        assert profile.is_verified
+    | Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_responses [ { Social_core.status = 200; body = {|{"id":1784}|}; headers = [] } ];
+  OAuth_http.get_me ~access_token:"t" ~fields:[ "username" ] (function
+    | Ok profile ->
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] -> assert (query_param url "fields" = "id,username")
+         | _ -> failwith "expected one GET");
+        assert (profile.Social_threads_v1.OAuth.id = "1784" && profile.username = None && not profile.is_verified)
+    | Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { Social_core.status = 401;
+        body = {|{"error":{"message":"expired","type":"OAuthException","code":190,"error_subcode":463}}|};
+        headers = [] } ];
+  OAuth_http.get_me ~access_token:"t" (function
+    | Error (Error_types.Auth_error Error_types.Token_expired) -> ()
+    | Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Ok _ -> failwith "expected an error");
+  print_endline "ok: OAuth.get_me reads the typed Threads profile"
+
 let () =
   test_oauth_url ();
+  test_oauth_get_me ();
   test_authorize_url ();
   test_debug_token_info ();
   test_exported_api_constants ();

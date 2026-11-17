@@ -73,6 +73,7 @@ Known subtle bug traps:
 | Approve / ignore pending reply | POST | `POST /v1.0/{reply_id}/manage_pending_reply` | `Content-Type: application/x-www-form-urlencoded` | form body: `approve=true\|false`, `access_token` | `Threads.manage_pending_reply ~approve` (token), `Threads.approve_reply`, `Threads.ignore_reply` | `test_approve_reply_success`, `test_ignore_reply_success`, `test_manage_reply_with_token` |
 | Permalink by id | GET | `GET /v1.0/{post_id}?fields=permalink&access_token=...` | none | none (query-token contract) | `Threads.get_permalink`, `Threads.get_permalink_for_account` | `test_get_permalink`, `test_get_permalink_for_account` |
 | Token inspection | GET | `GET /v1.0/debug_token?input_token&access_token=TH\|app_id\|app_secret` | none | none (query-token contract) | `OAuth_http.debug_token_info` | `test_debug_token_info` |
+| Profile (token-based) | GET | `GET /v1.0/me?fields=id,username,name,threads_profile_picture_url,threads_biography,is_verified&access_token=...` | none | none (query-token contract) | `OAuth_http.get_me` | `test_oauth_get_me` |
 
 Known subtle bug traps:
 - For publish endpoints, `access_token` is part of form/query contract (not Authorization header).
