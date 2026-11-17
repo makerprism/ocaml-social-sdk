@@ -37,6 +37,11 @@ let header_value_case_insensitive headers key =
   |> List.find_map (fun (k, v) ->
          if String.equal (String.lowercase_ascii k) target then Some v else None)
 
+(** Query pairs for a Rails array parameter: one [name[]=value] pair per
+    value. [Uri.with_query] joins a value list with commas
+    ([types[]=a,b]), which Mastodon reads as the single value ["a,b"]. *)
+let array_query_param name values = List.map (fun value -> (name, [ value ])) values
+
 let parse_positive_int value =
   try
     let parsed = int_of_string value in
@@ -653,10 +658,8 @@ module Reads = struct
             query_value "max_id" max_id;
             query_value "since_id" since_id;
             query_value "min_id" min_id;
-            (match types with [] -> [] | types -> [ ("types[]", type_values types) ]);
-            (match exclude_types with
-            | [] -> []
-            | types -> [ ("exclude_types[]", type_values types) ]);
+            array_query_param "types[]" (type_values types);
+            array_query_param "exclude_types[]" (type_values exclude_types);
             query_value "account_id" from_account_id;
           ]
       in
@@ -1867,8 +1870,8 @@ module Make (Config : CONFIG) = struct
             ("max_id", (match max_id with Some v -> [v] | None -> []));
             ("since_id", (match since_id with Some v -> [v] | None -> []));
             ("min_id", (match min_id with Some v -> [v] | None -> []));
-            ("exclude_types[]", exclude_types);
           ]
+          @ array_query_param "exclude_types[]" exclude_types
         in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
@@ -2417,7 +2420,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let base_url = Printf.sprintf "%s/api/v1/lists/%s/accounts" mastodon_creds.instance_url list_id in
         let uri = Uri.of_string base_url in
-        let query = [ ("account_ids[]", target_account_ids) ] in
+        let query = array_query_param "account_ids[]" target_account_ids in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
@@ -2890,7 +2893,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let base_url = Printf.sprintf "%s/api/v1/accounts/relationships" mastodon_creds.instance_url in
         let uri = Uri.of_string base_url in
-        let query = [ ("id[]", target_account_ids) ] in
+        let query = array_query_param "id[]" target_account_ids in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);

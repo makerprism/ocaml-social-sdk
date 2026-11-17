@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Array query parameters are sent once per value.** `get_notifications
+  ~exclude_types`, `get_account_relationships` (`id[]`) and
+  `remove_accounts_from_list` (`account_ids[]`) passed the list to
+  `Uri.with_query`, which joins values with commas
+  (`exclude_types[]=follow,favourite`). Rails reads that as the one value
+  `"follow,favourite"`, so with more than one value nothing was excluded and
+  relationships came back for no account. Each value is now its own
+  `name[]=value` pair. The tests that missed this decoded the query with
+  `Uri.query`, which splits on commas the same way; they now assert one pair
+  per value.
 - **Breaking: `revoke_token` now takes `~client_id ~client_secret` and
   reports failures.** Mastodon's `POST /oauth/revoke` requires `client_id`,
   `client_secret` and `token`

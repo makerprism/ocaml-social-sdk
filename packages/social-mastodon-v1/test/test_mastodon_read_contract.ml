@@ -476,14 +476,15 @@ let test_get_notifications_query_contract () =
   assert (string_contains url "/api/v1/notifications");
   assert (string_contains url "limit=12");
   assert (string_contains url "max_id=500");
+  (* One exclude_types[] pair per type: a comma-joined value
+     (exclude_types[]=follow,favourite) is a single unknown type to Rails. *)
   let excludes =
     Uri.of_string url
     |> Uri.query
-    |> List.assoc_opt "exclude_types[]"
-    |> Option.value ~default:[]
+    |> List.filter (fun (key, _) -> String.equal key "exclude_types[]")
   in
-  assert (List.mem "follow" excludes);
-  assert (List.mem "favourite" excludes);
+  assert (excludes = [ ("exclude_types[]", [ "follow" ]); ("exclude_types[]", [ "favourite" ]) ]);
+  assert (not (string_contains url "follow,favourite"));
   Printf.printf "✓\n"
 
 let test_get_account_contract () =
@@ -567,7 +568,7 @@ let test_get_account_relationships_query_contract () =
   let got_result = ref false in
   Mastodon.get_account_relationships
     ~account_id:"acct"
-    ~target_account_ids:["22"]
+    ~target_account_ids:["22"; "23"]
     (fun result ->
       got_result := true;
       match result with
@@ -583,10 +584,9 @@ let test_get_account_relationships_query_contract () =
   let ids =
     Uri.of_string url
     |> Uri.query
-    |> List.assoc_opt "id[]"
-    |> Option.value ~default:[]
+    |> List.filter (fun (key, _) -> String.equal key "id[]")
   in
-  assert (List.mem "22" ids);
+  assert (ids = [ ("id[]", [ "22" ]); ("id[]", [ "23" ]) ]);
   Printf.printf "✓\n"
 
 let test_get_account_followers_query_contract () =

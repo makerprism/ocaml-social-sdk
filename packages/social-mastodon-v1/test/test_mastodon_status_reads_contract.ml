@@ -114,7 +114,21 @@ let capture call =
 let last_request () =
   match !Mock_http.requests with request :: _ -> request | [] -> failwith "no request"
 
-let query_values url key = Uri.get_query_param' (Uri.of_string url) key
+(* Every value of [key], one per [key=value] pair. Uri.get_query_param'
+   would also split a comma-joined value, which Rails does not. *)
+let query_values url key =
+  match
+    Uri.query (Uri.of_string url)
+    |> List.filter (fun (name, _) -> String.equal name key)
+    |> List.concat_map (fun (_, values) ->
+           List.iter (fun value -> assert (not (String.contains value ','))) values;
+           values)
+  with
+  | [] -> None
+  | values -> Some values
+
+let query_pair_count url key =
+  Uri.query (Uri.of_string url) |> List.filter (fun (name, _) -> String.equal name key) |> List.length
 
 let header request name = List.assoc_opt name request.headers
 
@@ -308,6 +322,7 @@ let test_notifications_request_and_parse () =
   assert (String.starts_with ~prefix:"https://mastodon.example/api/v1/notifications?" request.url);
   assert (header request "Authorization" = Some "Bearer user-token");
   assert (query_values request.url "types[]" = Some [ "mention"; "admin.sign_up" ]);
+  assert (query_pair_count request.url "types[]" = 2);
   assert (query_values request.url "exclude_types[]" = Some [ "follow" ]);
   assert (query_values request.url "limit" = Some [ "80" ]);
   assert (query_values request.url "min_id" = Some [ "34974000" ]);
