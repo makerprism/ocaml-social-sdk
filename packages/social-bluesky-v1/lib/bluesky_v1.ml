@@ -58,6 +58,24 @@ module Auth = struct
     refresh_jwt: string;   (** JWT for session refresh *)
   }
   
+  (** The credentials to store after {!Make.create_session}.
+
+      [access_token] is the account DID: it is public, stable across handle
+      changes, and valid wherever atproto takes an identifier (the [repo] of a
+      record, a [createSession] login). [refresh_token] is the session's
+      refresh JWT, never the app password, and [auth_type] is [Bearer].
+      [ensure_valid_token] writes this same shape after every refresh and
+      when it rotates a legacy app-password row, so a freshly connected
+      account takes the refresh-JWT path on its first call. *)
+  let session_to_refresh_credentials (session : session) : credentials =
+    {
+      access_token = session.did;
+      refresh_token = Some session.refresh_jwt;
+      expires_at = None;
+      auth_type = Bearer;
+      scope = None;  (* Bluesky app passwords have no OAuth scope concept *)
+    }
+
   (** Make functor for Auth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Create a new session using app password
@@ -168,11 +186,15 @@ module Auth = struct
         (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
           (Error_types.Connection_failed err))))
     
-    (** Convert session to Social_core.credentials for storage
-        
-        Note: This stores the identifier in access_token and app_password in refresh_token
-        for compatibility with the SDK's credential storage model.
-    *)
+    (** See {!Auth.session_to_refresh_credentials}. *)
+    let session_to_refresh_credentials = session_to_refresh_credentials
+
+    (** Deprecated: stores the app password as [refresh_token], so anyone
+        with read access to the credential store can log in as the user
+        until they revoke the app password. Use
+        {!session_to_refresh_credentials}, which stores the refresh JWT. Rows
+        written by this function still work: [ensure_valid_token] exchanges
+        the app password for a session on first use and rotates the row. *)
     let session_to_credentials ~identifier ~app_password : credentials =
       {
         access_token = identifier;
@@ -1020,7 +1042,9 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   (** Ensure valid session token, reusing cached session when available.
 
       Auth model:
-      - [creds.access_token] is the user's identifier (handle/DID); public.
+      - [creds.access_token] is the user's identifier (handle, DID or the
+        login email); public. Every refresh and rotation rewrites the row
+        with {!Auth.session_to_refresh_credentials}, so it becomes the DID.
       - [creds.refresh_token] holds either a Bluesky [refresh_jwt] (when
         [creds.auth_type = Bearer]) or a legacy app password (when
         [creds.auth_type = App_password]).
@@ -1106,9 +1130,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                   AuthMake.refresh_session ~pds_url:(service_url ()) ~refresh_jwt:stored_secret (function
                     | Error_types.Success session
                     | Error_types.Partial_success { result = session; _ } ->
-                        let new_creds = { creds with
-                          refresh_token = Some session.refresh_jwt;
-                        } in
+                        let new_creds = Auth.session_to_refresh_credentials session in
                         Config.update_credentials ~account_id ~credentials:new_creds
                           (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                           (fun _ ->
@@ -1133,15 +1155,10 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     (function
                       | Error_types.Success session
                       | Error_types.Partial_success { result = session; _ } ->
-                          let rotated = { creds with
-                            (* access_token stays the identifier (public);
-                               refresh_token becomes the refresh_jwt;
-                               auth_type flips to Bearer so subsequent calls
-                               take the refresh path above. *)
-                            refresh_token = Some session.refresh_jwt;
-                            auth_type = Bearer;
-                            expires_at = None;
-                          } in
+                          (* refresh_token becomes the refresh_jwt and
+                             auth_type flips to Bearer, so subsequent calls
+                             take the refresh path above. *)
+                          let rotated = Auth.session_to_refresh_credentials session in
                           Config.update_credentials ~account_id ~credentials:rotated
                             (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                             (fun _ ->

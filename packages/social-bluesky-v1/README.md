@@ -64,7 +64,7 @@ This provider currently authenticates with app passwords via AT Protocol session
 | Auth method | App passwords |
 | OAuth | Not used by this provider implementation |
 | App password lifetime | User-managed (can be revoked/rotated) |
-| Session tokens | Short-lived, minted via `createSession` on each API call |
+| Session tokens | Access JWT cached ~4 minutes; the stored refresh JWT is rotated via `refreshSession` |
 
 ### Setup
 
@@ -76,8 +76,15 @@ This provider currently authenticates with app passwords via AT Protocol session
 (* Bluesky authenticates via createSession, not OAuth *)
 (* Your credentials are: identifier + app_password *)
 
-(* The SDK handles session creation internally when you make API calls *)
-(* Just store the identifier and app_password in your credentials *)
+(* Exchange the app password for a session once, then store the session's
+   refresh JWT. Never store the app password. *)
+module Bsky_auth = Social_bluesky_v1.Auth.Make (My_http_client)
+
+Bsky_auth.create_session ~identifier ~app_password (function
+  | Social_core.Error_types.Success session ->
+      store (Social_bluesky_v1.Auth.session_to_refresh_credentials session)
+  | _ -> ...)
+(* ensure_valid_token refreshes (and rotates) the stored refresh JWT. *)
 ```
 
 ### No Scopes

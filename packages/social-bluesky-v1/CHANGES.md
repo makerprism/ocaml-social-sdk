@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No helper stores the app password any more.**
+  `Auth.Make.session_to_credentials` put the app password in
+  `refresh_token`, so anyone with read access to the credential store could
+  log in as the user until they revoked it, while `ensure_valid_token` had
+  already moved rows to the refresh JWT. New
+  `Auth.session_to_refresh_credentials session` (also exposed in
+  `Auth.Make`) returns `access_token = did`, `refresh_token = refresh_jwt`,
+  `auth_type = Bearer`. `ensure_valid_token` writes the same shape after
+  every refresh and when it rotates a legacy app-password row, so the stored
+  identifier becomes the DID. A login email or a since-changed handle in
+  `access_token` is therefore replaced by a value that is valid as a record
+  `repo`. `session_to_credentials` stays for source compatibility and is
+  documented as deprecated.
+
 - **The PDS URL is configurable.** `Make` hard-coded `https://bsky.social`
   for every XRPC call, so accounts on a self-hosted PDS and local mock
   servers could not be targeted. The new `Make_with_options (Config)

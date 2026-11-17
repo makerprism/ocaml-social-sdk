@@ -13,6 +13,18 @@ type request = {
 
 let requests : request list ref = ref []
 
+let jwt_credentials =
+  {
+    Social_core.access_token = "alice.test";
+    refresh_token = Some "eyJrefresh1";
+    expires_at = None;
+    auth_type = Social_core.Bearer;
+    scope = None;
+  }
+
+(** The credential row as the store holds it; [update_credentials] writes it. *)
+let stored_credentials = ref jwt_credentials
+
 let json_response ?(status = 200) body =
   Ok { Social_core.status; headers = [ ("content-type", "application/json") ]; body }
 
@@ -35,6 +47,7 @@ let responder = ref default_responder
 
 let reset () =
   requests := [];
+  stored_credentials := jwt_credentials;
   responder := default_responder
 
 let handle request on_success on_error =
@@ -66,16 +79,10 @@ module Mock_config = struct
   let get_env _ = None
 
   let get_credentials ~account_id:_ on_success _on_error =
-    on_success
-      {
-        Social_core.access_token = "alice.test";
-        refresh_token = Some "eyJrefresh1";
-        expires_at = None;
-        auth_type = Social_core.Bearer;
-        scope = None;
-      }
+    on_success !stored_credentials
 
-  let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
+  let update_credentials ~account_id:_ ~credentials on_success _on_error =
+    stored_credentials := credentials;
     on_success ()
 
   let encrypt data on_success _on_error = on_success data
@@ -243,7 +250,76 @@ let test_create_record_expired_token_fails_with_auth_error () =
       fail "createRecord ExpiredToken: expected failure"
   | None -> fail "post_single never completed"
 
+(* -- Stored credentials ------------------------------------------------------ *)
+
+let expect_refresh_row name (creds : Social_core.credentials) =
+  if creds.access_token <> "did:plc:alice" then
+    fail "%s: access_token %s, expected the DID" name creds.access_token;
+  if creds.refresh_token <> Some "eyJrefresh2" then
+    fail "%s: refresh_token is not the session refresh JWT" name;
+  if creds.auth_type <> Social_core.Bearer then fail "%s: auth_type not Bearer" name;
+  if creds.expires_at <> None then fail "%s: expires_at set" name
+
+let session =
+  {
+    Social_bluesky_v1.Auth.did = "did:plc:alice";
+    handle = "alice.test";
+    access_jwt = "eyJaccess";
+    refresh_jwt = "eyJrefresh2";
+  }
+
+let test_session_to_refresh_credentials_never_stores_password () =
+  expect_refresh_row "session_to_refresh_credentials"
+    (Social_bluesky_v1.Auth.session_to_refresh_credentials session);
+  let module Auth_http = Social_bluesky_v1.Auth.Make (Mock_http) in
+  expect_refresh_row "Auth.Make alias" (Auth_http.session_to_refresh_credentials session)
+
+let test_legacy_app_password_row_is_rotated () =
+  reset ();
+  stored_credentials :=
+    {
+      Social_core.access_token = "alice@example.com";
+      refresh_token = Some "abcd-efgh-ijkl-mnop";
+      expires_at = None;
+      auth_type = Social_core.App_password;
+      scope = None;
+    };
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  let result = ref None in
+  Default_bluesky.ensure_valid_token ~account_id:"acct"
+    (fun jwt -> result := Some (Ok jwt))
+    (fun err -> result := Some (Error err));
+  (match !result with
+  | Some (Ok "eyJaccess") -> ()
+  | Some (Ok jwt) -> fail "rotation: unexpected access JWT %s" jwt
+  | Some (Error err) -> fail "rotation: %s" (Error_types.error_to_string err)
+  | None -> fail "rotation: ensure_valid_token never completed");
+  (match sent () with
+  | [ create ] ->
+      assert (String.ends_with ~suffix:"com.atproto.server.createSession" create.url);
+      let body = Yojson.Basic.from_string (Option.get create.body) in
+      assert (
+        Yojson.Basic.Util.(member "identifier" body |> to_string) = "alice@example.com")
+  | _ -> fail "rotation: expected exactly one createSession call");
+  expect_refresh_row "rotated row" !stored_credentials
+
+let test_refresh_rewrites_row_with_did () =
+  reset ();
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  let result = ref None in
+  Default_bluesky.ensure_valid_token ~account_id:"acct"
+    (fun jwt -> result := Some (Ok jwt))
+    (fun err -> result := Some (Error err));
+  (match !result with
+  | Some (Ok _) -> ()
+  | Some (Error err) -> fail "refresh: %s" (Error_types.error_to_string err)
+  | None -> fail "refresh: ensure_valid_token never completed");
+  expect_refresh_row "refreshed row" !stored_credentials
+
 let () =
+  test_session_to_refresh_credentials_never_stores_password ();
+  test_legacy_app_password_row_is_rotated ();
+  test_refresh_rewrites_row_with_did ();
   test_default_service_url ();
   test_self_hosted_service_url_for_every_call ();
   test_expired_token_is_auth_error ();
