@@ -5,7 +5,7 @@ Scope: current implementation in `packages/social-*/lib/*.ml` and contract-style
 Interpretation:
 - This document tracks endpoint/request-shape parity and contract-test coverage.
 - It does not imply production hardening; align with the root `README.md` status legend (`⚠️` = implemented + automated tests, limited production validation).
-- Current matrix coverage is partial and focuses on: Facebook, Instagram, Threads, Pinterest, LinkedIn, TikTok, Twitter v2, and YouTube.
+- Current matrix coverage is partial and focuses on: Facebook, Instagram, Threads, Pinterest, LinkedIn, TikTok, Twitter v2, YouTube, and the typed Mastodon reads.
 
 ## Facebook
 
@@ -150,3 +150,21 @@ Known subtle bug traps:
 - Resumable upload must return `Location` on init; missing header is a hard failure.
 - Video publish helper auto-appends `#Shorts` in description and truncates title to platform-safe length.
 - Thumbnail upload accepts only image content types (`jpeg/jpg/png/webp`) in current validation.
+
+## Mastodon
+
+Rows describe the typed reads in `social-mastodon-v1` (`Reads.Make (Http)`; the `Make` wrappers send the same requests with the stored token after `verify_credentials`). `{instance}` is the account's instance URL.
+
+| Capability | Method | Path/query contract | Required headers | Payload shape | SDK function(s) | Contract test name(s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Status | GET | `{instance}/api/v1/statuses/{id}` | `Authorization: Bearer <token>` when given (private statuses) | none | `Reads.get_status`, `Make.get_status_entity` | `test_get_status_typed`, `test_account_wrappers` |
+| Status context (thread) | GET | `{instance}/api/v1/statuses/{id}/context` | `Authorization: Bearer <token>` when given (public: 40 ancestors / 60 descendants / depth 20) | none; `Mastodon-Async-Refresh` response header parsed | `Reads.get_status_context`, `Make.get_status_context` | `test_context_with_token`, `test_context_public_and_not_found`, `test_context_errors` |
+| Notifications | GET | `{instance}/api/v1/notifications?limit&max_id&since_id&min_id&types[]&exclude_types[]&account_id` | `Authorization: Bearer <token>` (`read:notifications`) | none; cursors from `Link` | `Reads.get_notifications`, `Make.get_notifications_page` | `test_notifications_request_and_parse`, `test_notifications_last_page_and_scope_error` |
+| Account statuses | GET | `{instance}/api/v1/accounts/{id}/statuses?limit&max_id&since_id&min_id&exclude_replies&exclude_reblogs&only_media&pinned` | `Authorization: Bearer <token>` when given | none; cursors from `Link` | `Reads.get_account_statuses`, `Make.get_account_statuses_page` | `test_account_statuses` |
+| Account lookup | GET | `{instance}/api/v1/accounts/lookup?acct` | `Authorization: Bearer <token>` when given | none | `Reads.lookup_account` | `test_lookup_account` |
+| WebFinger | GET | `https://{domain}/.well-known/webfinger?resource=acct:{username}@{domain}` | `Accept: application/jrd+json, application/json` | none | `Reads.webfinger` | `test_webfinger`, `test_webfinger_pure` |
+
+Known subtle bug traps:
+- A 404 from these reads is `Resource_not_found`; the older untyped readers (`Make.get_status`, `lookup_account_by_acct`) still report it as `Api_error`.
+- Notification and status ids are only ordered within one instance; page with the `Link` cursors rather than comparing ids across instances.
+- `webfinger` fetches a domain taken from user input; consumers must reject private and loopback hosts first.

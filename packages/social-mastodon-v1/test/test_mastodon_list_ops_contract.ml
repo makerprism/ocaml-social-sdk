@@ -169,8 +169,11 @@ let test_list_accounts_membership_contract () =
   assert !removed;
   let remove_url = Option.get !(List_ops_http.last_delete_url) in
   assert (String.contains remove_url '?');
-  let query_ids = Uri.of_string remove_url |> Uri.query |> List.assoc_opt "account_ids[]" |> Option.value ~default:[] in
-  assert (List.mem "a1" query_ids && List.mem "a2" query_ids);
+  let query_ids =
+    Uri.of_string remove_url |> Uri.query
+    |> List.filter (fun (key, _) -> String.equal key "account_ids[]")
+  in
+  assert (query_ids = [ ("account_ids[]", [ "a1" ]); ("account_ids[]", [ "a2" ]) ]);
   Printf.printf "✓\n"
 
 let test_list_ops_error_mapping_contract () =

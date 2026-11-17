@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Array query parameters are sent once per value.** `get_notifications
+  ~exclude_types`, `get_account_relationships` (`id[]`) and
+  `remove_accounts_from_list` (`account_ids[]`) passed the list to
+  `Uri.with_query`, which joins values with commas
+  (`exclude_types[]=follow,favourite`). Rails reads that as the one value
+  `"follow,favourite"`, so with more than one value nothing was excluded and
+  relationships came back for no account. Each value is now its own
+  `name[]=value` pair. The tests that missed this decoded the query with
+  `Uri.query`, which splits on commas the same way; they now assert one pair
+  per value.
 - **Breaking: `revoke_token` now takes `~client_id ~client_secret` and
   reports failures.** Mastodon's `POST /oauth/revoke` requires `client_id`,
   `client_secret` and `token`
@@ -53,6 +63,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed status, context, notification and WebFinger reads.**
+  - `Entities` (module `Mastodon_entities`, with an `.mli`): the Status
+    entity as `status` (account `acct` / `display_name` / `url`,
+    `in_reply_to_id`, `in_reply_to_account_id`, `visibility`, `created_at`,
+    `edited_at`, HTML `content`, `spoiler_text`, `mentions`, `reblog`, the
+    three counts), `status_context` (with the experimental
+    `Mastodon-Async-Refresh` header as `async_refresh`), `notification` with
+    a `notification_type` variant covering every documented type (unknown
+    ones kept as `Other_notification_type`), `notification_page` /
+    `status_page` with `Link`-header cursors, and the WebFinger JRD as
+    `webfinger`. Parsers fail on a missing required attribute instead of
+    defaulting it.
+  - Pure helpers: `html_to_plain_text`, `status_web_url`, `status_id_of_url`,
+    `normalize_instance_url` (returns `None` instead of falling back to a
+    default instance), `federated_acct`, `split_acct`, `webfinger_resource`,
+    `webfinger_actor_url`, `webfinger_profile_page`.
+  - `Reads.Make (Http)`: token-based calls that need no account store.
+    `get_status`, `get_status_context` (`GET /api/v1/statuses/:id/context`),
+    `get_notifications` (`types[]`, `exclude_types[]`, `account_id`,
+    `max_id` / `since_id` / `min_id`), `get_account_statuses`,
+    `lookup_account` (`GET /api/v1/accounts/lookup`) and `webfinger`
+    (`/.well-known/webfinger`). The token is optional where the endpoint is
+    public. 404 and 410 are `Resource_not_found`; a 403 names the read scope
+    the call needs.
+  - `Make` wrappers for a stored account: `get_status_context`,
+    `get_status_entity`, `get_notifications_page`,
+    `get_account_statuses_page`.
+  - `parse_api_error_response ~required_scopes`, the top-level form of
+    `Make.parse_api_error`, which is unchanged.
+  - Not breaking: `visibility`, `account_summary` and `pagination_cursors`
+    moved to `Mastodon_entities` and are re-exported with the same
+    constructors and fields. `get_status`, `get_notifications`,
+    `get_account_statuses`, `lookup_account_by_acct` and their 404 mapping
+    are unchanged.
 - `verify_credentials_result`, which reports failures as a structured
   `Error_types.error` instead of a string. The existing string-returning
   `verify_credentials` is unchanged and now delegates to it. Callers that branch

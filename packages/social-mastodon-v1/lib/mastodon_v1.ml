@@ -6,6 +6,10 @@
 
 open Social_core
 
+(** Typed entities (Status, Context, Notification, WebFinger) and pure
+    helpers, as [Social_mastodon_v1.Entities]. *)
+module Entities = Mastodon_entities
+
 let redact_sensitive_text text =
   let replace_json_field field input =
     let pattern = Printf.sprintf "\"%s\"[ \t\r\n]*:[ \t\r\n]*\"[^\"]*\"" field in
@@ -33,11 +37,74 @@ let header_value_case_insensitive headers key =
   |> List.find_map (fun (k, v) ->
          if String.equal (String.lowercase_ascii k) target then Some v else None)
 
+(** Query pairs for a Rails array parameter: one [name[]=value] pair per
+    value. [Uri.with_query] joins a value list with commas
+    ([types[]=a,b]), which Mastodon reads as the single value ["a,b"]. *)
+let array_query_param name values = List.map (fun value -> (name, [ value ])) values
+
 let parse_positive_int value =
   try
     let parsed = int_of_string value in
     if parsed >= 0 then Some parsed else None
   with _ -> None
+
+(** Map a non-2xx Mastodon answer to an {!Error_types.error}: 401
+    [Auth_error Token_invalid], 403 [Insufficient_permissions] (naming
+    [required_scopes]), 429 [Rate_limited] (from
+    [Retry-After], else 300 s), a 422 "duplicate" [Duplicate_content], and
+    anything else [Api_error] with the instance's [error] text. Token-like
+    fields are redacted from the kept body. {!Make.parse_api_error} is this
+    function with [required_scopes = ["write:statuses"]]. *)
+let parse_api_error_response ~required_scopes ~headers ~status_code ~response_body =
+  let redacted_body = redact_sensitive_text response_body in
+  try
+    let json = Yojson.Basic.from_string redacted_body in
+    let open Yojson.Basic.Util in
+    let error_msg = 
+      try json |> member "error" |> to_string
+      with _ -> redacted_body
+    in
+    
+    (* Map common Mastodon errors *)
+    if status_code = 401 then
+      Error_types.Auth_error Error_types.Token_invalid
+    else if status_code = 403 then
+      Error_types.Auth_error (Error_types.Insufficient_permissions {
+        required = required_scopes;
+        platform_message = Some error_msg;
+      })
+    else if status_code = 429 then
+      let retry_after_seconds =
+        match header_value_case_insensitive headers "retry-after" with
+        | Some value -> parse_positive_int value
+        | None -> None
+      in
+      Error_types.Rate_limited { 
+        retry_after_seconds = (match retry_after_seconds with Some _ as v -> v | None -> Some 300);
+        limit = None;
+        remaining = Some 0;
+        reset_at = None;
+      }
+    else if status_code = 422 && String.lowercase_ascii error_msg |> fun s -> 
+        String.length s > 0 && (String.sub s 0 (min 9 (String.length s)) = "duplicate" ||
+                                 try ignore (Str.search_forward (Str.regexp_string "duplicate") s 0); true with Not_found -> false) then
+      Error_types.Duplicate_content
+    else
+      Error_types.Api_error {
+        status_code;
+        message = error_msg;
+        platform = Platform_types.Mastodon;
+        raw_response = Some redacted_body;
+        request_id = None;
+      }
+  with _ ->
+    Error_types.Api_error {
+      status_code;
+      message = redacted_body;
+      platform = Platform_types.Mastodon;
+      raw_response = Some redacted_body;
+      request_id = None;
+    }
 
 (** OAuth 2.0 module for Mastodon
     
@@ -348,19 +415,15 @@ type mastodon_credentials = {
   instance_url: string;  (** The Mastodon instance URL (e.g., https://mastodon.social) *)
 }
 
-(** Visibility levels for statuses *)
-type visibility = 
+(** Visibility levels for statuses. Defined in {!Mastodon_entities}. *)
+type visibility = Mastodon_entities.visibility =
   | Public      (** Visible to everyone, shown in public timelines *)
   | Unlisted    (** Visible to everyone, but not in public timelines *)
   | Private     (** Visible to followers only *)
   | Direct      (** Visible to mentioned users only *)
 
 (** Convert visibility to API string *)
-let visibility_to_string = function
-  | Public -> "public"
-  | Unlisted -> "unlisted"
-  | Private -> "private"
-  | Direct -> "direct"
+let visibility_to_string = Mastodon_entities.visibility_to_string
 
 (** Poll option for status polls *)
 type poll_option = {
@@ -383,7 +446,8 @@ type timeline_status = {
   account_acct: string option;
 }
 
-type pagination_cursors = {
+(** Defined in {!Mastodon_entities}. *)
+type pagination_cursors = Mastodon_entities.pagination_cursors = {
   next_max_id: string option;
   prev_since_id: string option;
   prev_min_id: string option;
@@ -394,7 +458,8 @@ type timeline_page = {
   cursors: pagination_cursors;
 }
 
-type account_summary = {
+(** Defined in {!Mastodon_entities}. *)
+type account_summary = Mastodon_entities.account_summary = {
   id: string;
   acct: string;
   username: string option;
@@ -478,6 +543,196 @@ type account_info = {
   bot: bool;
   created_at: string option;
 }
+
+(** Token-based reads that need no account store.
+
+    Each call takes the instance URL and, where the endpoint allows it, an
+    optional user token, so it is usable before an account is stored and
+    with a token the consumer already holds. {!Make} wraps the same calls
+    for a stored account.
+
+    Errors: a 404 or 410 is [Resource_not_found] with the instance's
+    message (a deleted, private or unknown status or account). Everything
+    else goes through {!parse_api_error_response}, a transport failure is
+    [Network_error], and a 2xx body that does not match the documented
+    entity is [Internal_error]. *)
+module Reads = struct
+  let read_error ~required_scopes (response : response) =
+    match response.status with
+    | 404 | 410 ->
+        let message =
+          match Yojson.Basic.from_string response.body with
+          | `Assoc fields -> (
+              match List.assoc_opt "error" fields with
+              | Some (`String message) -> message
+              | Some _ | None -> Printf.sprintf "HTTP %d" response.status)
+          | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+              Printf.sprintf "HTTP %d" response.status
+          | exception Yojson.Json_error _ -> Printf.sprintf "HTTP %d" response.status
+        in
+        Error_types.Resource_not_found message
+    | status_code ->
+        parse_api_error_response ~required_scopes ~headers:response.headers
+          ~status_code ~response_body:response.body
+
+  let bearer = function
+    | Some token -> [ ("Authorization", "Bearer " ^ token) ]
+    | None -> []
+
+  let query_flag name = function
+    | Some true -> [ (name, [ "true" ]) ]
+    | Some false -> [ (name, [ "false" ]) ]
+    | None -> []
+
+  let query_value name = function Some value -> [ (name, [ value ]) ] | None -> []
+
+  module Make (Http : HTTP_CLIENT) = struct
+    (* GET [url], then [parse ~headers json] on a 2xx. *)
+    let get_entity ~what ~required_scopes ?(headers = []) url parse on_result =
+      Http.get ~headers url
+        (fun (response : response) ->
+          if response.status >= 200 && response.status < 300 then
+            match Yojson.Basic.from_string response.body with
+            | json -> (
+                match parse ~headers:response.headers json with
+                | Stdlib.Ok value -> on_result (Stdlib.Ok value)
+                | Stdlib.Error msg ->
+                    on_result
+                      (Stdlib.Error
+                         (Error_types.Internal_error
+                            (Printf.sprintf "Unexpected %s response: %s" what msg))))
+            | exception Yojson.Json_error msg ->
+                on_result
+                  (Stdlib.Error
+                     (Error_types.Internal_error
+                        (Printf.sprintf "Unexpected %s response: %s" what msg)))
+          else on_result (Stdlib.Error (read_error ~required_scopes response)))
+        (fun err ->
+          on_result
+            (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+    let api_url ~instance_url path query =
+      let base = Uri.of_string (instance_url ^ path) in
+      Uri.with_query base query |> Uri.to_string
+
+    let status_path status_id = "/api/v1/statuses/" ^ Uri.pct_encode status_id
+
+    (** [GET /api/v1/statuses/:id] as a typed {!Mastodon_entities.status}.
+        Public statuses need no token; private ones need one with
+        [read:statuses].
+        {{:https://docs.joinmastodon.org/methods/statuses/#get}} *)
+    let get_status ~instance_url ?access_token ~status_id on_result =
+      get_entity ~what:"status" ~required_scopes:[ "read:statuses" ]
+        ~headers:(bearer access_token)
+        (api_url ~instance_url (status_path status_id) [])
+        (fun ~headers:_ json -> Mastodon_entities.status_of_json json)
+        on_result
+
+    (** [GET /api/v1/statuses/:id/context]: the ancestors and descendants of
+        a status, plus the experimental [Mastodon-Async-Refresh] header.
+        Without a token the instance answers only for public statuses and
+        caps the result at 40 ancestors and 60 descendants, depth 20; with a
+        [read:statuses] token it returns up to 4,096 of each at any depth.
+        404 ([Resource_not_found]) means private or deleted.
+        {{:https://docs.joinmastodon.org/methods/statuses/#context}} *)
+    let get_status_context ~instance_url ?access_token ~status_id on_result =
+      get_entity ~what:"status context" ~required_scopes:[ "read:statuses" ]
+        ~headers:(bearer access_token)
+        (api_url ~instance_url (status_path status_id ^ "/context") [])
+        Mastodon_entities.status_context_of_response on_result
+
+    (** [GET /api/v1/notifications], one page. Needs [read:notifications].
+        [types] keeps only those types ([types[]], Mastodon 3.5+),
+        [exclude_types] drops them, [from_account_id] keeps notifications
+        caused by that account ([account_id]). [limit] defaults to 40 on the
+        server, max 80. Page with the returned cursors: [max_id] for older,
+        [min_id] for newer. Ids are only comparable within one instance.
+        {{:https://docs.joinmastodon.org/methods/notifications/#get}} *)
+    let get_notifications ~instance_url ~access_token ?limit ?max_id ?since_id
+        ?min_id ?(types = []) ?(exclude_types = []) ?from_account_id on_result =
+      let type_values = List.map Mastodon_entities.notification_type_to_string in
+      let query =
+        List.concat
+          [
+            query_value "limit" (Option.map string_of_int limit);
+            query_value "max_id" max_id;
+            query_value "since_id" since_id;
+            query_value "min_id" min_id;
+            array_query_param "types[]" (type_values types);
+            array_query_param "exclude_types[]" (type_values exclude_types);
+            query_value "account_id" from_account_id;
+          ]
+      in
+      get_entity ~what:"notifications" ~required_scopes:[ "read:notifications" ]
+        ~headers:(bearer (Some access_token))
+        (api_url ~instance_url "/api/v1/notifications" query)
+        Mastodon_entities.notification_page_of_response on_result
+
+    (** [GET /api/v1/accounts/:id/statuses], one page. Public statuses need
+        no token. [exclude_replies] drops replies to other accounts (a
+        reply to oneself stays), [exclude_reblogs] drops boosts. [limit]
+        defaults to 20 on the server, max 40.
+        {{:https://docs.joinmastodon.org/methods/accounts/#statuses}} *)
+    let get_account_statuses ~instance_url ?access_token ~target_account_id
+        ?limit ?max_id ?since_id ?min_id ?exclude_replies ?exclude_reblogs
+        ?only_media ?pinned on_result =
+      let query =
+        List.concat
+          [
+            query_value "limit" (Option.map string_of_int limit);
+            query_value "max_id" max_id;
+            query_value "since_id" since_id;
+            query_value "min_id" min_id;
+            query_flag "exclude_replies" exclude_replies;
+            query_flag "exclude_reblogs" exclude_reblogs;
+            query_flag "only_media" only_media;
+            query_flag "pinned" pinned;
+          ]
+      in
+      get_entity ~what:"account statuses" ~required_scopes:[ "read:statuses" ]
+        ~headers:(bearer access_token)
+        (api_url ~instance_url
+           ("/api/v1/accounts/" ^ Uri.pct_encode target_account_id ^ "/statuses")
+           query)
+        Mastodon_entities.status_page_of_response on_result
+
+    (** [GET /api/v1/accounts/lookup?acct=]: the account behind a username
+        (local) or [user@domain] address, as the instance knows it, without
+        a WebFinger round trip. Documented as needing a [read:accounts]
+        token; many instances also answer without one. 404 is
+        [Resource_not_found].
+        {{:https://docs.joinmastodon.org/methods/accounts/#lookup}} *)
+    let lookup_account ~instance_url ?access_token ~acct on_result =
+      get_entity ~what:"account lookup" ~required_scopes:[ "read:accounts" ]
+        ~headers:(bearer access_token)
+        (api_url ~instance_url "/api/v1/accounts/lookup" [ ("acct", [ acct ]) ])
+        (fun ~headers:_ json ->
+          Mastodon_entities.account_summary_of_json_result json)
+        on_result
+
+    (** [GET https://<domain>/.well-known/webfinger?resource=acct:<username>@<domain>]
+        (RFC 7033). 404 and 410 (removed account) are [Resource_not_found].
+        Use {!Mastodon_entities.webfinger_actor_url} for the ActivityPub
+        actor.
+
+        [domain] usually comes from user input. Check that it is a public
+        host before calling (this function does not), or a handle like
+        [x@169.254.169.254] makes you fetch an internal address.
+        {{:https://docs.joinmastodon.org/spec/webfinger/}} *)
+    let webfinger ~username ~domain on_result =
+      let url =
+        Uri.make ~scheme:"https" ~host:domain ~path:"/.well-known/webfinger"
+          ~query:[ ("resource", [ Mastodon_entities.webfinger_resource ~username ~domain ]) ]
+          ()
+        |> Uri.to_string
+      in
+      get_entity ~what:"WebFinger" ~required_scopes:[]
+        ~headers:[ ("Accept", "application/jrd+json, application/json") ]
+        url
+        (fun ~headers:_ json -> Mastodon_entities.webfinger_of_json json)
+        on_result
+  end
+end
 
 (** Configuration module type for Mastodon provider *)
 module type CONFIG = sig
@@ -655,56 +910,9 @@ module Make (Config : CONFIG) = struct
     with _ -> false
 
   let parse_api_error ~headers ~status_code ~response_body =
-    let redacted_body = redact_sensitive_text response_body in
-    try
-      let json = Yojson.Basic.from_string redacted_body in
-      let open Yojson.Basic.Util in
-      let error_msg = 
-        try json |> member "error" |> to_string
-        with _ -> redacted_body
-      in
-      
-      (* Map common Mastodon errors *)
-      if status_code = 401 then
-        Error_types.Auth_error Error_types.Token_invalid
-      else if status_code = 403 then
-        Error_types.Auth_error (Error_types.Insufficient_permissions {
-          required = ["write:statuses"];
-          platform_message = Some error_msg;
-        })
-      else if status_code = 429 then
-        let retry_after_seconds =
-          match header_value_case_insensitive headers "retry-after" with
-          | Some value -> parse_positive_int value
-          | None -> None
-        in
-        Error_types.Rate_limited { 
-          retry_after_seconds = (match retry_after_seconds with Some _ as v -> v | None -> Some 300);
-          limit = None;
-          remaining = Some 0;
-          reset_at = None;
-        }
-      else if status_code = 422 && String.lowercase_ascii error_msg |> fun s -> 
-          String.length s > 0 && (String.sub s 0 (min 9 (String.length s)) = "duplicate" ||
-                                   try ignore (Str.search_forward (Str.regexp_string "duplicate") s 0); true with Not_found -> false) then
-        Error_types.Duplicate_content
-      else
-        Error_types.Api_error {
-          status_code;
-          message = error_msg;
-          platform = Platform_types.Mastodon;
-          raw_response = Some redacted_body;
-          request_id = None;
-        }
-    with _ ->
-      Error_types.Api_error {
-        status_code;
-        message = redacted_body;
-        platform = Platform_types.Mastodon;
-        raw_response = Some redacted_body;
-        request_id = None;
-      }
-  
+    parse_api_error_response ~required_scopes:[ "write:statuses" ] ~headers
+      ~status_code ~response_body
+
   (** Parse Mastodon credentials from core credentials type *)
   let parse_mastodon_credentials (credentials : credentials) on_success on_error =
     try
@@ -1064,38 +1272,7 @@ module Make (Config : CONFIG) = struct
     in
     { id; content; url; created_at; account_acct }
 
-  let parse_account_summary json =
-    let open Yojson.Basic.Util in
-    let id =
-      try json |> member "id" |> to_string
-      with _ -> ""
-    in
-    let acct =
-      try json |> member "acct" |> to_string
-      with _ -> ""
-    in
-    let username =
-      try
-        match json |> member "username" with
-        | `String v when v <> "" -> Some v
-        | _ -> None
-      with _ -> None
-    in
-    let display_name =
-      try
-        match json |> member "display_name" with
-        | `String v when v <> "" -> Some v
-        | _ -> None
-      with _ -> None
-    in
-    let url =
-      try
-        match json |> member "url" with
-        | `String v when v <> "" -> Some v
-        | _ -> None
-      with _ -> None
-    in
-    { id; acct; username; display_name; url }
+  let parse_account_summary = Mastodon_entities.account_summary_of_json
 
   let parse_notification_item json =
     let open Yojson.Basic.Util in
@@ -1127,38 +1304,7 @@ module Make (Config : CONFIG) = struct
     in
     { id; notification_type; created_at; account; status }
 
-  let parse_pagination_cursors headers =
-    let parse_rel_entry entry =
-      let trimmed = String.trim entry in
-      let re = Str.regexp "<\\([^>]+\\)>;[ ]*rel=\"\\([^\"]+\\)\"" in
-      if Str.string_match re trimmed 0 then
-        let url = Str.matched_group 1 trimmed in
-        let rel = Str.matched_group 2 trimmed in
-        Some (rel, Uri.of_string url)
-      else
-        None
-    in
-    let extract_from_uri key uri = Uri.get_query_param uri key in
-    let update cursors (rel, uri) =
-      match rel with
-      | "next" ->
-          { cursors with next_max_id = (match extract_from_uri "max_id" uri with Some v -> Some v | None -> cursors.next_max_id) }
-      | "prev" ->
-          {
-            cursors with
-            prev_since_id = (match extract_from_uri "since_id" uri with Some v -> Some v | None -> cursors.prev_since_id);
-            prev_min_id = (match extract_from_uri "min_id" uri with Some v -> Some v | None -> cursors.prev_min_id);
-          }
-      | _ -> cursors
-    in
-    let empty = { next_max_id = None; prev_since_id = None; prev_min_id = None } in
-    match header_value_case_insensitive headers "link" with
-    | None -> empty
-    | Some link_header ->
-        link_header
-        |> String.split_on_char ','
-        |> List.filter_map parse_rel_entry
-        |> List.fold_left update empty
+  let parse_pagination_cursors = Mastodon_entities.pagination_cursors_of_headers
 
   let parse_trend_tag json =
     let open Yojson.Basic.Util in
@@ -1724,8 +1870,8 @@ module Make (Config : CONFIG) = struct
             ("max_id", (match max_id with Some v -> [v] | None -> []));
             ("since_id", (match since_id with Some v -> [v] | None -> []));
             ("min_id", (match min_id with Some v -> [v] | None -> []));
-            ("exclude_types[]", exclude_types);
           ]
+          @ array_query_param "exclude_types[]" exclude_types
         in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
@@ -1749,6 +1895,53 @@ module Make (Config : CONFIG) = struct
               on_result (Error (parse_api_error ~headers:response.headers ~status_code:response.status ~response_body:response.body)))
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
+
+  (** {2 Typed reads}
+
+      Account-bound versions of {!Reads.Make}: each first runs
+      {!ensure_valid_token} (one [verify_credentials] call that also records
+      account health), then the read with the stored token. Use
+      [Reads_http] directly with a [mastodon_credentials] value to skip the
+      verification. *)
+
+  module Reads_http = Reads.Make (Config.Http)
+
+  let with_credentials ~account_id on_result read =
+    ensure_valid_token ~account_id read (fun err -> on_result (Stdlib.Error err))
+
+  (** {!Reads.Make.get_status_context} for a stored account. *)
+  let get_status_context ~account_id ~status_id on_result =
+    with_credentials ~account_id on_result (fun creds ->
+        Reads_http.get_status_context ~instance_url:creds.instance_url
+          ~access_token:creds.access_token ~status_id on_result)
+
+  (** {!Reads.Make.get_status} for a stored account: the full typed status.
+      {!get_status} (the older [timeline_status] reader) is unchanged. *)
+  let get_status_entity ~account_id ~status_id on_result =
+    with_credentials ~account_id on_result (fun creds ->
+        Reads_http.get_status ~instance_url:creds.instance_url
+          ~access_token:creds.access_token ~status_id on_result)
+
+  (** {!Reads.Make.get_notifications} for a stored account: typed
+      notifications plus [Link] cursors, with [types] / [exclude_types]
+      filters. {!get_notifications} is unchanged. *)
+  let get_notifications_page ~account_id ?limit ?max_id ?since_id ?min_id
+      ?types ?exclude_types ?from_account_id on_result =
+    with_credentials ~account_id on_result (fun creds ->
+        Reads_http.get_notifications ~instance_url:creds.instance_url
+          ~access_token:creds.access_token ?limit ?max_id ?since_id ?min_id
+          ?types ?exclude_types ?from_account_id on_result)
+
+  (** {!Reads.Make.get_account_statuses} for a stored account: typed
+      statuses plus [Link] cursors. {!get_account_statuses} is unchanged. *)
+  let get_account_statuses_page ~account_id ~target_account_id ?limit ?max_id
+      ?since_id ?min_id ?exclude_replies ?exclude_reblogs ?only_media ?pinned
+      on_result =
+    with_credentials ~account_id on_result (fun creds ->
+        Reads_http.get_account_statuses ~instance_url:creds.instance_url
+          ~access_token:creds.access_token ~target_account_id ?limit ?max_id
+          ?since_id ?min_id ?exclude_replies ?exclude_reblogs ?only_media
+          ?pinned on_result)
 
   (** Get direct-message conversations *)
   let get_conversations
@@ -2227,7 +2420,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let base_url = Printf.sprintf "%s/api/v1/lists/%s/accounts" mastodon_creds.instance_url list_id in
         let uri = Uri.of_string base_url in
-        let query = [ ("account_ids[]", target_account_ids) ] in
+        let query = array_query_param "account_ids[]" target_account_ids in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
@@ -2700,7 +2893,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let base_url = Printf.sprintf "%s/api/v1/accounts/relationships" mastodon_creds.instance_url in
         let uri = Uri.of_string base_url in
-        let query = [ ("id[]", target_account_ids) ] in
+        let query = array_query_param "id[]" target_account_ids in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
           ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
