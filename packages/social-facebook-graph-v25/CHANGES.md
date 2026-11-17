@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Added
+
+- Top-level API constants, usable without applying `Make`: `api_version`
+  (`"v25.0"`), `graph_api_base`, `rupload_base`, `oauth_authorize_url`,
+  `token_endpoint`. Applications should use these instead of writing
+  `"v25.0"`, so a Graph API bump is a dependency bump. Every URL in the
+  package now derives from them (`OAuth.Metadata`, `Make.graph_api_base` /
+  `graph_api_version` / `rupload_base` are aliases; `get_oauth_url` and the
+  two analytics readers no longer contain their own `v25.0` literal).
+
 ### Fixed
 
 - **Transport failures are `Network_error`, not `Internal_error`.** Every

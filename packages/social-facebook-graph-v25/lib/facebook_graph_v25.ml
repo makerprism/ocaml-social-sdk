@@ -6,6 +6,27 @@
 
 open Social_core
 
+(** {1 API version and endpoints}
+
+    The single source of truth for the Graph API version this package
+    targets. Use these instead of writing ["v25.0"] in application code, so
+    that a version bump is a dependency bump. *)
+
+(** Graph API version, e.g. ["v25.0"]. *)
+let api_version = "v25.0"
+
+(** Versioned Graph API base URL, ["https://graph.facebook.com/v25.0"]. *)
+let graph_api_base = "https://graph.facebook.com/" ^ api_version
+
+(** Host for resumable (Reels) video uploads, versioned with the Graph API. *)
+let rupload_base = "https://rupload.facebook.com/video-upload/" ^ api_version
+
+(** Facebook Login dialog for this API version. *)
+let oauth_authorize_url = "https://www.facebook.com/" ^ api_version ^ "/dialog/oauth"
+
+(** OAuth token endpoint (code exchange, long-lived token exchange). *)
+let token_endpoint = graph_api_base ^ "/oauth/access_token"
+
 (** OAuth 2.0 module for Facebook
     
     Facebook uses OAuth 2.0 WITHOUT PKCE support.
@@ -157,13 +178,13 @@ module OAuth = struct
     let max_refresh_attempts = 5
     
     (** Authorization endpoint *)
-    let authorization_endpoint = "https://www.facebook.com/v25.0/dialog/oauth"
+    let authorization_endpoint = oauth_authorize_url
     
     (** Token endpoint *)
-    let token_endpoint = "https://graph.facebook.com/v25.0/oauth/access_token"
+    let token_endpoint = token_endpoint
     
     (** Graph API base URL *)
-    let api_base = "https://graph.facebook.com/v25.0"
+    let api_base = graph_api_base
   end
   
   (** Generate authorization URL for Facebook OAuth 2.0 flow
@@ -450,11 +471,11 @@ end
 
 (** Make functor to create Facebook provider with given configuration *)
 module Make (Config : CONFIG) = struct
-  let graph_api_version = "v25.0"
-  let graph_api_base = "https://graph.facebook.com/" ^ graph_api_version
-
-  (** Host for Reels hosted-file uploads; versioned in lockstep with the Graph API. *)
-  let rupload_base = "https://rupload.facebook.com/video-upload/" ^ graph_api_version
+  (* Aliases of the top-level constants, kept for code that referenced them
+     through the functor. *)
+  let graph_api_version = api_version
+  let graph_api_base = graph_api_base
+  let rupload_base = rupload_base
   module OAuth_http = OAuth.Make(Config.Http)
   
   (** {1 Platform Constants} *)
@@ -1855,7 +1876,7 @@ module Make (Config : CONFIG) = struct
       ] in
       
       let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
-      let url = Printf.sprintf "https://www.facebook.com/v25.0/dialog/oauth?%s" query in
+      let url = Printf.sprintf "%s?%s" oauth_authorize_url query in
       on_success url
     )
   
@@ -2192,7 +2213,8 @@ module Make (Config : CONFIG) = struct
   let get_account_analytics ~id ~since ~until ~access_token on_result =
     let url =
       Printf.sprintf
-        "https://graph.facebook.com/v25.0/%s/insights?metric=%s&period=day&since=%s&until=%s&access_token=%s"
+        "%s/%s/insights?metric=%s&period=day&since=%s&until=%s&access_token=%s"
+        graph_api_base
         id
         account_analytics_metrics
         since
@@ -2273,7 +2295,8 @@ module Make (Config : CONFIG) = struct
   let get_post_analytics ~post_id ~access_token on_result =
     let url =
       Printf.sprintf
-        "https://graph.facebook.com/v25.0/%s/insights?metric=%s&access_token=%s"
+        "%s/%s/insights?metric=%s&access_token=%s"
+        graph_api_base
         post_id
         post_analytics_metrics
         access_token

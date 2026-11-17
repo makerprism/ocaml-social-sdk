@@ -21,6 +21,33 @@
 
 open Social_core
 
+(** {1 API version and endpoints}
+
+    The single source of truth for the Instagram API (Business Login)
+    version this package targets. Use these instead of writing ["v25.0"] in
+    application code, so that a version bump is a dependency bump. *)
+
+(** Graph API version, e.g. ["v25.0"]. *)
+let api_version = "v25.0"
+
+(** Unversioned host of the Instagram API with Instagram Login. *)
+let graph_api_host = "https://graph.instagram.com"
+
+(** Versioned API base URL, ["https://graph.instagram.com/v25.0"]. *)
+let graph_api_base = graph_api_host ^ "/" ^ api_version
+
+(** Instagram Business Login authorization dialog. *)
+let oauth_authorize_url = "https://api.instagram.com/oauth/authorize"
+
+(** Short-lived token endpoint (authorization-code exchange). *)
+let token_endpoint = "https://api.instagram.com/oauth/access_token"
+
+(** Long-lived token exchange ([ig_exchange_token]); unversioned. *)
+let long_lived_token_endpoint = graph_api_host ^ "/access_token"
+
+(** Long-lived token refresh ([ig_refresh_token]); unversioned. *)
+let refresh_endpoint = graph_api_host ^ "/refresh_access_token"
+
 (** Profile type for standalone (Instagram Business Login) OAuth flow *)
 type standalone_profile = {
   user_id: string;
@@ -270,19 +297,19 @@ module OAuth = struct
     let max_refresh_attempts = 5
 
     (** Authorization endpoint (Instagram's own OAuth dialog) *)
-    let authorization_endpoint = "https://api.instagram.com/oauth/authorize"
+    let authorization_endpoint = oauth_authorize_url
 
     (** Token endpoint for initial code exchange (Instagram API) *)
-    let token_endpoint = "https://api.instagram.com/oauth/access_token"
+    let token_endpoint = token_endpoint
 
     (** Long-lived token exchange endpoint *)
-    let long_lived_token_endpoint = "https://graph.instagram.com/access_token"
+    let long_lived_token_endpoint = long_lived_token_endpoint
 
     (** Token refresh endpoint *)
-    let refresh_endpoint = "https://graph.instagram.com/refresh_access_token"
+    let refresh_endpoint = refresh_endpoint
 
     (** Instagram Graph API base URL for standalone flow *)
-    let api_base = "https://graph.instagram.com/v25.0"
+    let api_base = graph_api_base
   end
 
   (** Scope definitions for Instagram Standalone (Business Login) *)
@@ -543,7 +570,9 @@ end
 
 (** Make functor to create Instagram Standalone provider with given configuration *)
 module Make (Config : CONFIG) = struct
-  let graph_api_base = "https://graph.instagram.com/v25.0"
+  (* Alias of the top-level constant, kept for code that referenced it
+     through the functor. *)
+  let graph_api_base = graph_api_base
   module OAuth_http = OAuth.Make(Config.Http)
 
   (** {1 Platform Constants} *)
@@ -777,7 +806,7 @@ module Make (Config : CONFIG) = struct
     in
 
     let query = Uri.encoded_of_query params in
-    let url = Printf.sprintf "https://graph.instagram.com/refresh_access_token?%s" query in
+    let url = Printf.sprintf "%s?%s" refresh_endpoint query in
 
     Config.Http.get url
       (fun response ->
