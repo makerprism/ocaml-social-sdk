@@ -7,4 +7,5 @@
   digestif
   base64
   ptime
-  ptime.clock.os))
+  ptime.clock.os
+  uri))

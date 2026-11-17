@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Token-based `GET /2/users/me`, typed**: `OAuth.Make(Http).get_me ~access_token ?user_fields` (OAuth 2.0 user token) and `Oauth1a.Make(Http).get_me ~consumer_key ~consumer_secret ~token ~token_secret ?user_fields` (signed OAuth 1.0a), both returning `User.t` (`id`, `username`, `name`, `description`, `profile_image_url`, `location`, `url`, `created_at`, `protected`, `verified`, `verified_type`, `public_metrics`) from `api.x.com`. New module `Twitter_user` (re-exported as `Social_twitter_v2.User`) holds the type, parser (`tweet_count`, or `post_count`) and error mapping (401 `Token_invalid`, 403 `Insufficient_permissions ["tweet.read"; "users.read"]`, 429 `Rate_limited` with the `x-rate-limit-reset` delay). The account-bound `Make.get_me` (raw JSON) is unchanged.
 #### Character Counting (`Char_counter` module)
 - **`count`** - Count characters according to Twitter's rules (URLs=23, CJK/emoji=2)
 - **`is_valid`** - Check if text fits within 280 character limit

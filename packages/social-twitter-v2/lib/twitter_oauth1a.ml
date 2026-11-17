@@ -212,4 +212,28 @@ module Make (Http : Social_core.HTTP_CLIENT) = struct
         end else
           on_error (Printf.sprintf "access_token exchange failed (%d): %s" response.status response.body))
       on_error
+
+  (** The user behind an OAuth 1.0a user token, [GET /2/users/me] signed
+      with HMAC-SHA1 ({!Twitter_user}).
+
+      @param user_fields Defaults to {!Twitter_user.default_user_fields}. *)
+  let get_me ~consumer_key ~consumer_secret ~token ~token_secret
+      ?(user_fields = Twitter_user.default_user_fields) on_result =
+    let url = Twitter_user.me_url ~user_fields in
+    let auth_header =
+      authorization_header ~consumer_key ~consumer_secret ~token ~token_secret
+        ~http_method:"GET" ~url ()
+    in
+    Http.get ~headers:[ ("Authorization", auth_header) ] url
+      (fun response ->
+        if response.Social_core.status >= 200 && response.status < 300 then
+          match Twitter_user.parse response.body with
+          | Ok user -> on_result (Ok user)
+          | Error message -> on_result (Error (Error_types.Internal_error message))
+        else
+          on_result
+            (Error
+               (Twitter_user.error_of_response ~status_code:response.status
+                  ~headers:response.headers response.body)))
+      (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
 end

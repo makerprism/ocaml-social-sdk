@@ -9,3 +9,6 @@ module Oauth1a = Twitter_oauth1a
 
 (* OAuth 1.0a HTTP client wrapper *)
 module Oauth1a_http = Twitter_oauth1a_http
+
+(* The authenticated user ([GET /2/users/me]), shared by both OAuth flows *)
+module User = Twitter_user
