@@ -1968,6 +1968,38 @@ let test_init_video_upload_403_scope_mapping () =
       | Ok _ -> failwith "Expected permission error");
   assert !done_
 
+let test_init_video_upload_error_keeps_raw_body () =
+  print_string "Test: init_video_upload error keeps raw body pure... ";
+  reset_mock_state ();
+  let post_info = Social_tiktok_v1.make_post_info ~title:"Raw body test" () in
+  let provider_body =
+    {|{"error":{"code":"spam_risk_too_many_posts","message":"Too many posts"}}|}
+  in
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"video/init/" url then
+      { Social_core.status = 400; headers = []; body = provider_body }
+    else
+      {
+        Social_core.status = 200;
+        headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|};
+      });
+  let done_ = ref false in
+  TikTok.init_video_upload
+    ~account_id:"test_account"
+    ~post_info
+    ~video_size:123
+    (function
+      | Error (Error_types.Api_error { raw_response = Some raw; message; _ }) ->
+          assert (raw = provider_body);
+          assert (String.starts_with ~prefix:"spam_risk_too_many_posts: Too many posts" message);
+          assert (String.ends_with ~suffix:"[video_size=123 chunk_size=123 chunks=1]" message);
+          done_ := true;
+          print_endline "PASSED"
+      | Error err -> failwith ("Expected Api_error, got: " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "Expected API error");
+  assert !done_
+
 let test_check_publish_status_403_scope_mapping () =
   print_string "Test: check_publish_status 403 scope mapping... ";
   reset_mock_state ();
@@ -3349,6 +3381,7 @@ let () =
   test_get_creator_info_401_expired_maps_token_expired ();
   test_get_creator_info_403_scope_mapping ();
   test_init_video_upload_403_scope_mapping ();
+  test_init_video_upload_error_keeps_raw_body ();
   test_check_publish_status_403_scope_mapping ();
   test_get_creator_info_404_maps_resource_not_found ();
   test_get_creator_info_500_request_id_and_top_level_error ();

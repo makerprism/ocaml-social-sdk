@@ -1300,7 +1300,9 @@ module Make (Config : CONFIG) = struct
     with _ -> false
   
   (** Parse API error response and return structured Error_types.error *)
-  let parse_api_error ~status_code ~response_body ?(response_headers=[]) ?(required_scopes=["video.publish"]) () =
+  (* [diagnostic] goes into the human-readable message only: [raw_response]
+     must stay the provider's own body so callers can parse its error code. *)
+  let parse_api_error ~status_code ~response_body ?(response_headers=[]) ?(required_scopes=["video.publish"]) ?(diagnostic="") () =
     let lowercase s = String.lowercase_ascii s in
     let find_header name =
       let target = lowercase name in
@@ -1394,7 +1396,7 @@ module Make (Config : CONFIG) = struct
       else
         Error_types.Api_error {
           status_code = 403;
-          message = error_msg;
+          message = error_msg ^ diagnostic;
           platform = Platform_types.TikTok;
           raw_response = Some response_body;
           request_id;
@@ -1411,7 +1413,7 @@ module Make (Config : CONFIG) = struct
     else
       Error_types.Api_error {
         status_code;
-        message = error_msg;
+        message = error_msg ^ diagnostic;
         platform = Platform_types.TikTok;
         raw_response = Some response_body;
         request_id;
@@ -1577,7 +1579,7 @@ module Make (Config : CONFIG) = struct
             else
               let diag = Printf.sprintf " [video_size=%d chunk_size=%d chunks=%d]"
                 video_size resolved_chunk_size resolved_total_chunk_count in
-              on_result (Error (parse_api_error ~status_code:response.status ~response_body:(response.body ^ diag) ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ~diagnostic:diag ())))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
@@ -1742,7 +1744,7 @@ module Make (Config : CONFIG) = struct
             else
               let diag = Printf.sprintf " [video_size=%d chunk_size=%d chunks=%d]"
                 video_size resolved_chunk_size resolved_total_chunk_count in
-              on_result (Error (parse_api_error ~status_code:response.status ~response_body:(response.body ^ diag) ~response_headers:response.headers ~required_scopes:["video.publish"] ())))
+              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body ~response_headers:response.headers ~required_scopes:["video.publish"] ~diagnostic:diag ())))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
