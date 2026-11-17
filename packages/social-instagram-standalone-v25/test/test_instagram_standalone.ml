@@ -214,6 +214,96 @@ let test_standalone_authorize_url () =
   assert (query_param url "force_reauth" = Some "true");
   print_endline "PASS authorize_url sends plain comma-separated scope and optional flags"
 
+let expect_ok = function
+  | Stdlib.Ok value -> value
+  | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+
+let test_exchange_code_full_shapes () =
+  (* Documented shape: wrapped in data, permissions comma-joined. *)
+  Mock_http.reset ();
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"data":[{"access_token":"tok","user_id":"1020","permissions":"instagram_business_basic,instagram_business_manage_comments"}]}|};
+    headers = [];
+  };
+  OAuth_standalone_client.exchange_code_full ~client_id:"app" ~client_secret:"sec"
+    ~redirect_uri:"https://e.com/cb" ~code:"c" (fun result ->
+      let exchange = expect_ok result in
+      assert (exchange.OAuth.user_id = "1020");
+      assert (exchange.credentials.access_token = "tok");
+      assert (exchange.permissions = Some [ "instagram_business_basic"; "instagram_business_manage_comments" ]);
+      assert (exchange.credentials.scope = Some "instagram_business_basic,instagram_business_manage_comments");
+      assert (exchange.expires_in = None);
+      (match !Mock_http.requests with
+       | [ ("POST", url, _, body) ] ->
+           assert (url = "https://api.instagram.com/oauth/access_token");
+           assert (string_contains body "grant_type=authorization_code")
+       | _ -> failwith "expected one POST"));
+  (* Live shape: flat, numeric user_id, permissions as an array. *)
+  Mock_http.reset ();
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"access_token":"tok2","user_id":9876543210,"permissions":["instagram_business_basic"],"expires_in":3600}|};
+    headers = [];
+  };
+  OAuth_standalone_client.exchange_code_full ~client_id:"app" ~client_secret:"sec"
+    ~redirect_uri:"https://e.com/cb" ~code:"c" (fun result ->
+      let exchange = expect_ok result in
+      assert (exchange.OAuth.user_id = "9876543210");
+      assert (exchange.permissions = Some [ "instagram_business_basic" ]);
+      assert (exchange.expires_in = Some 3600));
+  (* No permissions member: None, scope None. *)
+  Mock_http.reset ();
+  Mock_http.set_response { status = 200; body = {|{"access_token":"t","user_id":"1"}|}; headers = [] };
+  OAuth_standalone_client.exchange_code_full ~client_id:"app" ~client_secret:"sec"
+    ~redirect_uri:"https://e.com/cb" ~code:"c" (fun result ->
+      let exchange = expect_ok result in
+      assert (exchange.OAuth.permissions = None && exchange.credentials.scope = None));
+  Mock_http.reset ();
+  Mock_http.set_response { status = 200; body = {|{"access_token":"t"}|}; headers = [] };
+  OAuth_standalone_client.exchange_code_full ~client_id:"app" ~client_secret:"sec"
+    ~redirect_uri:"https://e.com/cb" ~code:"c" (function
+      | Stdlib.Error (Error_types.Internal_error _) -> ()
+      | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Internal_error without user_id");
+  print_endline "PASS exchange_code_full keeps permissions in both response shapes"
+
+let test_get_me_profile () =
+  Mock_http.reset ();
+  Mock_http.set_response {
+    status = 200;
+    body = {|{"id":"app-scoped","user_id":"1784","username":"maker","name":"Maker","account_type":"Business",
+             "profile_picture_url":"https://p/x.jpg","followers_count":12,"follows_count":3,"media_count":40,
+             "biography":"","website":"https://maker.example"}|};
+    headers = [];
+  };
+  OAuth_standalone_client.get_me ~access_token:"tok"
+    ~fields:(OAuth.profile_fields @ [ "biography"; "website" ]) ~app_secret:"sec" (fun result ->
+      let profile = expect_ok result in
+      (match !Mock_http.requests with
+       | [ ("GET", url, _, _) ] ->
+           assert (string_contains url "https://graph.instagram.com/v25.0/me?");
+           assert (query_param url "fields"
+                   = Some "id,user_id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count,biography,website");
+           assert (query_param url "appsecret_proof" <> None)
+       | _ -> failwith "expected one GET");
+      assert (profile.OAuth.user_id = Some "1784");
+      assert (profile.followers_count = Some 12 && profile.media_count = Some 40);
+      assert (profile.biography = None);
+      assert (profile.website = Some "https://maker.example"));
+  (* The get-started guide shows a data-wrapped answer. *)
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 200; body = {|{"data":[{"user_id":"1784","username":"maker"}]}|}; headers = [] };
+  OAuth_standalone_client.get_me ~access_token:"tok" (fun result ->
+      let profile = expect_ok result in
+      assert (profile.OAuth.id = None && profile.user_id = Some "1784" && profile.username = Some "maker"));
+  Mock_http.reset ();
+  Mock_http.set_response { status = 200; body = {|{"username":"x"}|}; headers = [] };
+  OAuth_standalone_client.get_me ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Internal_error _) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Internal_error without ids");
+  print_endline "PASS get_me reads the typed profile (flat and data-wrapped)"
+
 (** Test: Standalone OAuth authorization URL includes enable_fb_login=0 *)
 let test_standalone_auth_url_enable_fb_login () =
   let url = OAuth.get_authorization_url
@@ -1719,6 +1809,8 @@ let () =
   test_exported_api_constants ();
   test_standalone_auth_url_endpoint ();
   test_standalone_authorize_url ();
+  test_exchange_code_full_shapes ();
+  test_get_me_profile ();
   test_standalone_auth_url_enable_fb_login ();
   test_standalone_auth_url_scopes_comma_separated ();
   test_standalone_auth_url_response_type ();

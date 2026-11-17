@@ -368,6 +368,150 @@ module OAuth = struct
     let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [ v ])) params) in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
 
+  (** {2 Typed token exchange and profile} *)
+
+  (** The short-lived token exchange answer
+      ([POST https://api.instagram.com/oauth/access_token],
+      {{:https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login}}). *)
+  type token_exchange = {
+    credentials : credentials;
+        (** [scope] holds the granted [permissions], comma-joined, when the
+            answer has them. *)
+    user_id : string;  (** The Instagram professional account id. *)
+    permissions : string list option;
+        (** What the user actually granted. Business Login lets the user
+            untick permissions, so this can be fewer than requested. [None]
+            when the answer has no [permissions] member. *)
+    expires_in : int option;  (** Seconds, when the answer has it. *)
+  }
+
+  let json_field key = function
+    | `Assoc fields -> List.assoc_opt key fields
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+
+  let json_id key json =
+    match json_field key json with
+    | Some (`String value) when value <> "" -> Some value
+    | Some (`Int value) -> Some (string_of_int value)
+    | Some (`String _ | `Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> None
+
+  (* The documented answer is [{"data": [{access_token, user_id,
+     permissions: "a,b"}]}]; the live endpoint has also answered with a flat
+     object, where permissions has been seen as an array. Accept both. *)
+  let token_exchange_record json =
+    match json_field "access_token" json with
+    | Some (`String _) -> Some json
+    | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> (
+        match json_field "data" json with
+        | Some (`List (first :: _)) -> Some first
+        | Some (`List [] | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> None)
+
+  let permissions_of record =
+    match json_field "permissions" record with
+    | Some (`String joined) -> Some (Social_oauth_scope.split joined)
+    | Some (`List items) ->
+        Some
+          (List.concat_map
+             (function
+               | `String name -> Social_oauth_scope.split name
+               | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _ -> [])
+             items)
+    | Some (`Null | `Bool _ | `Int _ | `Float _ | `Assoc _) | None -> None
+
+  (** Parses a short-lived token exchange body in either shape. *)
+  let parse_token_exchange body : (token_exchange, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("token response is not JSON: " ^ message)
+    | json -> (
+        match token_exchange_record json with
+        | None -> Stdlib.Error "token response has no access_token"
+        | Some record -> (
+            match json_field "access_token" record, json_id "user_id" record with
+            | Some (`String access_token), Some user_id when access_token <> "" ->
+                let permissions = permissions_of record in
+                let expires_in = Social_token_expiry.expires_in_of_json record in
+                let credentials =
+                  ({ access_token;
+                     refresh_token = None;
+                     expires_at =
+                       Social_token_expiry.expires_at_of_expires_in (Option.value expires_in ~default:3600);
+                     auth_type = auth_type_of_string
+                         (match json_field "token_type" record with
+                          | Some (`String token_type) -> token_type
+                          | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> "Bearer");
+                     scope = Option.map (Social_oauth_scope.join Social_oauth_scope.Comma) permissions }
+                    : credentials)
+                in
+                Stdlib.Ok { credentials; user_id; permissions; expires_in }
+            | Some (`String _), None -> Stdlib.Error "token response has no user_id"
+            | (Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None), _ ->
+                Stdlib.Error "token response has no access_token"))
+
+  (** An Instagram professional account as [GET /me] returns it. Every
+      field is [None] unless requested and returned. *)
+  type profile = {
+    id : string option;  (** App-scoped id. *)
+    user_id : string option;  (** Instagram professional account id. *)
+    username : string option;
+    name : string option;
+    account_type : string option;  (** ["Business"] or ["Media_Creator"]. *)
+    profile_picture_url : string option;
+    followers_count : int option;
+    follows_count : int option;
+    media_count : int option;
+    biography : string option;
+    website : string option;
+  }
+
+  (** The fields the Instagram Login get-started guide documents for [/me]
+      ({{:https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/get-started}}).
+      [biography] and [website] are IG User fields
+      ({{:https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user}})
+      that the guide does not list for Instagram Login; request them
+      explicitly with [?fields]. *)
+  let profile_fields =
+    [ "id"; "user_id"; "username"; "name"; "account_type"; "profile_picture_url";
+      "followers_count"; "follows_count"; "media_count" ]
+
+  (** Parses a [/me] body: a flat object, or the [{"data": [{...}]}] form
+      the get-started guide shows. [Error] without [id] or [user_id]. *)
+  let parse_profile body : (profile, string) Stdlib.result =
+    let text record key =
+      match json_field key record with
+      | Some (`String "") | None -> None
+      | Some (`String value) -> Some value
+      | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) -> None
+    in
+    let count record key =
+      match json_field key record with
+      | Some (`Int value) -> Some value
+      | Some (`String value) -> int_of_string_opt value
+      | Some (`Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> None
+    in
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("profile response is not JSON: " ^ message)
+    | json ->
+        let record =
+          match json_field "data" json with
+          | Some (`List (first :: _)) -> first
+          | Some (`List [] | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> json
+        in
+        let id = json_id "id" record and user_id = json_id "user_id" record in
+        (match id, user_id with
+         | None, None -> Stdlib.Error "profile response has no id or user_id"
+         | (Some _ | None), _ ->
+             Stdlib.Ok
+               { id; user_id;
+                 username = text record "username";
+                 name = text record "name";
+                 account_type = text record "account_type";
+                 profile_picture_url = text record "profile_picture_url";
+                 followers_count = count record "followers_count";
+                 follows_count = count record "follows_count";
+                 media_count = count record "media_count";
+                 biography = text record "biography";
+                 website = text record "website" })
+
   (** Make functor for Standalone OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Exchange authorization code for short-lived access token
@@ -420,6 +564,55 @@ module OAuth = struct
           else
             on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
         (fun err -> on_result (Error (network_error_of_string err)))
+
+    (** Exchange an authorization code and keep the whole answer:
+        credentials, [user_id], the granted [permissions] and [expires_in]
+        ({!token_exchange}). Same request as {!exchange_code}, which drops
+        [permissions] and stays for compatibility. The token is
+        short-lived (~1 hour); continue with
+        {!exchange_for_long_lived_token}. *)
+    let exchange_code_full ~client_id ~client_secret ~redirect_uri ~code on_result =
+      let body = Social_core.form_urlencode_kvs [
+        ("client_id", client_id);
+        ("client_secret", client_secret);
+        ("grant_type", "authorization_code");
+        ("redirect_uri", redirect_uri);
+        ("code", code);
+      ] in
+      let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+      Http.post ~headers ~body Metadata.token_endpoint
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_token_exchange response.body with
+            | Stdlib.Ok exchange -> on_result (Stdlib.Ok exchange)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result (Stdlib.Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+        (fun err -> on_result (Stdlib.Error (network_error_of_string err)))
+
+    (** The token's account profile, [GET /me?fields=...] on
+        [graph.instagram.com], token-based for OAuth callbacks.
+
+        @param fields Defaults to {!profile_fields}; add ["biography"] or
+          ["website"] explicitly.
+        @param app_secret Sends [appsecret_proof] when given. *)
+    let get_me ~access_token ?(fields = profile_fields) ?app_secret on_result =
+      let params =
+        [ ("fields", [ String.concat "," fields ]); ("access_token", [ access_token ]) ]
+        @ (match app_secret with
+           | Some app_secret -> [ ("appsecret_proof", [ compute_app_secret_proof ~app_secret ~access_token ]) ]
+           | None -> [])
+      in
+      let url = Printf.sprintf "%s/me?%s" Metadata.api_base (Uri.encoded_of_query params) in
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_profile response.body with
+            | Stdlib.Ok profile -> on_result (Stdlib.Ok profile)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result (Stdlib.Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+        (fun err -> on_result (Stdlib.Error (network_error_of_string err)))
 
     (** Exchange short-lived token for long-lived token (60 days)
 
