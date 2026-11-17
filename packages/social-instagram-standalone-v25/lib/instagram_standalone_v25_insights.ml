@@ -145,15 +145,6 @@ let list_of = function
   | Some (`List items) -> items
   | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> []
 
-let map_result f items =
-  List.fold_right
-    (fun item acc ->
-      match (acc, f item) with
-      | Ok values, Ok value -> Ok (value :: values)
-      | (Error _ as error), _ -> error
-      | Ok _, (Error _ as error) -> error)
-    items (Ok [])
-
 let parse_json body =
   match Yojson.Basic.from_string body with
   | exception Yojson.Json_error msg -> Error ("insights response is not JSON: " ^ msg)
@@ -173,45 +164,41 @@ let first_value entry =
 
 let total_value entry = int_of (Option.bind (field "total_value" entry) (field "value"))
 
+(* An entry or point without a usable value carries no figure (a metric
+   Meta has no data for yet). It is left out rather than failing the read,
+   so one empty metric never costs the others. *)
 let parse_media_insights body =
-  Result.bind (data_entries body) (fun entries ->
-      map_result
-        (fun entry ->
-          match Option.bind (string_of (field "name" entry)) media_metric_of_string with
-          | None -> Ok None
-          | Some metric -> (
-              match (first_value entry, total_value entry) with
-              | Some value, _ | None, Some value -> Ok (Some { metric; value })
-              | None, None -> Error (media_metric_to_string metric ^ ": entry has no value")))
-        entries
-      |> Result.map (List.filter_map Fun.id))
+  Result.map
+    (List.filter_map (fun entry ->
+         Option.bind (Option.bind (string_of (field "name" entry)) media_metric_of_string)
+           (fun metric ->
+             match (first_value entry, total_value entry) with
+             | Some value, _ | None, Some value -> Some { metric; value }
+             | None, None -> None)))
+    (data_entries body)
 
 let parse_account_totals body =
-  Result.bind (data_entries body) (fun entries ->
-      map_result
-        (fun entry ->
-          match Option.bind (string_of (field "name" entry)) account_metric_of_string with
-          | None -> Ok None
-          | Some metric -> (
-              match total_value entry with
-              | Some total -> Ok (Some { metric; total })
-              | None -> Error (account_metric_to_string metric ^ ": entry has no total_value")))
-        entries
-      |> Result.map (List.filter_map Fun.id))
+  Result.map
+    (List.filter_map (fun entry ->
+         Option.bind (Option.bind (string_of (field "name" entry)) account_metric_of_string)
+           (fun metric -> Option.map (fun total -> { metric; total }) (total_value entry))))
+    (data_entries body)
 
 let parse_follower_changes body =
-  Result.bind (data_entries body) (fun entries ->
+  Result.map
+    (fun entries ->
       match
         List.find_opt (fun entry -> string_of (field "name" entry) = Some "follower_count") entries
       with
-      | None -> Ok []
+      | None -> []
       | Some entry ->
-          map_result
+          List.filter_map
             (fun point ->
-              match int_of (field "value" point) with
-              | Some change -> Ok { end_time = string_of (field "end_time" point); change }
-              | None -> Error "follower_count: values[] entry has no integer value")
+              Option.map
+                (fun change -> { end_time = string_of (field "end_time" point); change })
+                (int_of (field "value" point)))
             (list_of (field "values" entry)))
+    (data_entries body)
 
 let parse_account_counts body =
   Result.bind (parse_json body) (fun json ->

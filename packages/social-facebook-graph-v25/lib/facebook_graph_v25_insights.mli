@@ -93,14 +93,18 @@ type metric = {
   period : period option;  (** [None] when absent or not a documented period *)
   title : string option;
   description : string option;
-  points : point list;  (** [values], in the order Meta sent them *)
+  points : point list;
+      (** [values] that carry a figure, in the order Meta sent them *)
 }
 
 val metrics_of_json : Yojson.Basic.t -> (metric list, string) result
 (** Reads an insights [data] array, or an object holding one: the response
     root, or the [insights] object a field expansion such as
-    [insights.metric(...)] embeds in a post. A value that is neither a
-    number nor an object of numbers is [Error]. *)
+    [insights.metric(...)] embeds in a post. A point whose value is
+    missing, [null], or neither a number nor an object of numbers carries
+    no figure and is left out of [points], so one empty metric never costs
+    the others. [Error] when the root holds no [data] array or an entry
+    has no [name]. *)
 
 val parse : string -> (metric list, string) result
 (** {!metrics_of_json} on a response body. *)

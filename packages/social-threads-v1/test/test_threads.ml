@@ -4906,9 +4906,66 @@ let test_get_media_insights_documented_shape () =
   Mock_http.set_responses
     [ { status = 200; headers = []; body = {|{"data":[{"name":"likes","period":"lifetime"}]}|} } ];
   Threads.get_media_insights ~access_token:"t" ~media_id:"m-1" (function
-    | Error (Error_types.Internal_error msg) -> assert (string_contains msg "likes")
-    | _ -> failwith "an entry without a value must be a parse error");
+    | Ok [] -> ()
+    | _ -> failwith "an entry without a value carries no figure and is left out");
   print_endline "ok: get_media_insights documented shape"
+
+(* A day still being computed arrives without a value, and one empty
+   metric must not cost the caller the others: the read used to fail as a
+   whole. *)
+let test_parse_insights_skips_missing_values () =
+  let module I = Social_threads_v1.Insights in
+  let body =
+    {|{"data":[
+      {"name":"views","period":"day","values":[
+        {"value":12,"end_time":"2026-11-15T08:00:00+0000"},
+        {"value":9,"end_time":"2026-11-16T08:00:00+0000"},
+        {"value":null,"end_time":"2026-11-17T08:00:00+0000"},
+        {"end_time":"2026-11-18T08:00:00+0000"}]},
+      {"name":"likes","period":"lifetime"},
+      {"name":"replies","period":"lifetime","values":[{"value":"not_a_number"}]},
+      {"name":"quotes","period":"lifetime","total_value":{"value":null}},
+      {"name":"clicks","period":"day","link_total_values":[
+        {"value":3,"link_url":"https://example.com/a"},{"link_url":"https://example.com/b"}]},
+      {"name":"followers_count","period":"day","total_value":{"value":540}}]}|}
+  in
+  (match I.parse_insights body with
+   | Error msg -> failwith ("expected the read to succeed: " ^ msg)
+   | Ok insights ->
+       (match I.find I.Views insights with
+        | Some { value = I.Time_series [ { value = 12; _ }; { value = 9; _ } ]; _ } -> ()
+        | _ -> failwith "views should keep the two buckets with a value");
+       assert (Option.bind (I.find I.Views insights) (fun i -> I.latest_value ~skip_zero:true i.value)
+               = Some 9);
+       assert (I.find I.Likes insights = None);
+       assert (I.find I.Quotes insights = None);
+       (match I.find I.Replies insights with
+        | Some { value = I.Time_series []; _ } -> ()
+        | _ -> failwith "replies should be an empty series");
+       (match I.find I.Clicks insights with
+        | Some { value = I.Link_totals [ { link_clicks = 3; _ } ]; _ } -> ()
+        | _ -> failwith "clicks should keep the link with a value");
+       (match I.find I.Followers_count insights with
+        | Some { value = I.Total 540; _ } -> ()
+        | _ -> failwith "followers_count should survive the empty metrics"));
+  (* A non-empty series wins over a total; an empty one falls back to it. *)
+  (match
+     I.parse_insights
+       {|{"data":[
+         {"name":"followers_count","values":[{"value":90}],"total_value":{"value":1234}},
+         {"name":"views","values":[],"total_value":{"value":77}}]}|}
+   with
+   | Ok insights ->
+       (match I.find I.Followers_count insights with
+        | Some { value = I.Time_series [ { value = 90; _ } ]; _ } -> ()
+        | _ -> failwith "a non-empty series should win over total_value");
+       (match I.find I.Views insights with
+        | Some { value = I.Total 77; _ } -> ()
+        | _ -> failwith "an empty series should fall back to total_value")
+   | Error msg -> failwith msg);
+  assert (Result.is_error (I.parse_insights {|{"error":{"message":"x"}}|}));
+  assert (Result.is_error (I.parse_insights "not json"));
+  print_endline "ok: parse_insights skips values Meta left empty"
 
 (* Regression: get_account_insights required [values] on every entry, so the
    documented [total_value] answer for likes/replies/reposts/quotes failed
@@ -5316,6 +5373,7 @@ let () =
   test_get_user_insights_for_account_user_id ();
   test_get_media_insights_documented_shape ();
   test_get_account_insights_accepts_total_value ();
+  test_parse_insights_skips_missing_values ();
   test_get_account_insights_malformed_payload_returns_internal_error ();
   test_get_post_insights_contract ();
   test_get_post_insights_malformed_payload_returns_internal_error ();

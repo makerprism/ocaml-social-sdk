@@ -95,25 +95,23 @@ let map_result f items =
       | Ok _, (Error _ as error) -> error)
     items (Ok [])
 
-let parse_value ~name = function
+(* A value Meta left empty ([null], missing) or that is not a number or an
+   object of numbers carries no figure. That point is left out rather than
+   failing the read, so one empty metric never costs the others. *)
+let parse_value = function
   | `Assoc counts ->
-      map_result
-        (fun (key, json) ->
-          match int_of_number json with
-          | Some n -> Ok (key, n)
-          | None -> Error (Printf.sprintf "%s: value.%s is not a number" name key))
-        counts
-      |> Result.map (fun counts -> By_type counts)
-  | `Int n -> Ok (Count n)
-  | `Float f -> Ok (Count (int_of_float f))
-  | `Null | `Bool _ | `String _ | `List _ -> Error (name ^ ": value is not a number or an object")
+      let parsed = List.map (fun (key, json) -> (key, int_of_number json)) counts in
+      if List.for_all (fun (_, n) -> Option.is_some n) parsed then
+        Some (By_type (List.filter_map (fun (key, n) -> Option.map (fun n -> (key, n)) n) parsed))
+      else None
+  | `Int n -> Some (Count n)
+  | `Float f -> Some (Count (int_of_float f))
+  | `Null | `Bool _ | `String _ | `List _ -> None
 
-let parse_point ~name json =
-  match field "value" json with
-  | None -> Error (name ^ ": values[] entry has no value")
-  | Some value_json ->
-      parse_value ~name value_json
-      |> Result.map (fun value -> { value; end_time = string_field "end_time" json })
+let parse_point json =
+  Option.map
+    (fun value -> { value; end_time = string_field "end_time" json })
+    (Option.bind (field "value" json) parse_value)
 
 let parse_metric json =
   match string_field "name" json with
@@ -124,12 +122,12 @@ let parse_metric json =
         | Some (`List items) -> items
         | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> []
       in
-      map_result (parse_point ~name) values
-      |> Result.map (fun points ->
-             { name; points;
-               period = Option.bind (string_field "period" json) period_of_string;
-               title = string_field "title" json;
-               description = string_field "description" json })
+      Ok
+        { name;
+          points = List.filter_map parse_point values;
+          period = Option.bind (string_field "period" json) period_of_string;
+          title = string_field "title" json;
+          description = string_field "description" json }
 
 let metrics_of_json json =
   match json with

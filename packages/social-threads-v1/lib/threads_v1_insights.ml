@@ -54,50 +54,48 @@ let int_value ~what = function
   | Some (`Float _ | `Null | `Bool _ | `String _ | `List _ | `Assoc _) | None ->
       Error (what ^ " is not an integer")
 
-let map_result f items =
-  List.fold_right
-    (fun item acc ->
-      match (acc, f item) with
-      | Ok values, Ok value -> Ok (value :: values)
-      | (Error _ as error), _ -> error
-      | Ok _, (Error _ as error) -> error)
-    items (Ok [])
-
+(* A bucket or link total without an integer value carries no figure:
+   Threads leaves the day still being computed empty, and one such entry
+   must not cost the caller every other metric of the response. *)
 let parse_point json =
-  int_value ~what:"values[].value" (field "value" json)
-  |> Result.map (fun value -> { value; end_time = string_field "end_time" json })
+  match int_value ~what:"values[].value" (field "value" json) with
+  | Ok value -> Some { value; end_time = string_field "end_time" json }
+  | Error _ -> None
 
 let parse_link_total json =
-  match string_field "link_url" json with
-  | None -> Error "link_total_values[] has no link_url"
-  | Some link_url ->
-      int_value ~what:"link_total_values[].value" (field "value" json)
-      |> Result.map (fun link_clicks -> { link_url; link_clicks })
+  match (string_field "link_url" json, int_value ~what:"value" (field "value" json)) with
+  | Some link_url, Ok link_clicks -> Some { link_url; link_clicks }
+  | None, (Ok _ | Error _) | Some _, Error _ -> None
 
-(* The three documented shapes, tried in the order the docs present them
-   for the metric kinds. *)
+(* The three documented shapes. A non-empty [values] array is read first:
+   an entry that also carries [total_value] keeps its per-day buckets.
+   [None] when the entry carries none of them, or a [total_value] without
+   an integer. *)
 let parse_value json =
-  match (field "link_total_values" json, field "total_value" json, field "values" json) with
-  | Some (`List items), _, _ -> map_result parse_link_total items |> Result.map (fun l -> Link_totals l)
-  | _, Some (`Assoc _ as total), _ ->
-      int_value ~what:"total_value.value" (field "value" total) |> Result.map (fun n -> Total n)
-  | _, _, Some (`List items) -> map_result parse_point items |> Result.map (fun l -> Time_series l)
-  | _, _, _ -> Error "entry has no values, total_value or link_total_values"
+  match (field "values" json, field "link_total_values" json, field "total_value" json) with
+  | Some (`List (_ :: _ as items)), _, _ -> Some (Time_series (List.filter_map parse_point items))
+  | _, Some (`List items), _ -> Some (Link_totals (List.filter_map parse_link_total items))
+  | _, _, Some (`Assoc _ as total) -> (
+      match int_value ~what:"total_value.value" (field "value" total) with
+      | Ok n -> Some (Total n)
+      | Error _ -> None)
+  | Some (`List []), _, _ -> Some (Time_series [])
+  | _, _, _ -> None
 
 let parse_entry json =
   match Option.bind (string_field "name" json) metric_of_string with
-  | None -> Ok None
+  | None -> None
   | Some metric ->
-      parse_value json
-      |> Result.map (fun value -> Some { metric; period = string_field "period" json; value })
-      |> Result.map_error (fun msg -> metric_to_string metric ^ ": " ^ msg)
+      Option.map
+        (fun value -> { metric; period = string_field "period" json; value })
+        (parse_value json)
 
 let parse_insights body =
   match Yojson.Basic.from_string body with
   | exception Yojson.Json_error msg -> Error ("insights response is not JSON: " ^ msg)
   | json -> (
       match field "data" json with
-      | Some (`List entries) -> map_result parse_entry entries |> Result.map (List.filter_map Fun.id)
+      | Some (`List entries) -> Ok (List.filter_map parse_entry entries)
       | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None ->
           Error "insights response has no data array")
 
