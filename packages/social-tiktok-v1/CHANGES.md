@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- **The test suite runs under `dune runtest` (and so in CI).** `test/` was
+  declared as an `executable`, so it never ran, and three of its assertions
+  had gone stale against the code:
+  - `to_canonical_account_analytics_series` returns 8 series (4 account
+    stats, 4 recent-video totals); the test still expected 9 from the
+    `collect_count` series that was removed because the v2 Video Object has
+    no such field.
+  - Chunked upload: the test asked for 4-byte chunks of a 10-byte video and
+    expected three chunks. TikTok requires 5-64 MB chunks, a floor-divided
+    chunk count with the remainder in the last chunk, and a single whole
+    chunk under 5 MB, which is what the code does. The test now checks a
+    12 MB upload (two chunks) and a sub-5 MB upload (one chunk).
+  - `post_single` / `post_thread` were tested for `PULL_FROM_URL`, but they
+    download and use `FILE_UPLOAD` because `PULL_FROM_URL` needs URL
+    ownership verification that presigned storage URLs cannot pass.
+  No library code changed.
+
 ### Changed
 
 - 403 responses with scope/permission body markers now carry TikTok's
