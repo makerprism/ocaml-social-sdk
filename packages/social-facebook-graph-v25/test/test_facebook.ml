@@ -1118,6 +1118,29 @@ let test_graph_version_policy_guard () =
        print_endline "✓ Graph version policy guard"
    | _ -> failwith "Expected two analytics requests for version policy guard")
 
+(** Test: exported version constants are the ones every request uses *)
+let test_exported_api_constants () =
+  assert (Social_facebook_graph_v25.api_version = "v25.0");
+  assert (Social_facebook_graph_v25.graph_api_base = "https://graph.facebook.com/v25.0");
+  assert (Social_facebook_graph_v25.rupload_base
+          = "https://rupload.facebook.com/video-upload/v25.0");
+  assert (Social_facebook_graph_v25.oauth_authorize_url
+          = "https://www.facebook.com/v25.0/dialog/oauth");
+  assert (Social_facebook_graph_v25.token_endpoint
+          = "https://graph.facebook.com/v25.0/oauth/access_token");
+  (* The OAuth metadata and the functor's aliases derive from them *)
+  assert (OAuth.Metadata.api_base == Social_facebook_graph_v25.graph_api_base);
+  assert (OAuth.Metadata.authorization_endpoint == Social_facebook_graph_v25.oauth_authorize_url);
+  assert (OAuth.Metadata.token_endpoint == Social_facebook_graph_v25.token_endpoint);
+  assert (Facebook.graph_api_base == Social_facebook_graph_v25.graph_api_base);
+  assert (Facebook.graph_api_version == Social_facebook_graph_v25.api_version);
+  let url =
+    OAuth.get_authorization_url ~client_id:"c" ~redirect_uri:"https://e.com/cb"
+      ~state:"s" ~scopes:[ OAuth.Scopes.Pages_show_list ] ()
+  in
+  assert (String.starts_with ~prefix:(Social_facebook_graph_v25.oauth_authorize_url ^ "?") url);
+  print_endline "✓ Exported API version constants"
+
 (** Test: OAuth URL with required permissions *)
 let test_oauth_url_permissions () =
   Mock_config.reset ();
@@ -3131,6 +3154,7 @@ let () =
   test_canonical_analytics_adapters ();
   test_analytics_network_error_redacts_query_token ();
   test_graph_version_policy_guard ();
+  test_exported_api_constants ();
   
   print_endline "\n--- Alt-Text Tests ---";
   test_upload_photo_with_alt_text ();

@@ -1,8 +1,30 @@
 open Social_core
 
-let threads_api_base = "https://graph.threads.net/v1.0"
-let threads_token_exchange_endpoint = "https://graph.threads.net/access_token"
-let threads_token_refresh_endpoint = "https://graph.threads.net/refresh_access_token"
+(** {1 API version and endpoints}
+
+    The single source of truth for the Threads API version this package
+    targets. Use these instead of writing ["v1.0"] in application code. *)
+
+(** Threads API version, e.g. ["v1.0"]. *)
+let api_version = "v1.0"
+
+(** Unversioned Threads Graph API host. *)
+let graph_api_host = "https://graph.threads.net"
+
+(** Versioned API base URL, ["https://graph.threads.net/v1.0"]. *)
+let threads_api_base = graph_api_host ^ "/" ^ api_version
+
+(** Long-lived token exchange ([th_exchange_token]). *)
+let threads_token_exchange_endpoint = graph_api_host ^ "/access_token"
+
+(** Long-lived token refresh ([th_refresh_token]). *)
+let threads_token_refresh_endpoint = graph_api_host ^ "/refresh_access_token"
+
+(** Threads authorization window. *)
+let oauth_authorize_url = "https://threads.net/oauth/authorize"
+
+(** Authorization-code exchange endpoint. *)
+let token_endpoint = graph_api_host ^ "/oauth/access_token"
 
 let parse_expires_in json =
   let normalize_expires_in seconds =
@@ -326,8 +348,8 @@ module OAuth = struct
     let read = ["threads_basic"]
   end
 
-  let authorization_endpoint = "https://threads.net/oauth/authorize"
-  let token_endpoint = "https://graph.threads.net/oauth/access_token"
+  let authorization_endpoint = oauth_authorize_url
+  let token_endpoint = token_endpoint
 
   (* Use comma-separated scope format (?scope=scope1,scope2) instead of
      Meta's new params[scope]=["scope1","scope2"] JSON format. The new format

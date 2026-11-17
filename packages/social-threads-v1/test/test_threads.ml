@@ -4568,6 +4568,13 @@ let test_get_pending_replies_success () =
           print_endline "ok: get pending replies"
       | Error _ -> failwith "expected successful get_pending_replies")
 
+let test_exported_api_constants () =
+  assert (Social_threads_v1.api_version = "v1.0");
+  assert (Social_threads_v1.threads_api_base = "https://graph.threads.net/v1.0");
+  assert (Social_threads_v1.OAuth.token_endpoint == Social_threads_v1.token_endpoint);
+  assert (Social_threads_v1.OAuth.authorization_endpoint
+          == Social_threads_v1.oauth_authorize_url);
+  print_endline "ok: exported api constants"
 let query_param url key =
   match Uri.get_query_param (Uri.of_string url) key with
   | Some value -> value
@@ -4693,6 +4700,7 @@ let test_get_pending_replies_approval_status () =
 
 let () =
   test_oauth_url ();
+  test_exported_api_constants ();
   test_oauth_url_encodes_special_characters ();
   test_oauth_url_rejects_empty_state ();
   test_oauth_url_rejects_whitespace_client_id ();

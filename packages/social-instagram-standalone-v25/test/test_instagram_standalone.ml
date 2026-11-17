@@ -1495,10 +1495,24 @@ let test_post_reel_e2e_with_params () =
       (fun err -> failwith ("post_reel e2e with params failed: " ^ err)))
 
 (** Run all tests *)
+let test_exported_api_constants () =
+  assert (Social_instagram_standalone_v25.api_version = "v25.0");
+  assert (Social_instagram_standalone_v25.graph_api_base = "https://graph.instagram.com/v25.0");
+  assert (Social_instagram_standalone_v25.refresh_endpoint
+          = "https://graph.instagram.com/refresh_access_token");
+  assert (Social_instagram_standalone_v25.long_lived_token_endpoint
+          = "https://graph.instagram.com/access_token");
+  assert (OAuth.Metadata.api_base == Social_instagram_standalone_v25.graph_api_base);
+  assert (OAuth.Metadata.authorization_endpoint
+          == Social_instagram_standalone_v25.oauth_authorize_url);
+  assert (OAuth.Metadata.token_endpoint == Social_instagram_standalone_v25.token_endpoint);
+  print_endline "✓ Exported API version constants"
+
 let () =
   print_endline "\n=== Instagram Standalone Provider Tests ===\n";
 
   print_endline "--- OAuth Standalone Tests ---";
+  test_exported_api_constants ();
   test_standalone_auth_url_endpoint ();
   test_standalone_auth_url_enable_fb_login ();
   test_standalone_auth_url_scopes_comma_separated ();
