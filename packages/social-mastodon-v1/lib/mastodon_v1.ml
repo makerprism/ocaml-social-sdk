@@ -186,6 +186,21 @@ module OAuth = struct
     let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) with_pkce) in
     Printf.sprintf "%s%s?%s" instance_url Metadata.authorization_path query
   
+  (** The documented [POST /oauth/revoke] request: form data with
+      [client_id], [client_secret] and [token], all three required
+      (https://docs.joinmastodon.org/methods/oauth/#revoke). Returns
+      [(url, headers, body)]. *)
+  let revoke_request ~instance_url ~client_id ~client_secret ~token =
+    let url = Printf.sprintf "%s%s" instance_url Metadata.revoke_path in
+    let body =
+      Social_core.form_urlencode_kvs
+        [ ("client_id", client_id);
+          ("client_secret", client_secret);
+          ("token", token) ]
+    in
+    let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+    (url, headers, body)
+
   (** Make functor for OAuth operations that need HTTP client
       
       This separates the pure functions (URL generation, scope selection) from
@@ -310,27 +325,24 @@ module OAuth = struct
         on_error
     
     (** Revoke an access token
-        
+
+        Revocation is idempotent: the instance answers 200 for a token the
+        client owns, even one already revoked. A 403 means the client does
+        not own the token (or the client credentials are wrong).
+
         @param instance_url The Mastodon instance URL
-        @param client_id OAuth 2.0 Client ID
-        @param client_secret OAuth 2.0 Client Secret
+        @param client_id OAuth 2.0 Client ID of the app that issued the token
+        @param client_secret OAuth 2.0 Client Secret of that app
         @param token The access token to revoke
         @param on_success Continuation called on successful revocation
         @param on_error Continuation receiving error message
     *)
     let revoke_token ~instance_url ~client_id ~client_secret ~token on_success on_error =
-      let url = Printf.sprintf "%s%s" instance_url Metadata.revoke_path in
-      
-      let body = Yojson.Basic.to_string (`Assoc [
-        ("client_id", `String client_id);
-        ("client_secret", `String client_secret);
-        ("token", `String token);
-      ]) in
-      let headers = [("Content-Type", "application/json")] in
-      
+      let url, headers, body =
+        revoke_request ~instance_url ~client_id ~client_secret ~token
+      in
       Http.post ~headers ~body url
         (fun response ->
-          (* OAuth2 revocation returns 200 for both valid and invalid tokens *)
           if response.status >= 200 && response.status < 300 then
             on_success ()
           else
@@ -3872,33 +3884,62 @@ module Make (Config : CONFIG) = struct
         else
           on_result (Error (Error_types.Internal_error err)))
   
-  (** Revoke access token on logout/disconnect *)
-  let revoke_token ~account_id on_result =
+  (* A rejected revocation is about the client/token pairing, not about the
+     account's scopes, so it is not routed through [parse_api_error] (which
+     reads 403 as a missing write:statuses scope). *)
+  let revoke_error ~status_code ~response_body =
+    let redacted_body = redact_sensitive_text response_body in
+    let message =
+      try
+        let json = Yojson.Basic.from_string redacted_body in
+        let field name =
+          match Yojson.Basic.Util.member name json with
+          | `String value when String.trim value <> "" -> Some value
+          | _ -> None
+        in
+        match field "error_description", field "error" with
+        | Some description, _ -> description
+        | None, Some error -> error
+        | None, None -> redacted_body
+      with Yojson.Json_error _ -> redacted_body
+    in
+    Error_types.Api_error {
+      status_code;
+      message = Printf.sprintf "Token revocation failed: %s" message;
+      platform = Platform_types.Mastodon;
+      raw_response = Some redacted_body;
+      request_id = None;
+    }
+
+  (** Revoke the account's access token, e.g. on disconnect.
+
+      [client_id] and [client_secret] identify the app the token was issued
+      to; the instance rejects a revocation without them. Failures are
+      reported, not swallowed: a caller that disconnects regardless can
+      ignore the [Error], but it now knows the token may still be live.
+
+      Errors: [Api_error] with the instance's [error_description] for a
+      non-2xx answer (403 [unauthorized_client] when the client does not own
+      the token), [Network_error] when the instance did not answer. *)
+  let revoke_token ~account_id ~client_id ~client_secret on_result =
     Config.get_credentials ~account_id
       (fun creds ->
         parse_mastodon_credentials creds
           (fun mastodon_creds ->
-            let url = Printf.sprintf "%s/oauth/revoke" mastodon_creds.instance_url in
-            let body_json = `Assoc [
-              ("token", `String mastodon_creds.access_token);
-            ] in
-            let body = Yojson.Basic.to_string body_json in
-            let headers = [("Content-Type", "application/json")] in
-            
+            let url, headers, body =
+              OAuth.revoke_request ~instance_url:mastodon_creds.instance_url
+                ~client_id ~client_secret ~token:mastodon_creds.access_token
+            in
             Config.Http.post ~headers ~body url
               (fun response ->
-                (* OAuth2 revocation endpoint returns 200 for both valid and invalid tokens
-                   This is by design - it's idempotent and safe to call multiple times *)
                 if response.status >= 200 && response.status < 300 then
                   on_result (Ok ())
                 else
-                  (* Don't fail - token might already be revoked or invalid *)
-                  on_result (Ok ())  (* Still consider it a success since the goal is achieved *)
-              )
-              (fun _err ->
-                (* Network errors should also not fail the disconnect flow *)
-                on_result (Ok ())  (* Continue with disconnect even if revocation failed *)
-              ))
+                  on_result (Error (revoke_error ~status_code:response.status
+                                      ~response_body:response.body)))
+              (fun err ->
+                on_result (Error (Error_types.Network_error
+                                    (Error_types.Connection_failed (redact_sensitive_text err))))))
           (fun err -> on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
       (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
 end

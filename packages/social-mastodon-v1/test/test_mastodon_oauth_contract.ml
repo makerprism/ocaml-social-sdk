@@ -307,6 +307,84 @@ let test_exchange_code_missing_auth_type_defaults () =
   assert !got_result;
   Printf.printf "✓\n"
 
+module Revoke_config = struct
+  include Contract_config
+
+  let get_credentials ~account_id:_ on_success _on_error =
+    on_success {
+      Social_core.access_token =
+        {|{"access_token":"user+token/=","instance_url":"https://mastodon.example"}|};
+      refresh_token = None;
+      expires_at = None;
+      auth_type = Social_core.Bearer;
+      scope = None;
+    }
+end
+
+module Mastodon_revoke = Social_mastodon_v1.Make (Revoke_config)
+
+let form_fields body =
+  Uri.query_of_encoded body
+  |> List.map (fun (key, values) -> (key, String.concat "," values))
+
+let test_revoke_token_sends_client_credentials () =
+  Printf.printf "Test: revoke_token sends client_id, client_secret and token as form data... ";
+  Contract_http.reset ();
+  Contract_http.set_next_post_response
+    { Social_core.status = 200; headers = []; body = "{}" };
+  let result = ref None in
+  Mastodon_revoke.revoke_token ~account_id:"acct" ~client_id:"client_123"
+    ~client_secret:"secret&456" (fun r -> result := Some r);
+  assert (!result = Some (Ok ()));
+  assert (!Contract_http.last_post_url = Some "https://mastodon.example/oauth/revoke");
+  assert (
+    List.assoc_opt "Content-Type" !Contract_http.last_post_headers
+    = Some "application/x-www-form-urlencoded");
+  let fields = form_fields (Option.get !Contract_http.last_post_body) in
+  assert (List.assoc_opt "client_id" fields = Some "client_123");
+  assert (List.assoc_opt "client_secret" fields = Some "secret&456");
+  assert (List.assoc_opt "token" fields = Some "user+token/=");
+  Printf.printf "✓\n"
+
+let test_revoke_token_surfaces_rejection () =
+  Printf.printf "Test: revoke_token surfaces a 403 instead of reporting success... ";
+  Contract_http.reset ();
+  Contract_http.set_next_post_response
+    {
+      Social_core.status = 403;
+      headers = [];
+      body =
+        {|{"error":"unauthorized_client","error_description":"You are not authorized to revoke this token"}|};
+    };
+  let result = ref None in
+  Mastodon_revoke.revoke_token ~account_id:"acct" ~client_id:"client_123"
+    ~client_secret:"wrong" (fun r -> result := Some r);
+  (match !result with
+   | Some (Error (Error_types.Api_error { status_code = 403; message; _ })) ->
+       assert (String.length message > 0);
+       assert (
+         try
+           ignore (Str.search_forward (Str.regexp_string "not authorized to revoke") message 0);
+           true
+         with Not_found -> false)
+   | _ -> failwith "expected Api_error 403 from a rejected revocation");
+  Printf.printf "✓\n"
+
+let test_oauth_revoke_token_sends_form () =
+  Printf.printf "Test: OAuth.revoke_token sends form data... ";
+  Contract_http.reset ();
+  Contract_http.set_next_post_response
+    { Social_core.status = 200; headers = []; body = "{}" };
+  let module Revoke_oauth = Social_mastodon_v1.OAuth.Make (Contract_http) in
+  let ok = ref false in
+  Revoke_oauth.revoke_token ~instance_url:"https://mastodon.example"
+    ~client_id:"c" ~client_secret:"s" ~token:"t"
+    (fun () -> ok := true)
+    (fun err -> failwith err);
+  assert !ok;
+  assert (Option.get !Contract_http.last_post_body = "client_id=c&client_secret=s&token=t");
+  Printf.printf "✓\n"
+
 let () =
   Printf.printf "\n=== Mastodon OAuth Contract Tests ===\n\n";
   test_oauth_url_encoding ();
@@ -318,4 +396,7 @@ let () =
   test_exchange_code_missing_scope_tolerated ();
   test_exchange_code_scope_order_tolerated ();
   test_exchange_code_missing_auth_type_defaults ();
+  test_revoke_token_sends_client_credentials ();
+  test_revoke_token_surfaces_rejection ();
+  test_oauth_revoke_token_sends_form ();
   Printf.printf "\n✓ OAuth contract tests passed\n"

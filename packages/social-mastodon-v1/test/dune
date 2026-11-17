@@ -6,7 +6,7 @@
 (test
  (name test_mastodon_oauth_contract)
  (modules test_mastodon_oauth_contract)
- (libraries social_mastodon_v1 social-core uri yojson))
+ (libraries social_mastodon_v1 social-core uri yojson str))
 
 (test
  (name test_mastodon_video_contract)

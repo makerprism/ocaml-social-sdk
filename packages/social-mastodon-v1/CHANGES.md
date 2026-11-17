@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking: `revoke_token` now takes `~client_id ~client_secret` and
+  reports failures.** Mastodon's `POST /oauth/revoke` requires `client_id`,
+  `client_secret` and `token`
+  (https://docs.joinmastodon.org/methods/oauth/#revoke). `Make.revoke_token`
+  sent only `token` and returned `Ok ()` on every answer and every network
+  error, so disconnects reported success while the token stayed live. It now
+  sends all three and returns `Api_error` (with the instance's
+  `error_description`) on a non-2xx answer and `Network_error` when the
+  instance does not answer. Callers must pass the credentials of the app that
+  issued the token (the ones `register_app` returned). Both `revoke_token`
+  functions now send form data, as documented, instead of JSON; the request
+  is built once by the new `OAuth.revoke_request`.
 - **`ensure_valid_token` no longer reports a credential failure when the
   instance is unreachable.** It used to write the health status
   `"invalid_token"` on any `verify_credentials` failure. That literal is not a
