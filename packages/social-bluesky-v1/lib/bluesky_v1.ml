@@ -238,6 +238,86 @@ module type CONFIG = sig
   val resize_image : data:string -> mime_type:string -> max_bytes:int -> (string option -> unit) -> unit
 end
 
+(** The [#atproto_pds] service endpoint of a DID document, as returned in
+    the [didDoc] of [createSession] / [getSession]. *)
+let pds_endpoint_of_did_doc did_doc =
+  let field name = function
+    | `Assoc fields -> List.assoc_opt name fields
+    | _ -> None
+  in
+  match field "service" did_doc with
+  | Some (`List services) ->
+      List.find_map
+        (fun service ->
+          match field "id" service, field "serviceEndpoint" service with
+          | Some (`String id), Some (`String endpoint)
+            when String.ends_with ~suffix:"#atproto_pds" id ->
+              Some endpoint
+          | _ -> None)
+        services
+  | _ -> None
+
+(** What an [app.bsky.video] job status says. *)
+type video_job =
+  | Video_blob of Yojson.Basic.t  (** processed; the blob ref to embed *)
+  | Video_failed of string  (** [JOB_STATE_FAILED], with the reason *)
+  | Video_completed_without_blob
+  | Video_pending of string option  (** still processing; the job id if given *)
+
+(** Read a [jobStatus] response, or a bare [{blob}] / error body. A blob
+    wins whatever the state or HTTP status: an already-processed video is
+    answered with an error ([already_exists]) that still carries the
+    earlier blob. *)
+let video_job_of_json json =
+  let field name = function
+    | `Assoc fields ->
+        (match List.assoc_opt name fields with
+         | Some `Null | None -> None
+         | Some v -> Some v)
+    | _ -> None
+  in
+  let string_field name obj =
+    match field name obj with
+    | Some (`String v) -> Some v
+    | _ -> None
+  in
+  let job = Option.value (field "jobStatus" json) ~default:json in
+  match field "blob" json, field "blob" job with
+  | Some blob, _ | None, Some blob -> Video_blob blob
+  | None, None ->
+      let job_id =
+        match string_field "jobId" job with
+        | Some id -> Some id
+        | None -> string_field "jobId" json
+      in
+      (match string_field "state" job with
+       | Some "JOB_STATE_FAILED" ->
+           let reason =
+             [ string_field "failureCode" job; string_field "error" job;
+               string_field "message" job ]
+             |> List.filter_map Fun.id |> String.concat ": "
+           in
+           Video_failed (if reason = "" then "no reason given" else reason)
+       | Some "JOB_STATE_COMPLETED" -> Video_completed_without_blob
+       | Some _ | None -> Video_pending job_id)
+
+(** Check if blob data looks like text/XML/HTML rather than binary media.
+    Bluesky sniffs content and rejects non-media regardless of Content-Type header. *)
+let blob_looks_like_text blob_data =
+  let trimmed =
+    let len = String.length blob_data in
+    let i = ref 0 in
+    while !i < len && (blob_data.[!i] = ' ' || blob_data.[!i] = '\t'
+                       || blob_data.[!i] = '\n' || blob_data.[!i] = '\r') do
+      incr i
+    done;
+    if !i < len then String.sub blob_data !i (min 10 (len - !i)) else ""
+  in
+  String.length trimmed > 0
+  && (trimmed.[0] = '<'
+      || String.starts_with ~prefix:"{" trimmed
+      || String.starts_with ~prefix:"[" trimmed)
+
 (** A non-blocking wait in the consumer's runtime, e.g. with Lwt:
     [fun ~seconds k _ -> Lwt.async (fun () -> Lwt.map k (Lwt_unix.sleep seconds))]. *)
 type sleep = seconds:float -> (unit -> unit) -> (string -> unit) -> unit
@@ -630,25 +710,6 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   (** Polls before giving up: 150 x 2 s = 5 minutes of processing. *)
   let video_job_max_polls = 150
 
-  (** The [#atproto_pds] service endpoint of a DID document, as returned in
-      the [didDoc] of [createSession] / [getSession]. *)
-  let pds_endpoint_of_did_doc did_doc =
-    let field name = function
-      | `Assoc fields -> List.assoc_opt name fields
-      | _ -> None
-    in
-    match field "service" did_doc with
-    | Some (`List services) ->
-        List.find_map
-          (fun service ->
-            match field "id" service, field "serviceEndpoint" service with
-            | Some (`String id), Some (`String endpoint)
-              when String.ends_with ~suffix:"#atproto_pds" id ->
-                Some endpoint
-            | _ -> None)
-          services
-    | _ -> None
-
   (** The PDS that hosts the session's repo, without a trailing slash.
 
       A Bluesky-hosted account logs in through the [bsky.social] entryway but
@@ -726,67 +787,6 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         else
           on_error (Printf.sprintf "Service auth request failed (%d): %s" response.status response.body))
       on_error
-
-  (** What an [app.bsky.video] job status says. *)
-  type video_job =
-    | Video_blob of Yojson.Basic.t  (** processed; the blob ref to embed *)
-    | Video_failed of string  (** [JOB_STATE_FAILED], with the reason *)
-    | Video_completed_without_blob
-    | Video_pending of string option  (** still processing; the job id if given *)
-
-  (** Read a [jobStatus] response, or a bare [{blob}] / error body. A blob
-      wins whatever the state or HTTP status: an already-processed video is
-      answered with an error ([already_exists]) that still carries the
-      earlier blob. *)
-  let video_job_of_json json =
-    let field name = function
-      | `Assoc fields ->
-          (match List.assoc_opt name fields with
-           | Some `Null | None -> None
-           | Some v -> Some v)
-      | _ -> None
-    in
-    let string_field name obj =
-      match field name obj with
-      | Some (`String v) -> Some v
-      | _ -> None
-    in
-    let job = Option.value (field "jobStatus" json) ~default:json in
-    match field "blob" json, field "blob" job with
-    | Some blob, _ | None, Some blob -> Video_blob blob
-    | None, None ->
-        let job_id =
-          match string_field "jobId" job with
-          | Some id -> Some id
-          | None -> string_field "jobId" json
-        in
-        (match string_field "state" job with
-         | Some "JOB_STATE_FAILED" ->
-             let reason =
-               [ string_field "failureCode" job; string_field "error" job;
-                 string_field "message" job ]
-               |> List.filter_map Fun.id |> String.concat ": "
-             in
-             Video_failed (if reason = "" then "no reason given" else reason)
-         | Some "JOB_STATE_COMPLETED" -> Video_completed_without_blob
-         | Some _ | None -> Video_pending job_id)
-
-  (** Check if blob data looks like text/XML/HTML rather than binary media.
-      Bluesky sniffs content and rejects non-media regardless of Content-Type header. *)
-  let blob_looks_like_text blob_data =
-    let trimmed =
-      let len = String.length blob_data in
-      let i = ref 0 in
-      while !i < len && (blob_data.[!i] = ' ' || blob_data.[!i] = '\t'
-                         || blob_data.[!i] = '\n' || blob_data.[!i] = '\r') do
-        incr i
-      done;
-      if !i < len then String.sub blob_data !i (min 10 (len - !i)) else ""
-    in
-    String.length trimmed > 0
-    && (trimmed.[0] = '<'
-        || String.starts_with ~prefix:"{" trimmed
-        || String.starts_with ~prefix:"[" trimmed)
 
   (** Upload blob to Bluesky with optional alt text
 

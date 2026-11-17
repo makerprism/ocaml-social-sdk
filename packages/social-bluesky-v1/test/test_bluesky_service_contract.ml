@@ -670,12 +670,12 @@ let test_unsafe_did_doc_endpoint_is_ignored () =
 let test_pds_endpoint_of_did_doc () =
   let doc json = Yojson.Basic.from_string json in
   assert (
-    Video_bluesky.pds_endpoint_of_did_doc
+    Social_bluesky_v1.pds_endpoint_of_did_doc
       (Yojson.Basic.Util.member "didDoc" (doc (session_with_did_doc shard)))
     = Some shard);
-  assert (Video_bluesky.pds_endpoint_of_did_doc (doc {|{"service":[]}|}) = None);
-  assert (Video_bluesky.pds_endpoint_of_did_doc (doc {|{"id":"did:plc:x"}|}) = None);
-  assert (Video_bluesky.pds_endpoint_of_did_doc (doc {|"not an object"|}) = None)
+  assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|{"service":[]}|}) = None);
+  assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|{"id":"did:plc:x"}|}) = None);
+  assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|"not an object"|}) = None)
 
 let () =
   test_video_without_sleep_uses_upload_blob ();
