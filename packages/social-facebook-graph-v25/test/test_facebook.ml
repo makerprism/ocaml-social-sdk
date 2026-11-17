@@ -778,6 +778,15 @@ let test_authorization_header () =
            | [] -> failwith "No requests made")
       | Error e -> failwith ("Authorization header test failed: " ^ Error_types.error_to_string e))
 
+(** Asserts an insights request against its decoded query, so the contract
+    holds whatever percent-encoding [Uri] picks for the values. *)
+let assert_insights_url url ~path ~query =
+  let uri = Uri.of_string url in
+  assert (Uri.scheme uri = Some "https");
+  assert (Uri.host uri = Some "graph.facebook.com");
+  assert (Uri.path uri = path);
+  assert (Uri.query uri = query)
+
 (** Test: Account analytics request contract (v25 insights endpoint) *)
 let test_account_analytics_request_contract () =
   Mock_config.reset ();
@@ -806,8 +815,14 @@ let test_account_analytics_request_contract () =
               assert (method_ = "GET");
               assert (headers = []);
               assert (body = "");
-              assert (url =
-                "https://graph.facebook.com/v25.0/12345/insights?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views&period=day&since=2024-01-01&until=2024-01-07&access_token=acct_token");
+              assert_insights_url url
+                ~path:"/v25.0/12345/insights"
+                ~query:
+                  [ ("metric", [ "page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views" ]);
+                    ("period", [ "day" ]);
+                    ("since", [ "2024-01-01" ]);
+                    ("until", [ "2024-01-07" ]);
+                    ("access_token", [ "acct_token" ]) ];
               print_endline "✓ Account analytics request contract"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Account analytics contract test failed: " ^ Error_types.error_to_string e))
@@ -837,11 +852,41 @@ let test_post_analytics_request_contract () =
               assert (method_ = "GET");
               assert (headers = []);
               assert (body = "");
-              assert (url =
-                "https://graph.facebook.com/v25.0/12345_67890/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token=post_token");
+              assert_insights_url url
+                ~path:"/v25.0/12345_67890/insights"
+                ~query:
+                  [ ("metric", [ "post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type" ]);
+                    ("access_token", [ "post_token" ]) ];
               print_endline "✓ Post analytics request contract"
           | [] -> failwith "No requests made")
       | Error e -> failwith ("Post analytics contract test failed: " ^ Error_types.error_to_string e))
+
+(** Test: analytics requests percent-encode the token. An app token is
+    [app_id|app_secret] and opaque tokens can contain [+ / = &]; raw, a [&]
+    would split the query and a [+] would decode as a space. *)
+let test_analytics_encode_reserved_token_chars () =
+  let token = "EAAB+x/y=z&appsecret_proof=forged|secret" in
+  let check_request label =
+    match !Mock_http.requests with
+    | (_, url, _, _) :: _ ->
+        let uri = Uri.of_string url in
+        if Uri.get_query_param uri "access_token" <> Some token then
+          failwith (label ^ ": access_token did not round-trip: " ^ url);
+        if Uri.get_query_param uri "appsecret_proof" <> None then
+          failwith (label ^ ": token split the query: " ^ url)
+    | [] -> failwith (label ^ ": no request made")
+  in
+  Mock_config.reset ();
+  Mock_http.set_response { status = 200; body = {|{"data": []}|}; headers = [] };
+  Facebook.get_account_analytics ~id:"12345" ~since:"2024-01-01"
+    ~until:"2024-01-07" ~access_token:token (fun _ -> ());
+  check_request "get_account_analytics";
+  Mock_config.reset ();
+  Mock_http.set_response { status = 200; body = {|{"data": []}|}; headers = [] };
+  Facebook.get_post_analytics ~post_id:"12345_67890" ~access_token:token
+    (fun _ -> ());
+  check_request "get_post_analytics";
+  print_endline "✓ Analytics requests percent-encode the token"
 
 (** Test: Account analytics parsing *)
 let test_account_analytics_parsing () =
@@ -3221,6 +3266,7 @@ let () =
   test_authorization_header ();
   test_account_analytics_request_contract ();
   test_post_analytics_request_contract ();
+  test_analytics_encode_reserved_token_chars ();
   test_account_analytics_parsing ();
   test_post_analytics_parsing ();
   test_post_analytics_parsing_legacy_unique ();

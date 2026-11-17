@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`get_account_analytics` and `get_post_analytics` percent-encode their
+  query.** Both interpolated the access token (and `since`/`until`) into the
+  URL raw, so a token containing `&`, `+`, `/` or `=` could split the query
+  or decode differently. They now build it with `Uri.encoded_of_query`, like
+  the rest of the module. On the wire the metric list's commas are now sent
+  as `%2C`, which Graph decodes to the same value. Signatures are unchanged.
 - **Graph errors are classified by the table shared with Instagram and
   Threads** (`Meta_graph_error`, see social-core). `parse_api_error`,
   `parse_api_error_with_permissions`, `parse_error_code` and

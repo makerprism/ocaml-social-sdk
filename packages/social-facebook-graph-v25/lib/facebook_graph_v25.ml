@@ -2199,16 +2199,17 @@ module Make (Config : CONFIG) = struct
           &access_token=...
   *)
   let get_account_analytics ~id ~since ~until ~access_token on_result =
-    let url =
-      Printf.sprintf
-        "%s/%s/insights?metric=%s&period=day&since=%s&until=%s&access_token=%s"
-        graph_api_base
-        id
-        account_analytics_metrics
-        since
-        until
-        access_token
+    (* Built with [Uri.encoded_of_query] so a token (or [since]/[until])
+       containing a reserved character cannot change or split the query. *)
+    let query =
+      Uri.encoded_of_query
+        [ ("metric", [ account_analytics_metrics ]);
+          ("period", [ "day" ]);
+          ("since", [ since ]);
+          ("until", [ until ]);
+          ("access_token", [ access_token ]) ]
     in
+    let url = Printf.sprintf "%s/%s/insights?%s" graph_api_base id query in
     Config.Http.get url
       (fun response ->
         update_rate_limits response;
@@ -2281,14 +2282,12 @@ module Make (Config : CONFIG) = struct
           &access_token=...
   *)
   let get_post_analytics ~post_id ~access_token on_result =
-    let url =
-      Printf.sprintf
-        "%s/%s/insights?metric=%s&access_token=%s"
-        graph_api_base
-        post_id
-        post_analytics_metrics
-        access_token
+    let query =
+      Uri.encoded_of_query
+        [ ("metric", [ post_analytics_metrics ]);
+          ("access_token", [ access_token ]) ]
     in
+    let url = Printf.sprintf "%s/%s/insights?%s" graph_api_base post_id query in
     Config.Http.get url
       (fun response ->
         update_rate_limits response;
