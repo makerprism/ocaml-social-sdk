@@ -14,6 +14,10 @@
 
 open Social_core
 
+(** Typed analytics reports ([user_account/analytics],
+    [pins/{pin_id}/analytics]); see {!Pinterest_v5_analytics}. *)
+module Analytics = Pinterest_v5_analytics
+
 (** OAuth 2.0 module for Pinterest API v5
     
     Pinterest uses OAuth 2.0 with Basic Authentication for token exchange.
@@ -433,6 +437,53 @@ module OAuth = struct
                  (read_error ~required_scopes:[ "user_accounts:read" ] ~status_code:response.status
                     response.body)))
         (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+    let get_report ~access_token ~required_scopes url on_result =
+      Http.get ~headers:[ ("Authorization", "Bearer " ^ access_token) ] url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match Analytics.parse_report response.body with
+            | Stdlib.Ok report -> on_result (Stdlib.Ok report)
+            | Stdlib.Error message ->
+                on_result (Stdlib.Error (Error_types.Internal_error ("Failed to parse analytics: " ^ message)))
+          else
+            on_result
+              (Stdlib.Error (read_error ~required_scopes ~status_code:response.status response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
+    let report_url path params = Metadata.api_base ^ path ^ "?" ^ Uri.encoded_of_query params
+
+    let optional key = function Some value -> [ (key, [ value ]) ] | None -> []
+
+    (** [GET /v5/user_account/analytics] as a typed {!Analytics.report}.
+        [start_date] / [end_date] are [YYYY-MM-DD] (at most 90 days back,
+        90 days long). [metric_types] defaults to all on Pinterest's side.
+        Use {!Analytics.unsplit} for the single group of an unsplit
+        report.
+        {{:https://developers.pinterest.com/docs/api/v5/user_account-analytics}} *)
+    let get_user_account_analytics ~access_token ~start_date ~end_date ?metric_types ?ad_account_id
+        on_result =
+      let url =
+        report_url "/user_account/analytics"
+          ([ ("start_date", [ start_date ]); ("end_date", [ end_date ]) ]
+          @ optional "metric_types" (Option.map (String.concat ",") metric_types)
+          @ optional "ad_account_id" ad_account_id)
+      in
+      get_report ~access_token ~required_scopes:[ "user_accounts:read" ] url on_result
+
+    (** [GET /v5/pins/{pin_id}/analytics] as a typed {!Analytics.report}
+        ([lifetime_metrics] included). [metric_types] is required by the
+        API; {!Analytics.pin_metric_types} by default.
+        {{:https://developers.pinterest.com/docs/api/v5/pins-analytics}} *)
+    let get_pin_analytics ~access_token ~pin_id ~start_date ~end_date
+        ?(metric_types = Analytics.pin_metric_types) ?ad_account_id on_result =
+      let url =
+        report_url ("/pins/" ^ Uri.pct_encode pin_id ^ "/analytics")
+          ([ ("start_date", [ start_date ]); ("end_date", [ end_date ]);
+             ("metric_types", [ String.concat "," metric_types ]) ]
+          @ optional "ad_account_id" ad_account_id)
+      in
+      get_report ~access_token ~required_scopes:[ "pins:read"; "boards:read" ] url on_result
   end
 end
 
@@ -749,8 +800,23 @@ module Make (Config : CONFIG) = struct
   let extract_metric ~metric json =
     let open Yojson.Basic.Util in
     let lowered = String.lowercase_ascii metric in
+    (* The documented shape keeps the totals in
+       [<group>.summary_metrics], the group being ["all"] (or the only one)
+       when the report is not split. *)
+    let summary_of = function
+      | `Assoc _ as group -> [ member "summary_metrics" group ]
+      | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> []
+    in
+    let unsplit_summary =
+      match json with
+      | `Assoc [ (_, group) ] -> summary_of group
+      | `Assoc groups -> (
+          match List.assoc_opt "all" groups with Some group -> summary_of group | None -> [])
+      | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> []
+    in
     let candidates =
-      json ::
+      unsplit_summary
+      @ json ::
       [ member "all" json;
         member "all_source_types" json;
         member "summary" json;
@@ -869,6 +935,27 @@ module Make (Config : CONFIG) = struct
               on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
+
+  (** {!OAuth.Make.get_user_account_analytics} for a stored account,
+      refreshing its token first when needed. *)
+  let get_account_analytics_report ~account_id ~start_date ~end_date ?metric_types ?ad_account_id
+      on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let module Oauth_http = OAuth.Make (Config.Http) in
+        Oauth_http.get_user_account_analytics ~access_token ~start_date ~end_date ?metric_types
+          ?ad_account_id on_result)
+      (fun err -> on_result (Stdlib.Error err))
+
+  (** {!OAuth.Make.get_pin_analytics} for a stored account. *)
+  let get_pin_analytics_report ~account_id ~pin_id ~start_date ~end_date ?metric_types
+      ?ad_account_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        let module Oauth_http = OAuth.Make (Config.Http) in
+        Oauth_http.get_pin_analytics ~access_token ~pin_id ~start_date ~end_date ?metric_types
+          ?ad_account_id on_result)
+      (fun err -> on_result (Stdlib.Error err))
 
   let get_account_analytics_canonical ~account_id ~start_date ~end_date on_result =
     get_account_analytics ~account_id ~start_date ~end_date

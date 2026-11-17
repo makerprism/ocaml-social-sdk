@@ -1606,6 +1606,86 @@ let test_get_user_account_typed () =
     | Stdlib.Ok _ -> failwith "expected an error");
   print_endline "✓ get_user_account returns the typed Account and maps errors"
 
+(* Shape from the v5 OpenAPI description (AnalyticsResponse: an object keyed
+   by split group, each an AnalyticsMetricsResponse with daily_metrics and
+   summary_metrics); Pinterest's examples name the unsplit group "all". *)
+let documented_account_analytics_body =
+  {|{"all":{
+      "daily_metrics":[
+        {"data_status":"READY","date":"2026-11-01",
+         "metrics":{"IMPRESSION":120,"PIN_CLICK":4,"OUTBOUND_CLICK":1,"SAVE":3,"SAVE_RATE":0.025}},
+        {"data_status":"PROCESSING","date":"2026-11-02","metrics":{}}],
+      "summary_metrics":{"IMPRESSION":240,"OUTBOUND_CLICK":20,"PIN_CLICK":37,"SAVE":20,
+                         "SAVE_RATE":0.18,"ENGAGEMENT":1,"ENGAGEMENT_RATE":0}}}|}
+
+let test_user_account_analytics_report () =
+  Mock_http.reset ();
+  Mock_http.set_responses [ { status = 200; body = documented_account_analytics_body; headers = [] } ];
+  Pinterest_oauth.get_user_account_analytics ~access_token:"tok" ~start_date:"2026-11-01"
+    ~end_date:"2026-11-02" ~metric_types:[ "IMPRESSION"; "SAVE" ] (function
+    | Stdlib.Ok report ->
+        let group = Option.get (Analytics.unsplit report) in
+        assert (Analytics.summary_count "IMPRESSION" group = Some 240);
+        assert (Analytics.summary "SAVE_RATE" group = Some 0.18);
+        (match group.daily_metrics with
+         | [ { date = "2026-11-01"; data_status = Some "READY"; metrics }; { data_status = Some "PROCESSING"; metrics = []; _ } ] ->
+             assert (List.assoc "IMPRESSION" metrics = 120.)
+         | _ -> failwith "expected two days")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v5/user_account/analytics");
+       assert (Uri.get_query_param uri "start_date" = Some "2026-11-01");
+       assert (Uri.get_query_param uri "metric_types" = Some "IMPRESSION,SAVE");
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer tok")
+   | _ -> failwith "expected one GET");
+  Mock_http.reset ();
+  Mock_http.set_responses [ { status = 200; body = {|{"all":{"summary_metrics":{"IMPRESSION":"x"}}}|}; headers = [] } ];
+  Pinterest_oauth.get_user_account_analytics ~access_token:"tok" ~start_date:"a" ~end_date:"b" (function
+    | Stdlib.Error (Error_types.Internal_error msg) -> assert (string_contains msg "IMPRESSION")
+    | _ -> failwith "a non-numeric metric is a parse error");
+  print_endline "✓ user_account/analytics typed report"
+
+let test_pin_analytics_report_for_account () =
+  setup_valid_credentials ();
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body = {|{"all":{"daily_metrics":[],"lifetime_metrics":{"TOTAL_COMMENTS":10,"TOTAL_REACTIONS":12},
+                  "summary_metrics":{"IMPRESSION":240,"OUTBOUND_CLICK":20,"PIN_CLICK":37,"SAVE":20}}}|} } ];
+  Pinterest.get_pin_analytics_report ~account_id:"test_account" ~pin_id:"pin 1" ~start_date:"2026-10-01"
+    ~end_date:"2026-10-31" (function
+    | Stdlib.Ok report ->
+        let group = Option.get (Analytics.unsplit report) in
+        assert (List.assoc_opt "TOTAL_COMMENTS" group.lifetime_metrics = Some 10.);
+        assert (Analytics.summary_count "PIN_CLICK" group = Some 37)
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  let analytics_request =
+    List.find (fun (_, url, _, _) -> string_contains url "/analytics") !Mock_http.requests
+  in
+  let (_, url, headers, _) = analytics_request in
+  let uri = Uri.of_string url in
+  assert (Uri.path uri = "/v5/pins/pin%201/analytics");
+  assert (Uri.get_query_param uri "metric_types" = Some (String.concat "," Analytics.pin_metric_types));
+  assert (List.assoc_opt "Authorization" headers = Some "Bearer test_access_token");
+  print_endline "✓ pins/{id}/analytics typed report for account"
+
+(* Regression: get_account_analytics looked for the totals at the top level
+   and under "all", but the documented response keeps them in
+   all.summary_metrics, so every total came back None. *)
+let test_account_analytics_reads_documented_summary () =
+  setup_valid_credentials ();
+  Mock_http.set_responses [ { status = 200; body = documented_account_analytics_body; headers = [] } ];
+  Pinterest.get_account_analytics ~account_id:"test_account" ~start_date:"2026-11-01"
+    ~end_date:"2026-11-02" (function
+    | Ok analytics ->
+        assert (analytics.totals.impression = Some 240);
+        assert (analytics.totals.pin_click = Some 37);
+        assert (analytics.totals.outbound_click = Some 20);
+        assert (analytics.totals.save = Some 20)
+    | Error err -> failwith (Error_types.error_to_string err));
+  print_endline "✓ get_account_analytics reads all.summary_metrics"
+
 let () =
   print_endline "\n=== Pinterest Provider Tests ===\n";
   test_get_user_account_typed ();
@@ -1621,6 +1701,9 @@ let () =
   test_get_pin_analytics_request_contract ();
   test_get_account_analytics_parse_typed_result ();
   test_get_pin_analytics_parse_typed_result ();
+  test_user_account_analytics_report ();
+  test_pin_analytics_report_for_account ();
+  test_account_analytics_reads_documented_summary ();
   test_canonical_analytics_adapters ();
   test_validate_media_file_rejects_large_image ();
   test_post_single_full_image_flow_with_alt_text ();
