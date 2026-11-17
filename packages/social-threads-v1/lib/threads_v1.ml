@@ -42,6 +42,10 @@ let token_endpoint = graph_api_host ^ "/oauth/access_token"
     requests are [Make.get_user_insights] and [Make.get_media_insights]. *)
 module Insights = Threads_v1_insights
 
+(** Typed location search results ({!Threads_v1_locations}); the request is
+    [Make.search_locations]. *)
+module Locations = Threads_v1_locations
+
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it ({!Social_meta_graph_paging.resolve_page_url}).
     Meta documents both graph hosts for the Threads API. *)
@@ -2664,6 +2668,71 @@ module Make (Config : CONFIG) = struct
     with_valid_credentials ~account_id
       (fun creds ->
         get_permalink ~access_token:creds.access_token ~post_id on_result)
+      (fun err -> on_result (Error err))
+
+  (* [GET /location_search] query: the text, the point, or both, plus every
+     documented field (the endpoint returns only [id] by default). *)
+  let location_search_query ~access_token ?query ?coordinates () =
+    let text =
+      match Option.map String.trim query with
+      | Some q when q <> "" -> [ ("q", [ q ]) ]
+      | Some _ | None -> []
+    in
+    let point =
+      match (coordinates : Locations.coordinates option) with
+      | Some { latitude; longitude } ->
+          [ ("latitude", [ Printf.sprintf "%.6f" latitude ]);
+            ("longitude", [ Printf.sprintf "%.6f" longitude ]) ]
+      | None -> []
+    in
+    match text, point with
+    | [], [] -> Error (Error_types.Validation_error [ Error_types.Text_empty ])
+    | _, _ ->
+        Ok (text @ point @ [ ("fields", [ Locations.fields ]); ("access_token", [ access_token ]) ])
+
+  (** Places to tag a post with: [GET /location_search] with a text
+      [?query], a point [?coordinates], or both (at least one, otherwise
+      [Validation_error [Text_empty]] and no request). Requests every documented field
+      ({!Locations.fields}); results are not paginated. A result's [id] is
+      the [location_id] that [post_single] and the container calls take.
+      Takes a token, so it works without stored credentials; the read goes
+      through the same retry policy as the other readers.
+
+      Needs [threads_basic] and [threads_location_tagging].
+
+      @see <https://developers.facebook.com/docs/threads/reference/location-search>
+      @see <https://developers.facebook.com/docs/threads/create-posts/location-tagging> *)
+  let search_locations ~access_token ?query ?coordinates on_result =
+    match location_search_query ~access_token ?query ?coordinates () with
+    | Error err -> on_result (Error err)
+    | Ok params ->
+        let url =
+          Printf.sprintf "%s/location_search?%s" threads_api_base
+            (Uri.encoded_of_query params)
+        in
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              match Locations.parse_response response.body with
+              | Ok locations -> on_result (Ok locations)
+              | Error msg ->
+                  on_result
+                    (Error
+                       (Error_types.Internal_error
+                          (Printf.sprintf "Failed to parse location search response: %s" msg)))
+            else
+              on_result
+                (Error
+                   (parse_api_error ~status_code:response.status
+                      ~headers:response.headers ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err)))
+
+  (** {!search_locations} with the account's stored (and, if configured,
+      refreshed) credentials. *)
+  let search_locations_for_account ~account_id ?query ?coordinates on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        search_locations ~access_token:creds.access_token ?query ?coordinates on_result)
       (fun err -> on_result (Error err))
 
   let post_single

@@ -1,7 +1,7 @@
 (library
  (name social_threads_v1)
  (public_name social-threads-v1)
- (modules social_threads_v1 threads_v1_insights threads_v1)
+ (modules social_threads_v1 threads_v1_insights threads_v1_locations threads_v1)
  (libraries
   social-core
   social-refresh

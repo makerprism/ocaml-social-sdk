@@ -35,6 +35,15 @@ module Comments = Facebook_graph_v25_comments
     {!Facebook_graph_v25_insights}. *)
 module Insights = Facebook_graph_v25_insights
 
+(** Typed Page search results used as places ([GET /pages/search]); see
+    {!Facebook_graph_v25_places}. The request is [Make.search_places]. *)
+module Places = Facebook_graph_v25_places
+
+(** Typed Page feed posts ([/{page-id}/posts], [/feed],
+    [/published_posts]); see {!Facebook_graph_v25_page_posts}. The request
+    is [Make.get_page_posts_page]. *)
+module Page_posts = Facebook_graph_v25_page_posts
+
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it
     ({!Social_meta_graph_paging.resolve_page_url}). *)
@@ -1475,6 +1484,11 @@ module Make (Config : CONFIG) = struct
   (** Get published posts from a Facebook Page's feed, including inline
       engagement and insights metrics for each post.
 
+      Prefer {!get_page_posts_page_for_account} with
+      [~fields:Page_posts.analytics_fields ~edge:Feed]: the same request,
+      typed ({!Page_posts.page_post}), with Meta paging. This function is
+      kept unchanged for existing callers.
+
       Fetches posts using cursor-based pagination via the Graph API
       /{page_id}/feed endpoint. Returns raw JSON with post data,
       pagination cursors, and per-post metrics nested under [insights],
@@ -1538,16 +1552,7 @@ module Make (Config : CONFIG) = struct
                metrics (fb_reels_total_plays etc.) — handled by a
                separate code path in the consumer, not via this
                feed-expansion call. *)
-            let fields =
-              "id,message,created_time,full_picture,permalink_url,\
-               attachments{type,media_type,url,media,subattachments,target{id}},\
-               insights.metric(post_impressions_unique,\
-                               post_reactions_by_type_total,\
-                               post_clicks,\
-                               post_clicks_by_type).as(insights),\
-               comments.summary(true).limit(0).as(comments_summary),\
-               reactions.summary(true).limit(0).as(reactions_summary),\
-               shares" in
+            let fields = Page_posts.analytics_fields in
             let params = [
               ("fields", [fields]);
               ("limit", [string_of_int limit]);
@@ -3206,6 +3211,106 @@ module Make (Config : CONFIG) = struct
       (fun access_token ->
         get_comments_page ~object_id ~access_token ?filter ?order ?position
           ?limit on_result)
+      (fun err -> on_result (Error err))
+
+  (** Pages that can serve as places: [GET /pages/search?q=..&fields=]
+      {!Places.fields}, with the token as a Bearer header and
+      [appsecret_proof] when [FACEBOOK_APP_SECRET] is set. Pages without a
+      location are returned too ({!Places.coordinates} is [None]); Meta
+      rejects such a [place] on a post. A blank [query] is a
+      [Validation_error [Text_empty]] and sends no request.
+
+      Takes a User or Page access token with the app secret, or an App
+      token with Page Public Metadata Access (see {!Places}).
+
+      @see <https://developers.facebook.com/docs/pages-api/search-pages> *)
+  let search_places ~access_token ~query on_result =
+    let query = String.trim query in
+    if query = "" then on_result (Error (Error_types.Validation_error [ Error_types.Text_empty ]))
+    else
+      let url =
+        Printf.sprintf "%s/pages/search?%s" graph_api_base
+          (Uri.encoded_of_query [ ("q", [ query ]); ("fields", [ Places.fields ]) ])
+      in
+      get_url ~url ~access_token ~required_permissions:[ "pages_read_engagement" ]
+        (function
+          | Error err -> on_result (Error err)
+          | Ok response -> (
+              match Places.parse_response response.body with
+              | Ok places -> on_result (Ok places)
+              | Error msg -> on_result (Error (parse_failure "place search" msg))))
+
+  (* Page feed reads need pages_read_engagement and pages_read_user_content. *)
+  let page_posts_read_permissions = [ "pages_read_engagement"; "pages_read_user_content" ]
+
+  (* URL of one page of a Page feed edge: a checked [Page_url] as Meta
+     returned it (credentials are added by [get_url]), or a request rebuilt
+     from the id and options. *)
+  let page_posts_page_url ~page_id ~edge ~fields ?limit position =
+    let edge_name = Page_posts.string_of_edge edge in
+    match (position : Social_meta_graph_paging.position) with
+    | Page_url url ->
+        Social_meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
+          ~edge:edge_name url
+        |> Result.map Uri.to_string
+        |> Result.map_error invalid_input
+    | First | After _ | Before _ ->
+        if String.trim page_id = "" then Error (invalid_input "page_id must not be empty")
+        else
+          let params =
+            [ ("fields", [ fields ]) ]
+            @ (match limit with
+               | Some n when n > 0 -> [ ("limit", [ string_of_int (min n 100) ]) ]
+               | Some _ | None -> [])
+            @ Social_meta_graph_paging.cursor_query position
+          in
+          Ok
+            (Printf.sprintf "%s/%s/%s?%s" graph_api_base
+               (Uri.pct_encode (String.trim page_id))
+               edge_name (Uri.encoded_of_query params))
+
+  (** One page of a Page's posts, typed ({!Page_posts.page_post}), with a
+      Page access token and [appsecret_proof] when [FACEBOOK_APP_SECRET] is
+      set.
+
+      - [edge]: [Posts] (default), [Feed] or [Published_posts]; see
+        {!Page_posts} for what each lists.
+      - [fields]: {!Page_posts.basic_fields} (default) or
+        {!Page_posts.analytics_fields}; the parser reads the aliases the
+        latter sets.
+      - [limit]: clamped to 100, the documented maximum.
+      - [position]: a cursor or a [paging.next] URL on [graph.facebook.com]
+        for the same edge (see {!Social_meta_graph_paging}); with
+        [Page_url] the other options come from the URL.
+
+      Needs [pages_read_engagement] and [pages_read_user_content].
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/page/feed/> *)
+  let get_page_posts_page ~page_id ~access_token ?(edge = Page_posts.Posts)
+      ?(fields = Page_posts.basic_fields) ?(position = Social_meta_graph_paging.First) ?limit
+      on_result =
+    match page_posts_page_url ~page_id ~edge ~fields ?limit position with
+    | Error err -> on_result (Error err)
+    | Ok url ->
+        get_url ~url ~access_token ~required_permissions:page_posts_read_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match
+                  Social_meta_graph_paging.of_body ~item:Page_posts.parse_page_post response.body
+                with
+                | Ok page -> on_result (Ok page)
+                | Error msg -> on_result (Error (parse_failure "page posts" msg))))
+
+  (** {!get_page_posts_page} for the account's Page ([Config.get_page_id])
+      with its stored Page token. *)
+  let get_page_posts_page_for_account ~account_id ?edge ?fields ?position ?limit on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        Config.get_page_id ~account_id
+          (fun page_id ->
+            get_page_posts_page ~page_id ~access_token ?edge ?fields ?position ?limit on_result)
+          (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
   (* Graph answers moderation calls with {"success": true|false}. *)
