@@ -1831,7 +1831,20 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (network_error err))))
       (fun err -> on_result (Error err))
 
-  let reply_action ~account_id ~reply_id ~endpoint ?(extra_params = []) on_result =
+  (* Reply moderation goes through two dedicated edges on the reply node
+     (https://developers.facebook.com/docs/threads/reply-management):
+     [manage_reply] with [hide=true|false] for hiding a published top-level
+     reply, and [manage_pending_reply] with [approve=true|false] for replies
+     held for approval. *)
+  type reply_moderation_edge =
+    | Manage_reply
+    | Manage_pending_reply
+
+  let reply_moderation_edge_path = function
+    | Manage_reply -> "manage_reply"
+    | Manage_pending_reply -> "manage_pending_reply"
+
+  let reply_action ~account_id ~reply_id ~edge ~params on_result =
     if String.trim reply_id = "" then
       on_result (Error (Error_types.Validation_error [ Error_types.Invalid_url "reply_id must not be empty" ]))
     else
@@ -1839,9 +1852,12 @@ module Make (Config : CONFIG) = struct
       (fun creds ->
         let body =
           Social_core.form_urlencode_kvs
-            (extra_params @ [ ("access_token", creds.access_token) ])
+            (params @ [ ("access_token", creds.access_token) ])
         in
-        let url = Printf.sprintf "%s/%s%s" threads_api_base (String.trim reply_id) endpoint in
+        let url =
+          Printf.sprintf "%s/%s/%s" threads_api_base (String.trim reply_id)
+            (reply_moderation_edge_path edge)
+        in
         let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
         http_post_no_retry ~headers ~body url
           (fun response ->
@@ -1857,17 +1873,29 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (network_error err))))
       (fun err -> on_result (Error err))
 
+  (** Approve a reply held for approval
+      ([POST /{reply_id}/manage_pending_reply], [approve=true]). *)
   let approve_reply ~account_id ~reply_id on_result =
-    reply_action ~account_id ~reply_id ~endpoint:"/approve" on_result
+    reply_action ~account_id ~reply_id ~edge:Manage_pending_reply
+      ~params:[ ("approve", "true") ] on_result
 
+  (** Ignore a reply held for approval
+      ([POST /{reply_id}/manage_pending_reply], [approve=false]). Ignored
+      replies can still be approved later. *)
   let ignore_reply ~account_id ~reply_id on_result =
-    reply_action ~account_id ~reply_id ~endpoint:"/ignore" on_result
+    reply_action ~account_id ~reply_id ~edge:Manage_pending_reply
+      ~params:[ ("approve", "false") ] on_result
 
+  (** Hide a top-level reply ([POST /{reply_id}/manage_reply], [hide=true]).
+      Nested replies follow their parent. *)
   let hide_reply ~account_id ~reply_id on_result =
-    reply_action ~account_id ~reply_id ~endpoint:"" ~extra_params:[("hide", "true")] on_result
+    reply_action ~account_id ~reply_id ~edge:Manage_reply
+      ~params:[ ("hide", "true") ] on_result
 
+  (** Unhide a top-level reply ([POST /{reply_id}/manage_reply], [hide=false]). *)
   let unhide_reply ~account_id ~reply_id on_result =
-    reply_action ~account_id ~reply_id ~endpoint:"" ~extra_params:[("hide", "false")] on_result
+    reply_action ~account_id ~reply_id ~edge:Manage_reply
+      ~params:[ ("hide", "false") ] on_result
 
   let get_oauth_url ~redirect_uri ~state ~scopes on_success on_error =
     let raw_client_id = Config.get_env "THREADS_CLIENT_ID" |> Option.value ~default:"" in

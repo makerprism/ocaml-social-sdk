@@ -2,6 +2,7 @@
 
 ## 0.1.1 - Unreleased
 
+- Fixed reply moderation endpoints. `hide_reply`/`unhide_reply` now call `POST /{reply_id}/manage_reply` with `hide=true|false`, and `approve_reply`/`ignore_reply` call `POST /{reply_id}/manage_pending_reply` with `approve=true|false`, as documented in Meta's reply-management guide. Previously they posted to `/{reply_id}`, `/{reply_id}/approve` and `/{reply_id}/ignore`, which do not exist. Signatures are unchanged.
 - Added account analytics API `get_account_insights` for `/v1.0/{id}/threads_insights`.
 - Added post analytics API `get_post_insights` for `/v1.0/{post_id}/insights`.
 - Added typed analytics parsing for account/post insight payloads.

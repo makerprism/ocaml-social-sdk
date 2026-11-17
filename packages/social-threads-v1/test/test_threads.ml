@@ -4330,7 +4330,8 @@ let test_approve_reply_success () =
           let requests = List.rev !Mock_http.requests in
           (match requests with
            | [ ("POST", url, _, body) ] ->
-               assert (string_contains url "/v1.0/reply-456/approve");
+               assert (String.ends_with ~suffix:"/v1.0/reply-456/manage_pending_reply" url);
+               assert (string_contains body "approve=true");
                assert (string_contains body "access_token=access-xyz")
            | _ -> failwith "unexpected request for approve_reply");
           print_endline "ok: approve reply"
@@ -4358,8 +4359,9 @@ let test_ignore_reply_success () =
       | Ok () ->
           let requests = List.rev !Mock_http.requests in
           (match requests with
-           | [ ("POST", url, _, _) ] ->
-               assert (string_contains url "/v1.0/reply-789/ignore")
+           | [ ("POST", url, _, body) ] ->
+               assert (String.ends_with ~suffix:"/v1.0/reply-789/manage_pending_reply" url);
+               assert (string_contains body "approve=false")
            | _ -> failwith "unexpected request for ignore_reply");
           print_endline "ok: ignore reply"
       | Error _ -> failwith "expected successful ignore_reply")
@@ -4387,9 +4389,7 @@ let test_hide_reply_success () =
           let requests = List.rev !Mock_http.requests in
           (match requests with
            | [ ("POST", url, _, body) ] ->
-               assert (string_contains url "/v1.0/reply-abc");
-               assert (not (string_contains url "/approve"));
-               assert (not (string_contains url "/ignore"));
+               assert (String.ends_with ~suffix:"/v1.0/reply-abc/manage_reply" url);
                assert (string_contains body "hide=true")
            | _ -> failwith "unexpected request for hide_reply");
           print_endline "ok: hide reply"
@@ -4418,7 +4418,7 @@ let test_unhide_reply_success () =
           let requests = List.rev !Mock_http.requests in
           (match requests with
            | [ ("POST", url, _, body) ] ->
-               assert (string_contains url "/v1.0/reply-def");
+               assert (String.ends_with ~suffix:"/v1.0/reply-def/manage_reply" url);
                assert (string_contains body "hide=false")
            | _ -> failwith "unexpected request for unhide_reply");
           print_endline "ok: unhide reply"
