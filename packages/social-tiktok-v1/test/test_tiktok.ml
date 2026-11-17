@@ -537,7 +537,10 @@ let test_canonical_analytics_adapters () =
         { id = "video_2"; like_count = 30; comment_count = 4; share_count = 1; view_count = 180 } ];
   } in
   let account_series = Social_tiktok_v1.to_canonical_account_analytics_series analytics in
-  assert (List.length account_series = 9);
+  (* 4 account stats + 4 recent-video totals. The Video Object has no
+     collect_count (https://developers.tiktok.com/doc/tiktok-api-v2-video-object),
+     so there is no saves series. *)
+  assert (List.length account_series = 8);
   (match find_series "follower_count" account_series with
    | Some item ->
        assert (Analytics_types.canonical_metric_key item.metric = "followers");
@@ -1133,33 +1136,30 @@ let test_upload_video_chunk_length_range_mismatch_rejected () =
       | Ok () -> failwith "Expected range mismatch error");
   assert !done_
 
-let test_post_video_uses_multi_chunk_upload () =
-  print_string "Test: post_video uses multi-chunk upload... ";
+(* Runs [post_video] and returns the init request's (chunk_size,
+   total_chunk_count) and the Content-Range of every PUT, in order. *)
+let run_chunked_post_video ~video_content ~upload_chunk_size_bytes =
   reset_mock_state ();
-  let video_content = "abcdefghij" in
   let success_called = ref false in
   TikTok.post_video
     ~account_id:"test_account"
     ~caption:"Chunked upload"
     ~video_content
-    ~upload_chunk_size_bytes:4
+    ~upload_chunk_size_bytes
     (handle_api_result
       (fun _publish_id -> success_called := true)
       (fun err -> failwith ("Unexpected error: " ^ err)));
   assert !success_called;
-
   let init_call =
     match List.find_opt (fun (c : Mock_http.post_call) -> String.ends_with ~suffix:"video/init/" c.url) !(Mock_http.post_calls) with
     | Some c -> c
     | None -> failwith "Expected init video upload call"
   in
-  let init_body = Option.value ~default:"" init_call.body in
-  let json = Yojson.Basic.from_string init_body in
   let open Yojson.Basic.Util in
-  let source_json = json |> member "source_info" in
-  assert ((source_json |> member "chunk_size" |> to_int) = 4);
-  assert ((source_json |> member "total_chunk_count" |> to_int) = 3);
-
+  let source_json =
+    Yojson.Basic.from_string (Option.value ~default:"" init_call.body)
+    |> member "source_info"
+  in
   let content_ranges =
     List.map
       (fun c ->
@@ -1168,8 +1168,38 @@ let test_post_video_uses_multi_chunk_upload () =
         | None -> failwith "Missing Content-Range header")
       (List.rev !(Mock_http.put_calls))
   in
-  assert (List.length content_ranges = 3);
-  assert (content_ranges = ["bytes 0-3/10"; "bytes 4-7/10"; "bytes 8-9/10"]);
+  ( (source_json |> member "chunk_size" |> to_int,
+     source_json |> member "total_chunk_count" |> to_int),
+    content_ranges )
+
+(* TikTok media transfer guide
+   (https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide):
+   chunks are 5-64 MB, total_chunk_count = floor(video_size / chunk_size),
+   the last chunk absorbs the trailing bytes, and a video under 5 MB is
+   uploaded whole. *)
+let test_post_video_uses_multi_chunk_upload () =
+  print_string "Test: post_video uses multi-chunk upload... ";
+  let mib = 1024 * 1024 in
+  let video_size = (12 * mib) + 123 in
+  let (chunk_size, total_chunk_count), content_ranges =
+    run_chunked_post_video ~video_content:(String.make video_size 'v')
+      ~upload_chunk_size_bytes:(5 * mib)
+  in
+  assert (chunk_size = 5 * mib);
+  assert (total_chunk_count = 2);
+  assert (content_ranges = [
+    Printf.sprintf "bytes 0-%d/%d" ((5 * mib) - 1) video_size;
+    Printf.sprintf "bytes %d-%d/%d" (5 * mib) (video_size - 1) video_size ]);
+  print_endline "PASSED"
+
+let test_post_video_small_video_single_chunk () =
+  print_string "Test: post_video under 5 MB uploads one whole chunk... ";
+  let (chunk_size, total_chunk_count), content_ranges =
+    run_chunked_post_video ~video_content:"abcdefghij" ~upload_chunk_size_bytes:4
+  in
+  assert (chunk_size = 10);
+  assert (total_chunk_count = 1);
+  assert (content_ranges = ["bytes 0-9/10"]);
   print_endline "PASSED"
 
 let test_post_video_caption_too_long_validation_error () =
@@ -2983,78 +3013,42 @@ let test_post_video_via_pull_no_download () =
       (fun err -> failwith ("Unexpected error: " ^ err)));
   assert !success_called
 
-let test_post_single_uses_pull_from_url () =
-  print_string "Test: post_single uses PULL_FROM_URL (no download)... ";
+(* post_single and post_thread download the media and send it with
+   FILE_UPLOAD: PULL_FROM_URL needs TikTok URL-ownership verification,
+   which presigned storage URLs cannot pass (url_ownership_unverified). *)
+let init_upload_sources () =
+  List.filter_map
+    (fun (c : Mock_http.post_call) ->
+      if String.ends_with ~suffix:"video/init/" c.url then
+        let json = Yojson.Basic.from_string (Option.value ~default:"" c.body) in
+        let open Yojson.Basic.Util in
+        Some (json |> member "source_info" |> member "source" |> to_string)
+      else None)
+    (List.rev !(Mock_http.post_calls))
+
+let downloaded_urls () =
+  List.rev_map (fun (c : Mock_http.get_call) -> c.url) !(Mock_http.get_calls)
+
+let test_post_single_uses_file_upload () =
+  print_string "Test: post_single downloads and uses FILE_UPLOAD... ";
   reset_mock_state ();
-  let pull_url_seen = ref false in
-  Mock_http.set_custom_post_handler (fun url _headers body ->
-    if String.ends_with ~suffix:"video/init/" url then (
-      let body_text = Option.value ~default:"" body in
-      let json = Yojson.Basic.from_string body_text in
-      let open Yojson.Basic.Util in
-      let source_json = json |> member "source_info" in
-      assert ((source_json |> member "source" |> to_string) = "PULL_FROM_URL");
-      pull_url_seen := true;
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"publish_id":"single_pull_1"}}|};
-      }
-    ) else if String.ends_with ~suffix:"creator_info/query/" url then
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"creator_avatar_url":"","creator_username":"u","creator_nickname":"U","privacy_level_options":["SELF_ONLY"],"comment_disabled":false,"duet_disabled":false,"stitch_disabled":false,"max_video_post_duration_sec":600}}|};
-      }
-    else
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"access_token":"t","refresh_token":"r","expires_in":86400}|};
-      });
   let success_called = ref false in
   TikTok.post_single
     ~account_id:"test_account"
     ~text:"Single post"
     ~media_urls:["https://storage.example.com/video.mp4"]
     (handle_outcome
-      (fun _publish_id ->
-        assert !pull_url_seen;
-        assert (List.length !Mock_http.get_calls = 0);
-        success_called := true;
-        print_endline "PASSED")
+      (fun _publish_id -> success_called := true)
       (fun err -> failwith ("Unexpected error: " ^ err)));
-  assert !success_called
+  assert !success_called;
+  assert (downloaded_urls () = ["https://storage.example.com/video.mp4"]);
+  assert (init_upload_sources () = ["FILE_UPLOAD"]);
+  assert (List.length !Mock_http.put_calls = 1);
+  print_endline "PASSED"
 
-let test_post_thread_uses_pull_from_url () =
-  print_string "Test: post_thread uses PULL_FROM_URL (no download)... ";
+let test_post_thread_uses_file_upload () =
+  print_string "Test: post_thread downloads and uses FILE_UPLOAD per video... ";
   reset_mock_state ();
-  let pull_url_count = ref 0 in
-  Mock_http.set_custom_post_handler (fun url _headers body ->
-    if String.ends_with ~suffix:"video/init/" url then (
-      let body_text = Option.value ~default:"" body in
-      let json = Yojson.Basic.from_string body_text in
-      let open Yojson.Basic.Util in
-      let source_json = json |> member "source_info" in
-      assert ((source_json |> member "source" |> to_string) = "PULL_FROM_URL");
-      pull_url_count := !pull_url_count + 1;
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = Printf.sprintf {|{"data":{"publish_id":"thread_pull_%d"}}|} !pull_url_count;
-      }
-    ) else if String.ends_with ~suffix:"creator_info/query/" url then
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"data":{"creator_avatar_url":"","creator_username":"u","creator_nickname":"U","privacy_level_options":["SELF_ONLY"],"comment_disabled":false,"duet_disabled":false,"stitch_disabled":false,"max_video_post_duration_sec":600}}|};
-      }
-    else
-      {
-        Social_core.status = 200;
-        headers = [("content-type", "application/json")];
-        body = {|{"access_token":"t","refresh_token":"r","expires_in":86400}|};
-      });
   let success_called = ref false in
   TikTok.post_thread
     ~account_id:"test_account"
@@ -3066,12 +3060,13 @@ let test_post_thread_uses_pull_from_url () =
     (handle_thread_outcome
       (fun post_ids ->
         assert (List.length post_ids = 2);
-        assert (!pull_url_count = 2);
-        assert (List.length !Mock_http.get_calls = 0);
-        success_called := true;
-        print_endline "PASSED")
+        success_called := true)
       (fun err -> failwith ("Unexpected error: " ^ err)));
-  assert !success_called
+  assert !success_called;
+  assert (downloaded_urls ()
+          = ["https://storage.example.com/v1.mp4"; "https://storage.example.com/v2.mp4"]);
+  assert (init_upload_sources () = ["FILE_UPLOAD"; "FILE_UPLOAD"]);
+  print_endline "PASSED"
 
 (** {1 Inbox/Draft Upload Tests} *)
 
@@ -3210,6 +3205,7 @@ let () =
   test_upload_video_chunk_end_before_start_rejected ();
   test_upload_video_chunk_length_range_mismatch_rejected ();
   test_post_video_uses_multi_chunk_upload ();
+  test_post_video_small_video_single_chunk ();
   test_post_video_caption_too_long_validation_error ();
   test_post_video_rejects_disallowed_privacy_level ();
   test_post_video_auto_adjusts_comment_flag ();
@@ -3277,8 +3273,8 @@ let () =
   test_post_video_via_pull_caption_too_long ();
   test_post_video_via_pull_invalid_url ();
   test_post_video_via_pull_no_download ();
-  test_post_single_uses_pull_from_url ();
-  test_post_thread_uses_pull_from_url ();
+  test_post_single_uses_file_upload ();
+  test_post_thread_uses_file_upload ();
 
   print_endline "\n--- Inbox/Draft Upload ---";
   test_init_inbox_video_upload_request_contract ();
