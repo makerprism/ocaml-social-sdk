@@ -297,6 +297,134 @@ module OAuth = struct
       (fun p -> match p.status with Declined -> Some p.permission | Granted | Expired | Unknown_status _ -> None)
       permissions
 
+  (** {2 Login discovery types} *)
+
+  (** A Facebook Page as returned by [/me/accounts] and the Business
+      [owned_pages] / [client_pages] edges
+      ({{:https://developers.facebook.com/docs/graph-api/reference/page/}}). *)
+  type page = {
+    id : string;
+    name : string;
+    access_token : string option;
+        (** The Page access token. Returned only when the user has a role on
+            the Page (other than Live Contributor); Business edges can list
+            Pages the user cannot act for, without a token. *)
+    category : string option;
+    about : string option;
+    picture_url : string option;  (** [picture{url}] *)
+    tasks : string list;
+        (** The user's tasks on the Page ([MANAGE], [CREATE_CONTENT], ...).
+            Present on [/me/accounts] when requested. *)
+  }
+
+  (** A Business the user belongs to ([/me/businesses]). *)
+  type business = {
+    business_id : string;
+    business_name : string option;
+  }
+
+  (** Which Business edge a Page came from. *)
+  type business_page_edge =
+    | Owned_pages  (** [/{business_id}/owned_pages] *)
+    | Client_pages  (** [/{business_id}/client_pages] *)
+
+  type business_page_failure = {
+    failed_business_id : string;
+    failed_edge : business_page_edge;
+    failure : Error_types.error;
+  }
+
+  type business_pages = {
+    pages : page list;  (** Deduplicated by Page id, first occurrence kept. *)
+    failures : business_page_failure list;
+        (** Edges that could not be read. A user is often an employee of a
+            Business whose Pages they may not list; one such edge does not
+            hide the Pages of the others. *)
+  }
+
+  let business_page_edge_path = function
+    | Owned_pages -> "owned_pages"
+    | Client_pages -> "client_pages"
+
+  (** Fields requested by default for {!page}. [tasks] is not among them:
+      it exists only on [/me/accounts], and Graph rejects unknown fields. *)
+  let default_page_fields = [ "id"; "name"; "access_token"; "category"; "about"; "picture{url}" ]
+
+  let json_string key json =
+    match json with
+    | `Assoc fields -> (
+        match List.assoc_opt key fields with
+        | Some (`String value) -> Some value
+        | Some (`Int value) -> Some (string_of_int value)
+        | Some (`Null | `Bool _ | `Float _ | `List _ | `Assoc _) | None -> None)
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+
+  let json_member key json =
+    match json with
+    | `Assoc fields -> List.assoc_opt key fields
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
+
+  let non_empty = function
+    | Some "" -> None
+    | (Some _ | None) as value -> value
+
+  let page_of_json json =
+    match json_string "id" json, json_string "name" json with
+    | Some id, Some name ->
+        Some
+          {
+            id;
+            name;
+            access_token = non_empty (json_string "access_token" json);
+            category = non_empty (json_string "category" json);
+            about = non_empty (json_string "about" json);
+            picture_url =
+              Option.bind (json_member "picture" json) (fun picture ->
+                  Option.bind (json_member "data" picture) (fun data ->
+                      non_empty (json_string "url" data)));
+            tasks =
+              (match json_member "tasks" json with
+               | Some (`List tasks) ->
+                   List.filter_map
+                     (function
+                       | `String task -> Some task
+                       | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _ -> None)
+                     tasks
+               | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None -> []);
+          }
+    | (Some _ | None), _ -> None
+
+  let business_of_json json =
+    Option.map
+      (fun business_id -> { business_id; business_name = json_string "name" json })
+      (json_string "id" json)
+
+  (** Parses one page of a Graph list: the items of [data] that [item_of]
+      accepts, and the [after] cursor when [paging.next] says more pages
+      follow. *)
+  let parse_graph_list item_of body : ('a list * string option, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Error ("Graph list response is not JSON: " ^ message)
+    | json -> (
+        match json_member "data" json with
+        | Some (`List items) ->
+            let paging = json_member "paging" json in
+            let has_next = Option.bind paging (json_string "next") <> None in
+            let after =
+              Option.bind paging (fun paging ->
+                  Option.bind (json_member "cursors" paging) (json_string "after"))
+            in
+            Ok (List.filter_map item_of items, if has_next then after else None)
+        | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None ->
+            Error "Graph list response has no data array")
+
+  let dedup_pages pages =
+    List.fold_left
+      (fun (seen, acc) page ->
+        if List.mem page.id seen then (seen, acc) else (page.id :: seen, page :: acc))
+      ([], []) pages
+    |> snd |> List.rev
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Exchange authorization code for short-lived access token
@@ -539,6 +667,110 @@ module OAuth = struct
       get_parsed
         (Printf.sprintf "%s/me/permissions?%s" Metadata.api_base query)
         parse_permissions on_result
+
+    (** {2 Login discovery} *)
+
+    (** The Facebook user id of a user token ([GET /me?fields=id]). *)
+    let get_me_id ~access_token ?app_secret on_result =
+      let query = Uri.encoded_of_query (("fields", [ "id" ]) :: token_query ?app_secret access_token) in
+      get_parsed
+        (Printf.sprintf "%s/me?%s" Metadata.api_base query)
+        (fun body ->
+          match Yojson.Basic.from_string body with
+          | exception Yojson.Json_error message -> Stdlib.Error ("/me response is not JSON: " ^ message)
+          | json -> (
+              match json_string "id" json with
+              | Some id -> Stdlib.Ok id
+              | None -> Stdlib.Error "/me response has no id"))
+        on_result
+
+    (** Reads every page of a Graph list edge, following [paging.cursors.after]
+        while Graph reports a [paging.next], up to [max_pages] requests. *)
+    let get_graph_list ~path ~access_token ?app_secret ~fields ~max_pages item_of on_result =
+      let rec fetch ~remaining ~after acc =
+        let query =
+          Uri.encoded_of_query
+            ((("fields", [ String.concat "," fields ]) :: token_query ?app_secret access_token)
+             @ match after with Some cursor -> [ ("after", [ cursor ]) ] | None -> [])
+        in
+        get_parsed
+          (Printf.sprintf "%s/%s?%s" Metadata.api_base path query)
+          (parse_graph_list item_of)
+          (function
+            | Stdlib.Error err -> on_result (Stdlib.Error err)
+            | Stdlib.Ok (items, next) ->
+                let acc = List.rev_append items acc in
+                (match next with
+                 | Some cursor when remaining > 1 -> fetch ~remaining:(remaining - 1) ~after:(Some cursor) acc
+                 | Some _ | None -> on_result (Stdlib.Ok (List.rev acc))))
+      in
+      fetch ~remaining:(max 1 max_pages) ~after:None []
+
+    (** The Pages the user has a role on, with their Page access tokens, from
+        [GET /me/accounts]
+        ({{:https://developers.facebook.com/docs/graph-api/reference/user/accounts/}}),
+        following pagination. Needs [pages_show_list].
+
+        Typed, paginated successor of {!get_user_pages}, which reads only the
+        first page and stays for compatibility.
+
+        @param fields Defaults to {!default_page_fields}; add ["tasks"] for
+          the user's tasks per Page.
+        @param max_pages Request cap (default 50 pages of results). *)
+    let get_managed_pages ~access_token ?app_secret ?(fields = default_page_fields)
+        ?(max_pages = 50) on_result =
+      get_graph_list ~path:"me/accounts" ~access_token ?app_secret ~fields ~max_pages
+        page_of_json on_result
+
+    (** The Businesses the user belongs to ([GET /me/businesses],
+        {{:https://developers.facebook.com/docs/graph-api/reference/user/businesses/}}).
+        Needs [business_management]. *)
+    let get_businesses ~access_token ?app_secret ?(max_pages = 50) on_result =
+      get_graph_list ~path:"me/businesses" ~access_token ?app_secret ~fields:[ "id"; "name" ]
+        ~max_pages business_of_json on_result
+
+    (** The Pages of one Business edge: [owned_pages]
+        ({{:https://developers.facebook.com/docs/marketing-api/reference/business/owned_pages/}})
+        or [client_pages]
+        ({{:https://developers.facebook.com/docs/marketing-api/reference/business/client_pages/}}). *)
+    let get_business_pages ~access_token ?app_secret ~business_id ~edge
+        ?(fields = default_page_fields) ?(max_pages = 50) on_result =
+      get_graph_list
+        ~path:(Uri.pct_encode business_id ^ "/" ^ business_page_edge_path edge)
+        ~access_token ?app_secret ~fields ~max_pages page_of_json on_result
+
+    (** Pages reachable through Business Manager: [owned_pages] and
+        [client_pages] of every Business from {!get_businesses}, deduplicated
+        by Page id. Pages a user manages only through a Business do not appear
+        in [/me/accounts].
+
+        [Error] only when the Business list itself fails; a failing edge is
+        reported in [failures] and the other edges are still read. Pages
+        without an [access_token] are kept: filter them if you need to act
+        as the Page. *)
+    let get_all_business_pages ~access_token ?app_secret ?fields ?max_pages on_result =
+      get_businesses ~access_token ?app_secret ?max_pages (function
+        | Stdlib.Error err -> on_result (Stdlib.Error err)
+        | Stdlib.Ok businesses ->
+            let edges =
+              List.concat_map
+                (fun business -> [ (business.business_id, Owned_pages); (business.business_id, Client_pages) ])
+                businesses
+            in
+            let rec next edges pages failures =
+              match edges with
+              | [] ->
+                  on_result
+                    (Stdlib.Ok { pages = dedup_pages (List.rev pages); failures = List.rev failures })
+              | (business_id, edge) :: rest ->
+                  get_business_pages ~access_token ?app_secret ~business_id ~edge ?fields ?max_pages
+                    (function
+                      | Stdlib.Ok found -> next rest (List.rev_append found pages) failures
+                      | Stdlib.Error failure ->
+                          next rest pages
+                            ({ failed_business_id = business_id; failed_edge = edge; failure } :: failures))
+            in
+            next edges [] [])
   end
 end
 

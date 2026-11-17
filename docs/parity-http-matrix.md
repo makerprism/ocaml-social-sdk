@@ -22,6 +22,9 @@ Rows describe `social-facebook-graph-v25` (Graph API `v25.0`, the `api_version` 
 | Permalink by id | GET | `https://graph.facebook.com/v25.0/{post_id}?fields=permalink_url[&appsecret_proof]` | `Authorization: Bearer <token>` | none | `Facebook.get_permalink`, `Facebook.get_permalink_for_account` | `test_get_permalink` |
 | Token inspection | GET | `https://graph.facebook.com/v25.0/debug_token?input_token&access_token=<app_id\|app_secret>` | none | none (query-token contract) | `OAuth_http.debug_token_info` | `test_debug_token_info_typed`, `test_debug_token_info_errors` |
 | Granted / declined permissions | GET | `https://graph.facebook.com/v25.0/me/permissions?access_token[&appsecret_proof]` | none | none (query-token contract) | `OAuth_http.get_permissions` | `test_get_permissions` |
+| User id | GET | `https://graph.facebook.com/v25.0/me?fields=id&access_token[&appsecret_proof]` | none | none | `OAuth_http.get_me_id` | `test_get_me_id` |
+| Managed Pages (paginated) | GET | `https://graph.facebook.com/v25.0/me/accounts?fields=id,name,access_token,category,about,picture{url}&access_token[&appsecret_proof][&after]` | none | none | `OAuth_http.get_managed_pages` | `test_get_managed_pages_follows_paging` |
+| Business Pages | GET | `/v25.0/me/businesses?fields=id,name`, then `/v25.0/{business_id}/owned_pages` and `/client_pages` with the Page fields | none | none | `OAuth_http.get_businesses`, `get_business_pages`, `get_all_business_pages` | `test_get_all_business_pages` |
 
 Known subtle bug traps:
 - Account/post insights carry the token as a percent-encoded query parameter and send no `appsecret_proof`.
