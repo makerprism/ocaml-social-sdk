@@ -1075,7 +1075,7 @@ let test_analytics_network_error_redacts_query_token () =
     ~access_token:"secret_token_123"
     (fun result ->
       match result with
-      | Error (Error_types.Internal_error msg) ->
+      | Error (Error_types.Network_error (Error_types.Connection_failed msg)) ->
           if string_contains msg "secret_token_123" then
             failwith ("Token was not redacted: " ^ msg);
           if not (string_contains msg "REDACTED" || msg = "No mock response set") then
