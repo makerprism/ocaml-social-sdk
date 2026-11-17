@@ -160,5 +160,14 @@ let to_error ~platform ~status_code ~required_permissions ?retry_after_seconds
         | Invalid_request | Transient | Unclassified ->
             api_error ~message ~trace_id:graph.fbtrace_id)
 
+let of_error : Error_types.error -> t option = function
+  | Error_types.Api_error { raw_response = Some body; _ } -> of_body body
+  | Error_types.Api_error { raw_response = None; _ }
+  | Error_types.Validation_error _ | Error_types.Auth_error _
+  | Error_types.Rate_limited _ | Error_types.Network_error _
+  | Error_types.Duplicate_content | Error_types.Content_policy_violation _
+  | Error_types.Resource_not_found _ | Error_types.Internal_error _ ->
+      None
+
 let transport_error message =
   Error_types.Network_error (Error_types.Connection_failed message)

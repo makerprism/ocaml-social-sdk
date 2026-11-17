@@ -125,16 +125,18 @@ let of_reddit_json_errors json =
       no_fields
 
 (* LinkedIn sends a symbolic [code] next to a numeric [serviceErrorCode]
-   (older responses only the latter); Pinterest a numeric [code]. *)
+   (older responses only the latter); Pinterest a numeric [code]; some TikTok
+   endpoints a flat [error_code] / [error_message]. *)
 let of_top_level_code json =
   let service_code = int_field "serviceErrorCode" json in
-  match code_field "code" json with
+  let message =
+    first_some [ string_field "message" json; string_field "error_message" json ]
+  in
+  match first_some [ code_field "code" json; code_field "error_code" json ] with
   | Some code ->
-      { no_fields with f_code = Some code; f_subcode = service_code;
-        f_message = string_field "message" json }
+      { no_fields with f_code = Some code; f_subcode = service_code; f_message = message }
   | None ->
-      { no_fields with f_code = Option.map string_of_int service_code;
-        f_message = string_field "message" json }
+      { no_fields with f_code = Option.map string_of_int service_code; f_message = message }
 
 let fields_of_json json =
   match member "error" json with

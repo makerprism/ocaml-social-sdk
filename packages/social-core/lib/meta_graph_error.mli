@@ -105,12 +105,21 @@ val to_error :
     - {!Invalid_request}, {!Transient}, {!Unclassified} and bodies that are
       not a Graph envelope: [Api_error] with the body as [raw_response] and
       [request_id] (else [fbtrace_id]), so {!Provider_error_detail} can read
-      the code back. Graph sends 1 and 2 with HTTP 500, which
-      [Error_types.classify_error] already treats as transient.
+      the code back. The HTTP status is kept as sent. Graph usually sends 1
+      and 2 with HTTP 500, which [Error_types.classify_error] and
+      [Error_types.is_retryable] treat as transient; they only look at the
+      status, so a {!Transient} body under a 4xx status reads as permanent
+      there. Use {!of_error} with {!classify} to see the Graph class.
 
     [redact_body] is applied to the body before it is stored or used as a
     message, [redact_message] to the Graph message; both default to the
     identity. *)
+
+val of_error : Error_types.error -> t option
+(** The Graph error inside an [Api_error]'s [raw_response]; [None] for other
+    constructors and for bodies that are not a Graph envelope.
+    [Option.map classify (of_error err)] recovers the class of an error a
+    package already converted, e.g. {!Transient} under HTTP 400. *)
 
 val transport_error : string -> Error_types.error
 (** [Network_error (Connection_failed msg)]: the request never produced a

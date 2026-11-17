@@ -573,16 +573,8 @@ module Make (Config : CONFIG) = struct
   
   (** {1 Error Handling} *)
   
-  (** Graph error code as a [facebook_error_code]. The table is
-      {!Meta_graph_error.classify}'s, shared with Instagram and Threads; this
-      function only projects it onto the older variant. *)
-  let parse_error_code code =
-    let graph =
-      { Meta_graph_error.code = Some code; subcode = None; error_type = None;
-        message = None; user_title = None; user_message = None;
-        fbtrace_id = None; is_transient = None }
-    in
-    match Meta_graph_error.classify graph with
+  (* Projects the shared classification onto the older variant. *)
+  let facebook_error_code_of_classification ~code = function
     | Meta_graph_error.Token_invalid _ -> Invalid_token
     | Meta_graph_error.Rate_limited -> Rate_limit_exceeded
     | Meta_graph_error.Permission_denied -> Permission_denied
@@ -591,6 +583,17 @@ module Make (Config : CONFIG) = struct
     | Meta_graph_error.Transient -> Temporarily_unavailable
     | Meta_graph_error.Duplicate_content -> Duplicate_post
     | Meta_graph_error.Unclassified -> Unknown code
+
+  (** Graph error code as a [facebook_error_code]. The table is
+      {!Meta_graph_error.classify}'s, shared with Instagram and Threads. A
+      bare code has no subcode or [is_transient] flag; {!parse_facebook_error}
+      classifies the whole error instead. *)
+  let parse_error_code code =
+    Meta_graph_error.classify
+      { Meta_graph_error.code = Some code; subcode = None; error_type = None;
+        message = None; user_title = None; user_message = None;
+        fbtrace_id = None; is_transient = None }
+    |> facebook_error_code_of_classification ~code
   
   (** Determine if error is retryable *)
   let is_retryable = function
@@ -612,7 +615,11 @@ module Make (Config : CONFIG) = struct
     match Meta_graph_error.of_body response_body with
     | None -> None
     | Some graph ->
-        let code = parse_error_code (Option.value ~default:0 graph.code) in
+        let code =
+          facebook_error_code_of_classification
+            ~code:(Option.value ~default:0 graph.code)
+            (Meta_graph_error.classify graph)
+        in
         Some {
           message = Option.value ~default:"Unknown error" graph.message;
           error_type = Option.value ~default:"UnknownError" graph.error_type;

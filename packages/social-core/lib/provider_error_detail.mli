@@ -62,8 +62,9 @@ val of_response : status_code:int -> ?request_id:string -> string -> t
       (Reddit);
     - RFC 7807 [{"title", "detail", "type"}] and [{"errors": [{"code",
       "message"}]}] (X/Twitter);
-    - top-level [{"code", "message"}] (Pinterest) and
-      [{"code", "serviceErrorCode", "message"}] (LinkedIn). *)
+    - top-level [{"code", "message"}] (Pinterest),
+      [{"code", "serviceErrorCode", "message"}] (LinkedIn) and
+      [{"error_code", "error_message"}] (TikTok). *)
 
 val of_api_error : Error_types.api_error -> t
 (** Detail of an [Api_error], parsed from its [raw_response]. *)

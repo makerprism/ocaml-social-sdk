@@ -3148,6 +3148,16 @@ let test_shared_meta_graph_error_contract () =
   assert (Facebook.parse_error_code 102 = Invalid_token);
   assert (Facebook.parse_error_code 3 = Permission_denied);
   assert (Facebook.parse_error_code 1609005 = Unknown 1609005);
+  (* A code-1 error pinned by a subcode and is_transient=false is not
+     retryable; the subcode must not be dropped before classifying. *)
+  (match
+     Facebook.parse_facebook_error
+       {|{"error":{"message":"Invalid thumbnail offset","type":"OAuthException","code":1,"error_subcode":99,"is_transient":false}}|}
+   with
+   | Some fb_err ->
+       assert (fb_err.code = Unknown 1);
+       assert (not fb_err.should_retry)
+   | None -> failwith "expected a Graph error");
   print_endline "✓ Shared Meta Graph error contract"
 
 (** [Provider_error_detail] reads the code back out of a Facebook Api_error. *)

@@ -77,6 +77,10 @@ let test_envelopes () =
     {|{"code":2,"message":"Authentication failed."}|}
     ~code:(Some "2") ~subcode:None ~error_type:None
     ~message:(Some "Authentication failed.") ~trace_id:None;
+  expect "TikTok flat" ~status_code:400
+    {|{"error_code":"url_ownership_unverified","error_message":"Verify URL ownership"}|}
+    ~code:(Some "url_ownership_unverified") ~subcode:None ~error_type:None
+    ~message:(Some "Verify URL ownership") ~trace_id:None;
   expect "Reddit status" ~status_code:403 {|{"message":"Forbidden","error":403}|}
     ~code:(Some "403") ~subcode:None ~error_type:None ~message:(Some "Forbidden")
     ~trace_id:None;

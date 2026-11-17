@@ -228,6 +228,21 @@ let test_to_error () =
   in
   check "2 with HTTP 500 -> Api_error the core classifier calls transient"
     (Error_types.classify_error transient = Error_types.Transient_failure);
+  (* Status-only core helpers cannot see a transient body under a 4xx;
+     of_error + classify can. The status must not be rewritten. *)
+  let transient_400 =
+    to_error ~status_code:400
+      (graph_body ~error_type:oauth ~is_transient:true ~message:"Please retry your request later." (Some 2))
+  in
+  check "2 with HTTP 400 keeps its status"
+    (match transient_400 with
+     | Error_types.Api_error { status_code = 400; _ } -> true
+     | _ -> false);
+  check "2 with HTTP 400 classifies as Transient via of_error"
+    (Option.map Meta_graph_error.classify (Meta_graph_error.of_error transient_400)
+     = Some Meta_graph_error.Transient);
+  check "of_error is None for non-Api_error"
+    (Meta_graph_error.of_error (Error_types.Auth_error Error_types.Token_invalid) = None);
   let html = "<html><body>502 Bad Gateway</body></html>" in
   check "non-Graph body -> Api_error with the body as message"
     (to_error ~status_code:502 html

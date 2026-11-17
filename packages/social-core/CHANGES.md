@@ -33,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An `OAuthException` that has a code outside the table is *not* a token
   error: Instagram labels media errors (9004, 352, 36003) that way.
   `transport_error` is the shared `Network_error` for requests that got no
-  response. Pinned per code by `test_meta_graph_error`.
+  response. `of_error` reads the Graph error back out of an `Api_error`, so
+  `Option.map classify (of_error err)` recovers a `Transient` that arrived
+  under a 4xx status (the status-only `Error_types.classify_error` reads that
+  as permanent; the status is never rewritten). Pinned per code by `test_meta_graph_error`.
 
   Namespace note: like `Health_status`, both modules claim a bare module name
   (`social-core` is `(wrapped false)`).
