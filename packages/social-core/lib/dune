@@ -17,9 +17,9 @@
   health_status
   secure_random
   oauth_pkce
-  oauth_scope
-  token_expiry
-  meta_debug_token)
+  social_oauth_scope
+  social_token_expiry
+  social_meta_debug_token)
  (libraries
   yojson
   re

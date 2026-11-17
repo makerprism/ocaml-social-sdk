@@ -754,7 +754,7 @@ module Make (Config : CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    Token_expiry.is_expired ~buffer_seconds expires_at_opt
+    Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
   
   (** Ensure valid access token *)
   let ensure_valid_token ~account_id on_success on_error =

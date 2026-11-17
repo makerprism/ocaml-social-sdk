@@ -263,7 +263,7 @@ module OAuth = struct
         ("redirect_uri", redirect_uri);
         ("state", state);
         ("response_type", "code");
-        ("scope", Oauth_scope.join Oauth_scope.Comma scopes) ]
+        ("scope", Social_oauth_scope.join Social_oauth_scope.Comma scopes) ]
       @ (match auth_type with
          | Some auth_type -> [ ("auth_type", auth_type_to_string auth_type) ]
          | None -> [])
@@ -699,7 +699,7 @@ module OAuth = struct
         string continuations and stays for compatibility.
 
         @param app_access_token An app access token, e.g.
-          {!Meta_debug_token.app_access_token} ["app_id|app_secret"].
+          {!Social_meta_debug_token.app_access_token} ["app_id|app_secret"].
           Keep it server-side.
         @param input_token The user or Page token to inspect.
 
@@ -712,7 +712,7 @@ module OAuth = struct
       in
       get_parsed
         (Printf.sprintf "%s/debug_token?%s" Metadata.api_base query)
-        Meta_debug_token.of_body on_result
+        Social_meta_debug_token.of_body on_result
 
     (** The permissions a user granted, declined or let expire, from
         [GET /me/permissions]
@@ -1277,7 +1277,7 @@ module Make (Config : CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    Token_expiry.is_expired ~buffer_seconds expires_at_opt
+    Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
   
   (** Ensure valid access token *)
   let ensure_valid_token ~account_id on_success on_error =

@@ -163,7 +163,7 @@ module OAuth = struct
     credentials : credentials;
         (** [scope] is the {e granted} scope string TikTok returned. *)
     open_id : string;  (** The user's id for this app. *)
-    scopes : string list;  (** [scope], split ({!Oauth_scope.split}). *)
+    scopes : string list;  (** [scope], split ({!Social_oauth_scope.split}). *)
     expires_in : int option;  (** Access token lifetime, seconds (about 24 h). *)
     refresh_expires_in : int option;  (** Refresh token lifetime, seconds (about 365 days). *)
     refresh_expires_at : string option;  (** [refresh_expires_in] as RFC 3339. *)
@@ -214,7 +214,7 @@ module OAuth = struct
               | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
             in
             let seconds key =
-              Token_expiry.expires_in_of_json (`Assoc [ ("expires_in", Option.value (field key) ~default:`Null) ])
+              Social_token_expiry.expires_in_of_json (`Assoc [ ("expires_in", Option.value (field key) ~default:`Null) ])
             in
             match text "access_token", text "open_id" with
             | Some access_token, Some open_id ->
@@ -228,7 +228,7 @@ module OAuth = struct
                         | Some _ as fresh -> fresh
                         | None -> previous_refresh_token);
                      expires_at =
-                       Token_expiry.expires_at_of_expires_in (Option.value expires_in ~default:86400);
+                       Social_token_expiry.expires_at_of_expires_in (Option.value expires_in ~default:86400);
                      auth_type = Bearer;
                      scope }
                     : credentials)
@@ -236,10 +236,10 @@ module OAuth = struct
                 Stdlib.Ok
                   { credentials;
                     open_id;
-                    scopes = (match scope with Some raw -> Oauth_scope.split raw | None -> []);
+                    scopes = (match scope with Some raw -> Social_oauth_scope.split raw | None -> []);
                     expires_in;
                     refresh_expires_in;
-                    refresh_expires_at = Option.bind refresh_expires_in Token_expiry.expires_at_of_expires_in }
+                    refresh_expires_at = Option.bind refresh_expires_in Social_token_expiry.expires_at_of_expires_in }
             | None, _ -> Stdlib.Error (Error_types.Internal_error "TikTok token response has no access_token")
             | Some _, None -> Stdlib.Error (Error_types.Internal_error "TikTok token response has no open_id")))
 
@@ -1419,7 +1419,7 @@ module Make (Config : CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    Token_expiry.is_expired ~buffer_seconds expires_at_opt
+    Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
   
   (** Refresh OAuth 2.0 access token *)
   let refresh_access_token ~refresh_token on_success on_error =
@@ -2514,7 +2514,7 @@ module Make (Config : CONFIG) = struct
       let url = get_authorization_url
         ~client_id:client_key
         ~redirect_uri
-        ~scope:(Oauth_scope.join Oauth_scope.Comma scopes)
+        ~scope:(Social_oauth_scope.join Social_oauth_scope.Comma scopes)
         ~state
       in
       if code_verifier = "" then

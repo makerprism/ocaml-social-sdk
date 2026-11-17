@@ -426,7 +426,7 @@ let test_debug_token_info_typed () =
                "granular_scopes":[{"scope":"pages_manage_posts","target_ids":["42"]}],
                "user_id":"7"}}|};
       headers = [] };
-  let app_access_token = Meta_debug_token.app_access_token ~app_id:"1234" ~app_secret:"s3cr+t/=" in
+  let app_access_token = Social_meta_debug_token.app_access_token ~app_id:"1234" ~app_secret:"s3cr+t/=" in
   OAuth_http.debug_token_info ~app_access_token ~input_token:tricky_token (function
     | Stdlib.Ok info ->
         (match !Mock_http.requests with
@@ -435,10 +435,10 @@ let test_debug_token_info_typed () =
              assert (query_param url "input_token" = tricky_token);
              assert (query_param url "access_token" = "1234|s3cr+t/=")
          | _ -> failwith "expected one GET for debug_token_info");
-        assert info.Meta_debug_token.is_valid;
-        assert (info.expires_at = Some Meta_debug_token.Never_expires);
-        assert (Meta_debug_token.granted_for_target ~target_id:"42" ~scope:"pages_manage_posts" info);
-        assert (not (Meta_debug_token.granted_for_target ~target_id:"43" ~scope:"pages_manage_posts" info));
+        assert info.Social_meta_debug_token.is_valid;
+        assert (info.expires_at = Some Social_meta_debug_token.Never_expires);
+        assert (Social_meta_debug_token.granted_for_target ~target_id:"42" ~scope:"pages_manage_posts" info);
+        assert (not (Social_meta_debug_token.granted_for_target ~target_id:"43" ~scope:"pages_manage_posts" info));
         print_endline "✓ debug_token_info returns the typed answer"
     | Stdlib.Error err -> failwith (Error_types.error_to_string err))
 

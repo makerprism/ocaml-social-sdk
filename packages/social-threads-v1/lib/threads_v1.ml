@@ -43,11 +43,11 @@ let token_endpoint = graph_api_host ^ "/oauth/access_token"
     Meta documents both graph hosts for the Threads API. *)
 let paging_url_hosts = [ "graph.threads.net"; "graph.threads.com" ]
 
-(* [Token_expiry] clamps to one year and also accepts a numeric string. *)
-let parse_expires_in json = Token_expiry.expires_in_of_json json
+(* [Social_token_expiry] clamps to one year and also accepts a numeric string. *)
+let parse_expires_in json = Social_token_expiry.expires_in_of_json json
 
 let expires_at_of_expires_in expires_in =
-  Option.bind expires_in (fun seconds -> Token_expiry.expires_at_of_expires_in seconds)
+  Option.bind expires_in (fun seconds -> Social_token_expiry.expires_at_of_expires_in seconds)
 
 let parse_credentials_from_json json =
   let open Yojson.Basic.Util in
@@ -348,7 +348,7 @@ module OAuth = struct
     let params =
       [ ("client_id", client_id);
         ("redirect_uri", redirect_uri);
-        ("scope", Oauth_scope.join Oauth_scope.Comma scopes);
+        ("scope", Social_oauth_scope.join Social_oauth_scope.Comma scopes);
         ("response_type", "code");
         ("state", state) ]
       @ extra_params
@@ -450,7 +450,7 @@ module OAuth = struct
         validity, granted scopes, expiry and user id as Meta recorded them.
 
         @param app_access_token The Threads app access token,
-          {!Meta_debug_token.threads_app_access_token}
+          {!Social_meta_debug_token.threads_app_access_token}
           (["TH|app_id|app_secret"],
           {{:https://developers.facebook.com/docs/threads/get-started/app-access-tokens}}),
           or a tester's user token for the same app. Keep it server-side.
@@ -467,7 +467,7 @@ module OAuth = struct
       Http.get url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
-            match Meta_debug_token.of_body response.body with
+            match Social_meta_debug_token.of_body response.body with
             | Stdlib.Ok info -> on_result (Stdlib.Ok info)
             | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
           else

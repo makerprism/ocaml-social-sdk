@@ -38,7 +38,7 @@ let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
 
 (** Parse expires_in from token response into RFC 3339 timestamp *)
 let expires_at_of_expires_in expires_in =
-  Token_expiry.expires_at_of_expires_in expires_in
+  Social_token_expiry.expires_at_of_expires_in expires_in
 
 (** {1 Typed reads} *)
 

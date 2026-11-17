@@ -702,7 +702,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
   
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    Token_expiry.is_expired ~buffer_seconds expires_at_opt
+    Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
   
   (** Refresh long-lived token (extends validity by 60 days) *)
   let refresh_token ~access_token on_success on_error =

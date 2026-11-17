@@ -359,7 +359,7 @@ module OAuth = struct
       [ ("client_id", client_id);
         ("redirect_uri", redirect_uri);
         ("response_type", "code");
-        ("scope", Oauth_scope.join Oauth_scope.Comma scopes);
+        ("scope", Social_oauth_scope.join Social_oauth_scope.Comma scopes);
         ("state", state) ]
       @ flag "enable_fb_login" enable_fb_login
       @ (match force_reauth with Some true -> [ ("force_reauth", "true") ] | Some false | None -> [])
@@ -825,7 +825,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
 
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
-    Token_expiry.is_expired ~buffer_seconds expires_at_opt
+    Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
 
   (** Refresh long-lived token (extends validity by 60 days) *)
   let refresh_token ~access_token on_success on_error =
