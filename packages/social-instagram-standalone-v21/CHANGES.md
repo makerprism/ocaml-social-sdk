@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- **This package is deprecated.** Meta makes Graph API v21.0 unavailable on 2027-01-21. Use `social-instagram-standalone-v25`. The package stays and still builds; it gets fixes only.
 - **`CONFIG.sleep : float -> (unit -> 'a) -> 'a` and `Make`.** The
   polymorphic return type can only be implemented by blocking the calling
   thread, which freezes an Lwt or Eio program for the whole backoff (up to

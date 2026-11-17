@@ -1,5 +1,7 @@
 # social-facebook-graph-v21
 
+> **Deprecated.** Meta makes Graph API v21.0 unavailable on 2027-01-21 ([Graph API versions](https://developers.facebook.com/docs/graph-api/changelog/versions)). Use `social-facebook-graph-v25`. This package stays in the repository and still builds, but gets no new features.
+
 OCaml library for Facebook Graph API v21 integration (Facebook Pages) with runtime-agnostic design.
 
 > **Status:** This package has automated unit tests in this repository. Real Facebook app/page integration behavior should still be validated in your environment.
@@ -36,11 +38,11 @@ dune install
 ### Basic Example
 
 ```ocaml
-open Social_provider_core
+open Social_core
 open Social_facebook_graph_v21
 
 module Config = struct
-  module Http = Social_provider_lwt.Cohttp_client
+  module Http = Social_lwt.Cohttp_client.Make
   
   let get_env = Sys.getenv_opt
   let get_credentials ~account_id on_success on_error = (* ... *)

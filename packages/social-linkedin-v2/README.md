@@ -62,12 +62,12 @@ dune install
 
 ```ocaml
 open Lwt.Syntax
-open Social_provider_core
+open Social_core
 open Social_linkedin_v2
 
 (* Configure the provider *)
 module Config = struct
-  module Http = Social_provider_lwt.Cohttp_client
+  module Http = Social_lwt.Cohttp_client.Make
   
   let get_env = Sys.getenv_opt
   

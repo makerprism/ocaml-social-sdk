@@ -1,5 +1,7 @@
 # social-instagram-graph-v21
 
+> **Deprecated.** Meta makes Graph API v21.0 unavailable on 2027-01-21 ([Graph API versions](https://developers.facebook.com/docs/graph-api/changelog/versions)). There is no v25 package for Instagram via Facebook Login yet. For Instagram Business Login use `social-instagram-standalone-v25`. This package stays in the repository and still builds, but gets no new features.
+
 OCaml library for Instagram Graph API v21 integration (Business accounts) with runtime-agnostic design.
 
 > **Warning:** This library was primarily built using LLMs and has not been tested. Expect breaking changes.
@@ -43,11 +45,11 @@ dune install
 ### Basic Example - Single Image
 
 ```ocaml
-open Social_provider_core
+open Social_core
 open Social_instagram_graph_v21
 
 module Config = struct
-  module Http = Social_provider_lwt.Cohttp_client
+  module Http = Social_lwt.Cohttp_client.Make
   
   let get_env = Sys.getenv_opt
   let get_credentials ~account_id on_success on_error = (* ... *)

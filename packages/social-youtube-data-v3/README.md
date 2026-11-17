@@ -26,11 +26,11 @@ dune install
 ### Basic Example
 
 ```ocaml
-open Social_provider_core
+open Social_core
 open Social_youtube_data_v3
 
 module Config = struct
-  module Http = Social_provider_lwt.Cohttp_client
+  module Http = Social_lwt.Cohttp_client.Make
   (* ... other required functions *)
 end
 

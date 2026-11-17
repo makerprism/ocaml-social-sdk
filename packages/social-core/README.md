@@ -39,7 +39,7 @@ This package is meant to be used as a dependency for provider implementations. E
 
 ```ocaml
 (* Implement the HTTP_CLIENT interface with your HTTP library *)
-module My_http_client : Social_provider_core.HTTP_CLIENT = struct
+module My_http_client : Social_core.HTTP_CLIENT = struct
   let get ?headers url on_success on_error =
     (* Your HTTP implementation here *)
     ...
