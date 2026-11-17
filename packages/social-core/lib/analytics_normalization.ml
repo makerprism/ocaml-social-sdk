@@ -58,7 +58,18 @@ let facebook_metrics =
     ("post_impressions_organic_unique", Reach);
     ("post_reactions_by_type_total", Reactions);
     ("post_clicks", Clicks);
-    ("post_clicks_by_type", Clicks) ]
+    ("post_clicks_by_type", Clicks);
+    (* v25 metrics that replace the deprecated impression and fan metrics
+       (https://developers.facebook.com/docs/platforminsights/page/deprecated-metrics).
+       [page_follows] is the follower total per day, [page_daily_follows_unique]
+       the daily gain. *)
+    ("page_media_view", Views);
+    ("page_total_media_view_unique", Reach);
+    ("page_follows", Followers);
+    ("page_daily_follows_unique", Follows);
+    ("post_media_view", Views);
+    ("fb_reels_total_plays", Views);
+    ("total_video_views", Views) ]
 
 let instagram_metrics =
   [ ("follower_count", Followers);

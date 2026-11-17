@@ -31,6 +31,10 @@ let token_endpoint = graph_api_base ^ "/oauth/access_token"
     {!Facebook_graph_v25_comments}. *)
 module Comments = Facebook_graph_v25_comments
 
+(** Page, post and video insights metric sets and response types; see
+    {!Facebook_graph_v25_insights}. *)
+module Insights = Facebook_graph_v25_insights
+
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it
     ({!Social_meta_graph_paging.resolve_page_url}). *)
@@ -2610,6 +2614,13 @@ module Make (Config : CONFIG) = struct
 
   (** Account analytics via page insights endpoint.
 
+      Deprecated: [page_impressions_unique] and
+      [page_posts_impressions_unique] are on Meta's list of Page metrics
+      that return an invalid-metric error on every API version
+      ({!Insights}). New code should use {!get_page_insights}, which
+      requests the v25 metrics ({!Insights.page_metrics}). This function
+      keeps its metric set so its record keeps its meaning.
+
       Contract:
       GET https://graph.facebook.com/v25.0/{id}/insights
           ?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views
@@ -2617,10 +2628,14 @@ module Make (Config : CONFIG) = struct
           &since=...
           &until=...
           &access_token=...
+          [&appsecret_proof=...]
+      Authorization: Bearer <token>
   *)
   let get_account_analytics ~id ~since ~until ~access_token on_result =
-    (* Built with [Uri.encoded_of_query] so a token (or [since]/[until])
-       containing a reserved character cannot change or split the query. *)
+    (* The query is percent-encoded, the token also travels as a Bearer
+       header and, when FACEBOOK_APP_SECRET is set, with appsecret_proof
+       ({!get_url}). The token stays in the query because Page insights
+       have been seen to need it there even with the header. *)
     let query =
       Uri.encoded_of_query
         [ ("metric", [ account_analytics_metrics ]);
@@ -2630,30 +2645,17 @@ module Make (Config : CONFIG) = struct
           ("access_token", [ access_token ]) ]
     in
     let url = Printf.sprintf "%s/%s/insights?%s" graph_api_base id query in
-    Config.Http.get url
-      (fun response ->
-        update_rate_limits response;
-        if response.status >= 200 && response.status < 300 then
-          try
-            let json = Yojson.Basic.from_string response.body in
-            on_result (Ok (parse_account_analytics json))
-          with e ->
+    get_url ~url ~access_token ~required_permissions:[ "pages_read_engagement" ]
+      (function
+        | Error err -> on_result (Error err)
+        | Ok response ->
             on_result
-              (Error
-                 (Error_types.Internal_error
-                    (Printf.sprintf
-                       "Failed to parse account analytics response: %s"
-                       (Printexc.to_string e))))
-        else
-          on_result
-            (Error
-               (parse_api_error_with_permissions
-                  ~required_permissions:[ "pages_read_engagement" ]
-                  ~status_code:response.status
-                  ~response_body:response.body)))
-      (fun err ->
-        on_result
-          (Error (transport_error err)))
+              (try Ok (parse_account_analytics (Yojson.Basic.from_string response.body))
+               with e ->
+                 Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse account analytics response: %s"
+                         (Printexc.to_string e)))))
 
   let get_account_analytics_canonical ~id ~since ~until ~access_token on_result =
     let time_range =
@@ -2696,10 +2698,16 @@ module Make (Config : CONFIG) = struct
       media posts and want the simpler per-post API. New code should
       prefer [get_page_posts] unless there's a specific reason not to.
 
+      Deprecated: it requests [post_impressions_unique], which Meta lists
+      as deprecated (alternative [post_total_media_view_unique]). New code
+      should use {!get_post_insights}.
+
       Contract:
       GET https://graph.facebook.com/v25.0/{post_id}/insights
-          ?metric=post_total_media_view_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type
+          ?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type
           &access_token=...
+          [&appsecret_proof=...]
+      Authorization: Bearer <token>
   *)
   let get_post_analytics ~post_id ~access_token on_result =
     let query =
@@ -2708,30 +2716,17 @@ module Make (Config : CONFIG) = struct
           ("access_token", [ access_token ]) ]
     in
     let url = Printf.sprintf "%s/%s/insights?%s" graph_api_base post_id query in
-    Config.Http.get url
-      (fun response ->
-        update_rate_limits response;
-        if response.status >= 200 && response.status < 300 then
-          try
-            let json = Yojson.Basic.from_string response.body in
-            on_result (Ok (parse_post_analytics json))
-          with e ->
+    get_url ~url ~access_token ~required_permissions:[ "pages_read_engagement" ]
+      (function
+        | Error err -> on_result (Error err)
+        | Ok response ->
             on_result
-              (Error
-                 (Error_types.Internal_error
-                    (Printf.sprintf
-                       "Failed to parse post analytics response: %s"
-                       (Printexc.to_string e))))
-        else
-          on_result
-            (Error
-               (parse_api_error_with_permissions
-                  ~required_permissions:[ "pages_read_engagement" ]
-                  ~status_code:response.status
-                  ~response_body:response.body)))
-      (fun err ->
-        on_result
-          (Error (transport_error err)))
+              (try Ok (parse_post_analytics (Yojson.Basic.from_string response.body))
+               with e ->
+                 Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse post analytics response: %s"
+                         (Printexc.to_string e)))))
 
   (** Canonical-series wrapper around [get_post_analytics]. Same
       caveats apply: this is the legacy per-post path that fails
@@ -2745,6 +2740,90 @@ module Make (Config : CONFIG) = struct
             on_result (Ok (to_canonical_post_analytics_series analytics))
         | Error err -> on_result (Error err))
   
+  (** {1 Typed insights (v25 metrics)}
+
+      [GET /{object-id}/insights] and [GET /{video-id}/video_insights]
+      with a caller-chosen metric list, parsed into {!Insights.metric}.
+      The token travels as a Bearer header and in the query (Page
+      insights have been seen to need it there), with [appsecret_proof]
+      when FACEBOOK_APP_SECRET is set; every value is percent-encoded.
+      One invalid metric fails the whole call, so check custom lists
+      against {!Insights.is_deprecated_metric}.
+      {{:https://developers.facebook.com/docs/graph-api/reference/insights}} *)
+
+  let insights_read_permissions = [ "read_insights"; "pages_read_engagement" ]
+
+  let get_insights_edge ~path ~access_token ~metrics ?period ?since ?until on_result =
+    let optional key = function Some value -> [ (key, [ value ]) ] | None -> [] in
+    let query =
+      Uri.encoded_of_query
+        ([ ("metric", [ String.concat "," metrics ]) ]
+        @ optional "period" (Option.map Insights.period_to_string period)
+        @ optional "since" since @ optional "until" until
+        @ [ ("access_token", [ access_token ]) ])
+    in
+    let url = Printf.sprintf "%s/%s?%s" graph_api_base path query in
+    get_url ~url ~access_token ~required_permissions:insights_read_permissions (function
+      | Error err -> on_result (Error err)
+      | Ok response -> (
+          match Insights.parse response.body with
+          | Ok metrics -> on_result (Ok metrics)
+          | Error msg ->
+              on_result
+                (Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse insights response: %s" msg)))))
+
+  (** Page insights, [period=day] and {!Insights.page_metrics} by default.
+      [since] / [until] are Unix timestamps or dates; one window spans at
+      most 90 days. [page_follows] is the follower total per day; the
+      daily gain is [page_daily_follows_unique]. *)
+  let get_page_insights ~page_id ~access_token ?(metrics = Insights.page_metrics)
+      ?(period = Insights.Day) ?since ?until on_result =
+    get_insights_edge
+      ~path:(Uri.pct_encode page_id ^ "/insights")
+      ~access_token ~metrics ~period ?since ?until on_result
+
+  (** {!get_page_insights} for the account's Page, with its stored token. *)
+  let get_page_insights_for_account ~account_id ?metrics ?period ?since ?until on_result =
+    with_posting_page_context ~account_id
+      (fun page_id access_token ->
+        get_page_insights ~page_id ~access_token ?metrics ?period ?since ?until on_result)
+      (fun err -> on_result (Error err))
+
+  (** Post insights, {!Insights.post_metrics} by default (lifetime
+      values). Meta answers [(#12) singular statuses API is deprecated] for
+      text-only status posts; read those through {!get_page_posts}. *)
+  let get_post_insights ~post_id ~access_token ?(metrics = Insights.post_metrics) ?period
+      on_result =
+    get_insights_edge
+      ~path:(Uri.pct_encode post_id ^ "/insights")
+      ~access_token ~metrics ?period on_result
+
+  (** {!get_post_insights} with the account's stored Page token. *)
+  let get_post_insights_for_account ~account_id ~post_id ?metrics ?period on_result =
+    ensure_valid_token ~account_id
+      (fun access_token -> get_post_insights ~post_id ~access_token ?metrics ?period on_result)
+      (fun err -> on_result (Error err))
+
+  (** Video and Reels insights, [GET /{video_id}/video_insights]:
+      {!Insights.reels_metrics} and [period=lifetime] by default; pass
+      {!Insights.video_metrics} for a regular video. A Reel posted to a
+      Page appears in its feed with the video id at
+      [attachments.data[0].target.id].
+      {{:https://developers.facebook.com/docs/graph-api/reference/video/video_insights}} *)
+  let get_video_insights ~video_id ~access_token ?(metrics = Insights.reels_metrics)
+      ?(period = Insights.Lifetime) on_result =
+    get_insights_edge
+      ~path:(Uri.pct_encode video_id ^ "/video_insights")
+      ~access_token ~metrics ~period on_result
+
+  (** {!get_video_insights} with the account's stored Page token. *)
+  let get_video_insights_for_account ~account_id ~video_id ?metrics ?period on_result =
+    ensure_valid_token ~account_id
+      (fun access_token -> get_video_insights ~video_id ~access_token ?metrics ?period on_result)
+      (fun err -> on_result (Error err))
+
   (** {1 Generic API Methods} *)
   
   (** Generic GET request to any Graph API endpoint.

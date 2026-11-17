@@ -60,6 +60,12 @@ let test_provider_mappings () =
     ~context:"youtube viewCount"
     ~expected:Views
     (youtube_metric_to_canonical "viewCount");
+  List.iter
+    (fun (name, expected) ->
+      assert_metric ~context:("facebook " ^ name) ~expected (facebook_metric_to_canonical name))
+    [ ("page_media_view", Views); ("page_total_media_view_unique", Reach);
+      ("page_follows", Followers); ("page_daily_follows_unique", Follows);
+      ("post_media_view", Views); ("fb_reels_total_plays", Views) ];
   print_endline "ok: provider mapping rules";
 
   if facebook_metric_to_canonical "does_not_exist" <> None then

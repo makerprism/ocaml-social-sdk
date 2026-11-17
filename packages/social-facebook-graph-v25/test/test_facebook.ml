@@ -1006,7 +1006,7 @@ let test_account_analytics_request_contract () =
           (match !Mock_http.requests with
           | (method_, url, headers, body) :: _ ->
               assert (method_ = "GET");
-              assert (headers = []);
+              assert (headers = [ ("Authorization", "Bearer acct_token") ]);
               assert (body = "");
               assert_insights_url url
                 ~path:"/v25.0/12345/insights"
@@ -1043,7 +1043,7 @@ let test_post_analytics_request_contract () =
           (match !Mock_http.requests with
           | (method_, url, headers, body) :: _ ->
               assert (method_ = "GET");
-              assert (headers = []);
+              assert (headers = [ ("Authorization", "Bearer post_token") ]);
               assert (body = "");
               assert_insights_url url
                 ~path:"/v25.0/12345_67890/insights"
@@ -3632,6 +3632,179 @@ let test_comment_moderation_failures () =
   assert (!Mock_http.requests = []);
   print_endline "✓ Comment moderation failures"
 
+(* Response shape from https://developers.facebook.com/docs/platforminsights/page
+   (data[] with name, period, values[{value, end_time}], title, description,
+   id, plus paging); [page_follows] is a daily follower total. *)
+let documented_page_insights_body =
+  {|{"data":[
+    {"name":"page_media_view","period":"day",
+     "values":[{"value":120,"end_time":"2026-11-15T08:00:00+0000"},
+               {"value":95,"end_time":"2026-11-16T08:00:00+0000"}],
+     "title":"Daily Media Views","description":"Daily: media views.",
+     "id":"1234/insights/page_media_view/day"},
+    {"name":"page_total_media_view_unique","period":"day",
+     "values":[{"value":80,"end_time":"2026-11-16T08:00:00+0000"}],
+     "title":"Daily Total Media View Unique","description":"Daily: viewers.",
+     "id":"1234/insights/page_total_media_view_unique/day"},
+    {"name":"page_follows","period":"day",
+     "values":[{"value":1500,"end_time":"2026-11-15T08:00:00+0000"},
+               {"value":1503,"end_time":"2026-11-16T08:00:00+0000"}],
+     "title":"Followers","description":"follows","id":"1234/insights/page_follows/day"}],
+   "paging":{"previous":"https://graph.facebook.com/v25.0/1234/insights?since=1&until=2",
+             "next":"https://graph.facebook.com/v25.0/1234/insights?since=3&until=4"}}|}
+
+let test_page_insights_v25_contract () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "appsecret";
+  let token = "EAAB+x/y=z&appsecret_proof=forged|secret" in
+  Mock_http.set_response { status = 200; body = documented_page_insights_body; headers = [] };
+  Facebook.get_page_insights ~page_id:"1234" ~access_token:token ~since:"1763164800"
+    ~until:"1763337600" (function
+    | Error e -> failwith ("page insights: " ^ Error_types.error_to_string e)
+    | Ok metrics ->
+        assert (List.length metrics = 3);
+        assert (Insights.latest_count "page_follows" metrics = Some 1503);
+        assert (Insights.latest_count "page_media_view" metrics = Some 95);
+        (match Insights.find "page_media_view" metrics with
+         | Some { period = Some Insights.Day; title = Some "Daily Media Views"; points = [ _; { end_time = Some "2026-11-16T08:00:00+0000"; _ } ]; _ } -> ()
+         | _ -> failwith "page_media_view should have two daily points");
+        let series = Insights.to_canonical_series ~scope:Analytics_types.Page metrics in
+        let canonical metric =
+          List.find_opt (fun (s : Analytics_types.series) -> s.metric = metric) series
+        in
+        (match canonical Analytics_types.Followers with
+         | Some s -> assert (s.provider_metric = Some "page_follows" && List.length s.points = 2)
+         | None -> failwith "page_follows should be the Followers series");
+        assert (canonical Analytics_types.Reach <> None);
+        assert (canonical Analytics_types.Views <> None));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.host uri = Some "graph.facebook.com");
+       assert (Uri.path uri = "/v25.0/1234/insights");
+       assert (Uri.get_query_param uri "metric" = Some (String.concat "," Insights.page_metrics));
+       assert (Uri.get_query_param uri "period" = Some "day");
+       assert (Uri.get_query_param uri "since" = Some "1763164800");
+       assert (Uri.get_query_param uri "until" = Some "1763337600");
+       assert (Uri.get_query_param uri "access_token" = Some token);
+       assert (Uri.get_query_param uri "appsecret_proof"
+               = Some (OAuth.app_secret_proof ~app_secret:"appsecret" ~access_token:token));
+       assert (List.assoc_opt "Authorization" headers = Some ("Bearer " ^ token))
+   | _ -> failwith "expected one GET");
+  print_endline "✓ Page insights v25 contract (encoded token, appsecret_proof)"
+
+let test_insights_default_metrics_not_deprecated () =
+  List.iter
+    (fun metric ->
+      if Insights.is_deprecated_metric metric then failwith ("deprecated default metric: " ^ metric))
+    (Insights.page_metrics @ Insights.post_metrics @ Insights.reels_metrics @ Insights.video_metrics);
+  assert (Insights.is_deprecated_metric "page_impressions_unique");
+  assert (Insights.is_deprecated_metric " post_impressions_unique ");
+  assert (List.for_all Insights.is_deprecated_metric
+            (String.split_on_char ',' Facebook.account_analytics_metrics
+             |> List.filter (fun m -> String.starts_with ~prefix:"page_impressions" m
+                                      || String.starts_with ~prefix:"page_posts" m)));
+  print_endline "✓ Insights default metric sets avoid deprecated metrics"
+
+(* Lifetime post values carry no end_time; *_by_type metrics carry an object
+   of counts (https://developers.facebook.com/docs/platforminsights/page). *)
+let test_post_insights_by_type () =
+  Mock_config.reset ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"data":[
+        {"name":"post_media_view","period":"lifetime","values":[{"value":300}],
+         "title":"Lifetime Media Views","id":"1_2/insights/post_media_view/lifetime"},
+        {"name":"post_reactions_by_type_total","period":"lifetime",
+         "values":[{"value":{"like":5,"love":2}}],"id":"1_2/insights/post_reactions_by_type_total/lifetime"},
+        {"name":"post_clicks","period":"lifetime","values":[{"value":11}]}]}|} };
+  Facebook.get_post_insights ~post_id:"1_2" ~access_token:"t" (function
+    | Error e -> failwith (Error_types.error_to_string e)
+    | Ok metrics ->
+        assert (Insights.by_type "post_reactions_by_type_total" metrics = Some [ ("like", 5); ("love", 2) ]);
+        assert (Insights.latest_count "post_reactions_by_type_total" metrics = Some 7);
+        (match Insights.find "post_media_view" metrics with
+         | Some { period = Some Insights.Lifetime; points = [ { value = Insights.Count 300; end_time = None } ]; _ } -> ()
+         | _ -> failwith "post_media_view should be one lifetime count");
+        let series = Insights.to_canonical_series ~scope:Analytics_types.Post metrics in
+        assert (List.exists (fun (s : Analytics_types.series) ->
+          s.metric = Analytics_types.Reactions && s.points = [ Analytics_types.make_datapoint 7 ]) series));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v25.0/1_2/insights");
+       assert (Uri.get_query_param uri "metric" = Some (String.concat "," Insights.post_metrics));
+       assert (Uri.get_query_param uri "period" = None)
+   | _ -> failwith "expected one GET");
+  Mock_config.reset ();
+  Mock_http.set_response
+    { status = 200; headers = []; body = {|{"data":[{"name":"post_clicks","values":[{"value":"many"}]}]}|} };
+  Facebook.get_post_insights ~post_id:"1_2" ~access_token:"t" (function
+    | Error (Error_types.Internal_error msg) -> assert (string_contains msg "post_clicks")
+    | _ -> failwith "a non-numeric value is a parse error");
+  print_endline "✓ Post insights by-type values"
+
+let test_video_insights_reels () =
+  Mock_config.reset ();
+  Mock_http.set_response
+    { status = 200; headers = [];
+      body = {|{"data":[
+        {"name":"fb_reels_total_plays","period":"lifetime","values":[{"value":4200}],
+         "title":"Total plays","id":"987/video_insights/fb_reels_total_plays/lifetime"},
+        {"name":"post_video_avg_time_watched","period":"lifetime","values":[{"value":5321.5}],
+         "id":"987/video_insights/post_video_avg_time_watched/lifetime"}],"paging":{}}|} };
+  Facebook.get_video_insights ~video_id:"987" ~access_token:"t" (function
+    | Error e -> failwith (Error_types.error_to_string e)
+    | Ok metrics ->
+        assert (Insights.latest_count "fb_reels_total_plays" metrics = Some 4200);
+        assert (Insights.latest_count "post_video_avg_time_watched" metrics = Some 5321));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v25.0/987/video_insights");
+       assert (Uri.get_query_param uri "metric" = Some (String.concat "," Insights.reels_metrics));
+       assert (Uri.get_query_param uri "period" = Some "lifetime")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ Video insights (Reels) contract"
+
+let test_page_insights_for_account () =
+  Mock_config.reset ();
+  Mock_config.set_credentials ~account_id:"acct"
+    ~credentials:{ access_token = "page_tok"; refresh_token = None; expires_at = None;
+                   auth_type = Bearer; scope = None };
+  Mock_config._set_page_id ~account_id:"acct" ~page_id:"pg-1";
+  Mock_http.set_response { status = 200; headers = []; body = {|{"data":[]}|} };
+  Facebook.get_page_insights_for_account ~account_id:"acct" ~metrics:[ "page_follows" ] (function
+    | Ok [] -> ()
+    | Ok _ -> failwith "expected no metrics"
+    | Error e -> failwith (Error_types.error_to_string e));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v25.0/pg-1/insights");
+       assert (Uri.get_query_param uri "metric" = Some "page_follows");
+       assert (Uri.get_query_param uri "access_token" = Some "page_tok")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ Page insights for account"
+
+(* Regression: the legacy analytics calls sent no appsecret_proof, so apps
+   with "Require App Secret" enabled could not read insights. *)
+let test_legacy_analytics_send_appsecret_proof () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "appsecret";
+  Mock_http.set_response { status = 200; body = {|{"data": []}|}; headers = [] };
+  Facebook.get_account_analytics ~id:"12345" ~since:"2024-01-01" ~until:"2024-01-07"
+    ~access_token:"tok" (fun _ -> ());
+  Mock_http.set_response { status = 200; body = {|{"data": []}|}; headers = [] };
+  Facebook.get_post_analytics ~post_id:"1_2" ~access_token:"tok" (fun _ -> ());
+  let proof = OAuth.app_secret_proof ~app_secret:"appsecret" ~access_token:"tok" in
+  assert (List.length !Mock_http.requests = 2);
+  List.iter
+    (fun (_, url, _, _) ->
+      assert (Uri.get_query_param (Uri.of_string url) "appsecret_proof" = Some proof))
+    !Mock_http.requests;
+  print_endline "✓ Legacy analytics send appsecret_proof"
+
 let () =
   print_endline "\n=== Facebook Provider Tests ===\n";
   
@@ -3676,6 +3849,12 @@ let () =
   test_account_analytics_request_contract ();
   test_post_analytics_request_contract ();
   test_analytics_encode_reserved_token_chars ();
+  test_page_insights_v25_contract ();
+  test_insights_default_metrics_not_deprecated ();
+  test_post_insights_by_type ();
+  test_video_insights_reels ();
+  test_page_insights_for_account ();
+  test_legacy_analytics_send_appsecret_proof ();
   test_account_analytics_parsing ();
   test_post_analytics_parsing ();
   test_post_analytics_parsing_legacy_unique ();

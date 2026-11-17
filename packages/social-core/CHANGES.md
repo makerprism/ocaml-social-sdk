@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Analytics_normalization.facebook_metrics` knows the v25 Page/post/video metrics: `page_media_view` and `post_media_view` (Views), `page_total_media_view_unique` (Reach), `page_follows` (Followers, the follower total), `page_daily_follows_unique` (Follows, the daily gain), `fb_reels_total_plays` and `total_video_views` (Views). Existing mappings are unchanged.
 - **Renamed before any release**: the modules added for token tooling are now `Social_oauth_scope`, `Social_token_expiry` and `Social_meta_debug_token` (were `Oauth_scope`, `Token_expiry`, `Meta_debug_token`, briefly on main since 884f218 / 69fbb7c). `social-core` is `(wrapped false)`, so its module names share the consumer's global namespace; an unprefixed `Meta_debug_token` clashed with an application module of the same name ("inconsistent assumptions over interface"). New modules in this package carry the `Social_` prefix.
 - `Social_meta_debug_token`: the typed answer of Meta's `debug_token` endpoint,
   shared by the Facebook and Threads packages. `t` carries `is_valid`,
