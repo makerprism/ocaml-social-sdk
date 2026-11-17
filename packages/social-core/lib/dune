@@ -13,6 +13,7 @@
   error_types
   provider_error_detail
   meta_graph_error
+  meta_graph_paging
   health_status
   secure_random
   oauth_pkce
@@ -25,4 +26,5 @@
   digestif
   base64
   ptime
-  ptime.clock.os))
+  ptime.clock.os
+  uri))

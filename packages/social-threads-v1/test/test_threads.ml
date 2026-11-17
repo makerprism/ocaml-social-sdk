@@ -4859,6 +4859,166 @@ let test_debug_token_info () =
     | Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
     | Ok _ -> failwith "expected an error");
   print_endline "ok: Threads debug_token_info reads the typed answer"
+(* A /conversation page as Meta returns it with reverse=true: a flat list,
+   nested replies placed by replied_to, and a paging.next URL that echoes
+   the access token. *)
+let conversation_page_body ~next =
+  Printf.sprintf
+    {|{"data":[
+      {"id":"18050206876707110","text":"Thanks!","username":"bob","permalink":"https://www.threads.com/@bob/post/C9xYz","timestamp":"2026-11-16T10:05:00+0000","media_type":"TEXT_POST","shortcode":"C9xYz","is_quote_post":false,"has_replies":false,"root_post":{"id":"18040000000000001"},"replied_to":{"id":"18049999999999999"},"is_reply":true,"is_reply_owned_by_me":false,"hide_status":"NOT_HUSHED"},
+      {"id":"18049999999999999","text":"Great post","username":"alice","permalink":"https://www.threads.com/@alice/post/C9xYa","timestamp":"2026-11-16T09:00:00+0000","media_type":"TEXT_POST","shortcode":"C9xYa","is_quote_post":false,"has_replies":true,"root_post":{"id":"18040000000000001"},"replied_to":{"id":"18040000000000001"},"is_reply":true,"is_reply_owned_by_me":false,"hide_status":"HIDDEN"}],
+     "paging":{"cursors":{"before":"QVFIUkJ","after":"QVFIUkF"}%s}}|}
+    (match next with
+     | Some url -> Printf.sprintf {|,"next":%S|} url
+     | None -> "")
+
+let test_get_conversation_page_with_token () =
+  Mock_config.reset ();
+  let next =
+    "https://graph.threads.net/v1.0/18040000000000001/conversation?fields=id%2Ctext&reverse=true&limit=2&access_token=OLD-TOKEN&after=QVFIUkF"
+  in
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = conversation_page_body ~next:(Some next) } ];
+  let token = "tok+en/with=&reserved" in
+  Threads.get_conversation_page ~access_token:token ~media_id:"18040000000000001"
+    ~reverse:true ~limit:2
+    (function
+      | Ok page ->
+          (match page.data with
+           | [ nested; top ] ->
+               assert (nested.replied_to_id = Some "18049999999999999");
+               assert (nested.root_post_id = Some "18040000000000001");
+               assert (nested.username = Some "bob");
+               assert (not nested.has_replies);
+               assert top.has_replies;
+               assert (top.hide_status = Some Social_threads_v1.Hidden)
+           | _ -> failwith "expected two replies");
+          assert (page.next_url = Some next);
+          assert (Meta_graph_paging.next_after page = Some "QVFIUkF")
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v1.0/18040000000000001/conversation");
+       assert (Uri.get_query_param uri "access_token" = Some token);
+       assert (Uri.get_query_param uri "reverse" = Some "true");
+       assert (Uri.get_query_param uri "limit" = Some "2");
+       assert (Uri.get_query_param uri "after" = None);
+       assert_reply_fields_requested url
+   | _ -> failwith "expected one GET");
+  print_endline "ok: get_conversation_page with token"
+
+let test_reply_page_cursor_positions () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = conversation_page_body ~next:None };
+      { status = 200; headers = []; body = conversation_page_body ~next:None } ];
+  let check_page = function
+    | Ok page ->
+        assert (not (Meta_graph_paging.has_next page));
+        (* Meta returns an after cursor on the last page too *)
+        assert (Meta_graph_paging.next_after page = None)
+    | Error err -> failwith (Error_types.error_to_string err)
+  in
+  Threads.get_replies_page ~access_token:"t" ~media_id:"m"
+    ~position:(Meta_graph_paging.After "QVFIUkF") check_page;
+  Threads.get_replies_page ~access_token:"t" ~media_id:"m"
+    ~position:(Meta_graph_paging.Before "QVFIUkJ") check_page;
+  (match List.rev !Mock_http.requests with
+   | [ ("GET", after_url, _, _); ("GET", before_url, _, _) ] ->
+       assert (Uri.path (Uri.of_string after_url) = "/v1.0/m/replies");
+       assert (query_param after_url "after" = "QVFIUkF");
+       assert (Uri.get_query_param (Uri.of_string after_url) "before" = None);
+       assert (query_param before_url "before" = "QVFIUkJ");
+       assert (Uri.get_query_param (Uri.of_string before_url) "after" = None)
+   | _ -> failwith "expected two GETs");
+  print_endline "ok: reply page cursor positions"
+
+let test_reply_page_follows_next_url () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = conversation_page_body ~next:None } ];
+  let next =
+    "https://graph.threads.com/v1.0/18040000000000001/conversation?fields=id%2Ctext%2Creplied_to&reverse=true&limit=2&access_token=OLD-TOKEN&after=QVFIUkF"
+  in
+  Threads.get_conversation_page ~access_token:"NEW-TOKEN" ~media_id:"ignored"
+    ~position:(Meta_graph_paging.Page_url next)
+    (function
+      | Ok page -> assert (List.length page.data = 2)
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.host uri = Some "graph.threads.com");
+       assert (Uri.path uri = "/v1.0/18040000000000001/conversation");
+       assert (Uri.get_query_param uri "access_token" = Some "NEW-TOKEN");
+       assert (List.length (List.filter (fun (k, _) -> k = "access_token") (Uri.query uri)) = 1);
+       assert (Uri.get_query_param uri "after" = Some "QVFIUkF");
+       assert (Uri.get_query_param uri "fields" = Some "id,text,replied_to")
+   | _ -> failwith "expected one GET");
+  print_endline "ok: reply page follows next url"
+
+let test_reply_page_rejects_foreign_next_url () =
+  List.iter
+    (fun url ->
+      Mock_config.reset ();
+      Threads.get_conversation_page ~access_token:"SECRET" ~media_id:"m"
+        ~position:(Meta_graph_paging.Page_url url)
+        (function
+          | Error (Error_types.Validation_error [ Error_types.Invalid_url _ ]) -> ()
+          | _ -> failwith ("expected a validation error for " ^ url));
+      assert (!Mock_http.requests = []))
+    [ "https://attacker.example/v1.0/m/conversation?after=x";
+      "http://graph.threads.net/v1.0/m/conversation?after=x";
+      "https://graph.threads.net/v1.0/m/replies?after=x" ];
+  print_endline "ok: reply page rejects foreign next url"
+
+let test_pending_replies_page_with_token () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body = {|{"data":[{"id":"p-1","text":"pending reply","username":"carol","is_reply":true,"replied_to":{"id":"root-1"},"root_post":{"id":"root-1"},"reply_approval_status":"pending"}]}|} } ];
+  Threads.get_pending_replies_page ~access_token:"t" ~media_id:"root-1"
+    ~approval_status:Social_threads_v1.Approval_pending
+    (function
+      | Ok { data = [ reply ]; next_url = None; _ } ->
+          assert (reply.reply_approval_status = Some Social_threads_v1.Approval_pending)
+      | Ok _ -> failwith "expected one pending reply"
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       assert (Uri.path (Uri.of_string url) = "/v1.0/root-1/pending_replies");
+       assert (query_param url "approval_status" = "pending");
+       assert (List.mem "reply_approval_status" (field_set url))
+   | _ -> failwith "expected one GET");
+  print_endline "ok: pending replies page with token"
+
+let test_manage_reply_with_token () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"success":true}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} } ];
+  Threads.manage_reply ~access_token:"tok" ~reply_id:"r-1" ~hide:true (function
+    | Ok () -> ()
+    | Error err -> failwith (Error_types.error_to_string err));
+  Threads.manage_pending_reply ~access_token:"tok" ~reply_id:"r-2" ~approve:false
+    (function
+      | Ok () -> ()
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match List.rev !Mock_http.requests with
+   | [ ("POST", hide_url, _, hide_body); ("POST", pending_url, _, pending_body) ] ->
+       assert (String.ends_with ~suffix:"/v1.0/r-1/manage_reply" hide_url);
+       assert (string_contains hide_body "hide=true");
+       assert (string_contains hide_body "access_token=tok");
+       assert (String.ends_with ~suffix:"/v1.0/r-2/manage_pending_reply" pending_url);
+       assert (string_contains pending_body "approve=false")
+   | _ -> failwith "expected two POSTs");
+  Mock_config.reset ();
+  Threads.manage_reply ~access_token:"tok" ~reply_id:" " ~hide:false (function
+    | Error (Error_types.Validation_error _) -> ()
+    | _ -> failwith "expected a validation error");
+  assert (!Mock_http.requests = []);
+  print_endline "ok: manage_reply / manage_pending_reply with token"
 
 let () =
   test_oauth_url ();
@@ -5042,4 +5202,10 @@ let () =
   test_get_permalink ();
   test_get_permalink_for_account ();
   test_parse_permalink_response ();
+  test_get_conversation_page_with_token ();
+  test_reply_page_cursor_positions ();
+  test_reply_page_follows_next_url ();
+  test_reply_page_rejects_foreign_next_url ();
+  test_pending_replies_page_with_token ();
+  test_manage_reply_with_token ();
   print_endline "Threads tests passed"
