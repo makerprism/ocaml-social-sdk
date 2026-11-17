@@ -5286,109 +5286,332 @@ let test_comments_count_cap () =
       (fun err -> failwith ("Comments count cap test failed: " ^ err)))
 
 (** {1 Video Upload Tests}
-    
-    LinkedIn video upload follows the same register/upload pattern as images:
-    1. Register upload with "video" recipe
-    2. Upload binary to returned URL
-    3. Include asset URN in post with VIDEO media category
-    
-    Note: LinkedIn supports videos up to 200MB for standard accounts.
-    Videos longer than 10 minutes may be rejected.
-    
-    Gap vs ebx-linkedin-sdk (Java):
-    - Our implementation uses single-chunk upload
-    - For large videos (>200MB), chunked upload with ETags is needed
-    - ebx-linkedin-sdk implements full chunked upload with ETags collection
-    
+
+    The Videos API flow, with response shapes from the docs:
+    1. [POST /rest/videos?action=initializeUpload] with [owner] and
+       [fileSizeBytes]; the response lists [uploadInstructions] (4 MiB parts)
+    2. [PUT] each part to its [uploadUrl]; each answers an [ETag]
+    3. [POST /rest/videos?action=finalizeUpload] with the [uploadToken] and
+       the ETags in instruction order
+    4. With a timer, [GET /rest/videos/{urn}] until [AVAILABLE]
+    5. [POST /rest/posts] with [content.media.id] = the video URN
+
     @see <https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api>
 *)
 
-(** Helper to create mock responses for video upload *)
-let make_video_upload_responses () =
-  (* 1. GET userinfo *)
-  let userinfo_response = { status = 200; body = {|{"sub": "user123"}|}; headers = [] } in
-  (* 2. GET video URL - fake binary data *)
-  let video_response = { status = 200; body = "fake_video_binary_data"; headers = [] } in
-  (* 3. POST register upload via /rest/videos *)
-  let register_response = { status = 200; body = {|{"value": {"video": "urn:li:video:video456", "uploadUrl": "https://api.linkedin.com/upload/video/123"}}|}; headers = [] } in
-  (* 4. PUT upload binary *)
-  let upload_response = { status = 200; body = ""; headers = [] } in
-  (* 5. POST create post via /rest/posts *)
-  let create_response = { status = 201; body = {|{"id": "urn:li:share:video789"}|}; headers = [] } in
-  [userinfo_response; video_response; register_response; upload_response; create_response]
-
-(** Test: Post with video *)
-let test_post_with_video () =
-  Mock_config.reset ();
-  
-  let future_time = 
-    let now = Ptime_clock.now () in
-    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+let set_valid_linkedin_credentials () =
+  let future_time =
+    match Ptime.add_span (Ptime_clock.now ()) (Ptime.Span.of_int_s (30 * 86400)) with
     | Some t -> Ptime.to_rfc3339 t
     | None -> failwith "Failed to calculate future time"
   in
-  
-  let creds = {
-    access_token = "valid_token";
-    refresh_token = Some "refresh_token";
-    expires_at = Some future_time;
-    auth_type = Bearer;
-    scope = None;
-  } in
-  
-  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
-  Mock_http.set_responses (make_video_upload_responses ());
-  
-  LinkedIn.post_single 
-    ~account_id:"test_account"
-    ~text:"Check out this video!"
-    ~media_urls:["https://example.com/video.mp4"]
-    ~alt_texts:[Some "A video about OCaml programming"]
+  Mock_config.set_credentials ~account_id:"test_account"
+    ~credentials:{
+      access_token = "valid_token";
+      refresh_token = Some "refresh_token";
+      expires_at = Some future_time;
+      auth_type = Bearer;
+      scope = None;
+    }
+
+let json_body_of (_, _, _, body) = Yojson.Basic.from_string body
+
+let request_summary (meth, url, _, _) = meth ^ " " ^ url
+
+let assert_request_sequence ~expected requests =
+  let actual = List.map request_summary requests in
+  if actual <> expected then
+    failwith
+      (Printf.sprintf "Unexpected request sequence:\n  %s\nexpected:\n  %s"
+         (String.concat "\n  " actual) (String.concat "\n  " expected))
+
+let video_init_response ?(upload_token = "") instructions =
+  let instruction (url, first, last) =
+    Printf.sprintf {|{"uploadUrl": "%s", "firstByte": %d, "lastByte": %d}|} url first last
+  in
+  { status = 200;
+    headers = [];
+    body = Printf.sprintf
+      {|{"value": {"uploadUrlsExpireAt": 1633234498985, "video": "urn:li:video:C5505AQH-oV1qvnFtKA", "uploadInstructions": [%s], "uploadToken": "%s"}}|}
+      (String.concat ", " (List.map instruction instructions)) upload_token }
+
+let part_upload_response etag = { status = 200; body = ""; headers = [ ("etag", etag) ] }
+let finalize_response = { status = 200; body = ""; headers = [] }
+let video_status_response status = { status = 200; headers = []; body =
+  Printf.sprintf {|{"id": "urn:li:video:C5505AQH-oV1qvnFtKA", "status": "%s"}|} status }
+let created_post_response =
+  { status = 201; body = ""; headers = [ ("X-RestLi-Id", "urn:li:share:video789") ] }
+
+let part_url n = Printf.sprintf "https://www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo/%d?sau=abc" n
+
+(** A member video given as a presigned S3 URL, no declared kind: the
+    query string must not hide the [.mp4] suffix, and the single part goes
+    through initialize / PUT / finalize before the post. *)
+let test_post_with_video_single_part () =
+  Mock_config.reset ();
+  set_valid_linkedin_credentials ();
+  let video_bytes = String.make 1055736 'v' in
+  let media_url =
+    "https://bucket.s3.eu-central-1.amazonaws.com/media/clip.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
+  in
+  Mock_http.set_responses [
+    { status = 200; body = {|{"sub": "member123"}|}; headers = [] };
+    { status = 200; body = video_bytes; headers = [] };
+    video_init_response [ (part_url 0, 0, 1055735) ];
+    part_upload_response "/ambry-videoei/signedId/AQHX97-part0.bin";
+    finalize_response;
+    created_post_response;
+  ];
+  LinkedIn.post_single ~account_id:"test_account" ~text:"Check out this video!"
+    ~media_urls:[ media_url ] ~alt_texts:[ Some "A video about OCaml" ]
     (handle_outcome
       (fun post_id ->
         assert (post_id = "urn:li:share:video789");
-        (* Verify the request used modern /rest/posts endpoint *)
         let requests = List.rev !Mock_http.requests in
-        let post_request = List.find_opt (fun (method_, url, _, _) ->
-          method_ = "POST" && string_contains url "/rest/posts"
-        ) requests in
+        assert_request_sequence requests ~expected:[
+          "GET https://api.linkedin.com/v2/userinfo";
+          "GET " ^ media_url;
+          "POST https://api.linkedin.com/rest/videos?action=initializeUpload";
+          "PUT " ^ part_url 0;
+          "POST https://api.linkedin.com/rest/videos?action=finalizeUpload";
+          "POST https://api.linkedin.com/rest/posts";
+        ];
+        let open Yojson.Basic.Util in
+        let init = json_body_of (List.nth requests 2) |> member "initializeUploadRequest" in
+        assert (init |> member "owner" |> to_string = "urn:li:person:member123");
+        assert (init |> member "fileSizeBytes" |> to_int = 1055736);
+        let (_, _, put_headers, put_body) = List.nth requests 3 in
+        assert (put_body = video_bytes);
+        assert (find_header put_headers "Content-Type" = Some "application/octet-stream");
+        let finalize = json_body_of (List.nth requests 4) |> member "finalizeUploadRequest" in
+        assert (finalize |> member "video" |> to_string = "urn:li:video:C5505AQH-oV1qvnFtKA");
+        assert (finalize |> member "uploadToken" |> to_string = "");
+        assert (finalize |> member "uploadedPartIds" |> to_list |> List.map to_string
+                = [ "/ambry-videoei/signedId/AQHX97-part0.bin" ]);
+        let post = json_body_of (List.nth requests 5) in
+        assert (post |> member "author" |> to_string = "urn:li:person:member123");
+        let media = post |> member "content" |> member "media" in
+        assert (media |> member "id" |> to_string = "urn:li:video:C5505AQH-oV1qvnFtKA");
+        assert (media |> member "title" |> to_string = "A video about OCaml");
+        print_endline "✓ Member video (presigned .mp4 URL): initialize, PUT, finalize, post")
+      (fun err -> failwith ("Single-part video post failed: " ^ err)))
 
-        (match post_request with
-        | Some (_, _, _, body) ->
-            assert (string_contains body "urn:li:video:video456");
-            assert (string_contains body "commentary");
-            print_endline "✓ Post with video"
-        | None -> failwith "No /rest/posts request found"))
-      (fun err -> failwith ("Post with video failed: " ^ err)))
-
-(** Test: Register video upload uses video recipe *)
-let test_register_video_upload () =
+(** A Page video over 4 MiB whose URL says nothing and whose download is
+    [application/octet-stream]: the declared kind makes it a video, each
+    part carries its own byte range, the last instruction's [lastByte] past
+    the end of the file is clamped, and finalize lists both ETags (quotes
+    stripped) in order with the upload token. *)
+let test_post_with_video_multi_part_organization () =
   Mock_config.reset ();
+  set_valid_linkedin_credentials ();
+  let part_size = 4194304 in
+  let video_bytes = String.make part_size 'a' ^ String.make 100 'b' in
+  let media_url = "https://media.example.com/files/0b5e2c?signature=xyz" in
+  Mock_http.set_responses [
+    { status = 200; body = video_bytes; headers = [ ("Content-Type", "application/octet-stream") ] };
+    video_init_response ~upload_token:"token-123"
+      [ (part_url 0, 0, part_size - 1); (part_url 1, part_size, 2 * part_size - 1) ];
+    part_upload_response "\"e4383924336106965d6cd2a111beaceb\"";
+    part_upload_response "/ambry-videoei/signedId/part1.bin";
+    finalize_response;
+    created_post_response;
+  ];
+  LinkedIn.post_single ~account_id:"test_account" ~text:"Page video"
+    ~media_urls:[ media_url ] ~media_kinds:[ Some Video ]
+    ~author_urn:"urn:li:organization:2414183"
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "urn:li:share:video789");
+        let requests = List.rev !Mock_http.requests in
+        assert_request_sequence requests ~expected:[
+          "GET " ^ media_url;
+          "POST https://api.linkedin.com/rest/videos?action=initializeUpload";
+          "PUT " ^ part_url 0;
+          "PUT " ^ part_url 1;
+          "POST https://api.linkedin.com/rest/videos?action=finalizeUpload";
+          "POST https://api.linkedin.com/rest/posts";
+        ];
+        let open Yojson.Basic.Util in
+        let init = json_body_of (List.nth requests 1) |> member "initializeUploadRequest" in
+        assert (init |> member "owner" |> to_string = "urn:li:organization:2414183");
+        assert (init |> member "fileSizeBytes" |> to_int = part_size + 100);
+        let (_, _, _, part0) = List.nth requests 2 in
+        let (_, _, _, part1) = List.nth requests 3 in
+        assert (part0 = String.make part_size 'a');
+        assert (part1 = String.make 100 'b');
+        let finalize = json_body_of (List.nth requests 4) |> member "finalizeUploadRequest" in
+        assert (finalize |> member "uploadToken" |> to_string = "token-123");
+        assert (finalize |> member "uploadedPartIds" |> to_list |> List.map to_string
+                = [ "e4383924336106965d6cd2a111beaceb"; "/ambry-videoei/signedId/part1.bin" ]);
+        let post = json_body_of (List.nth requests 5) in
+        assert (post |> member "author" |> to_string = "urn:li:organization:2414183");
+        assert (post |> member "content" |> member "media" |> member "id" |> to_string
+                = "urn:li:video:C5505AQH-oV1qvnFtKA");
+        print_endline "✓ Page video (2 parts, declared kind): ranges, ETags, finalize, post")
+      (fun err -> failwith ("Multi-part video post failed: " ^ err)))
 
-  let response_body = {|{
-    "value": {
-      "video": "urn:li:video:videotest123",
-      "uploadUrl": "https://upload.linkedin.com/video"
-    }
-  }|} in
+let recorded_sleeps = ref []
 
-  Mock_http.set_response { status = 200; body = response_body; headers = [] };
+module LinkedIn_with_sleep =
+  Make_with_options (Mock_config) (struct
+    let sleep : sleep option =
+      Some (fun ~seconds on_continue _on_error ->
+        recorded_sleeps := seconds :: !recorded_sleeps;
+        on_continue ())
+  end)
 
-  LinkedIn.register_upload
-    ~access_token:"test_token"
-    ~owner_urn:"urn:li:person:test"
+let video_responses_until_finalize () = [
+  { status = 200; body = String.make 2048 'v'; headers = [ ("content-type", "video/mp4") ] };
+  video_init_response [ (part_url 0, 0, 2047) ];
+  part_upload_response "/ambry-videoei/signedId/only.bin";
+  finalize_response;
+]
+
+let status_url = "https://api.linkedin.com/rest/videos/urn%3Ali%3Avideo%3AC5505AQH-oV1qvnFtKA"
+
+(** With a timer, the post waits for [AVAILABLE] without blocking. *)
+let test_video_waits_until_available () =
+  Mock_config.reset ();
+  recorded_sleeps := [];
+  set_valid_linkedin_credentials ();
+  Mock_http.set_responses (video_responses_until_finalize () @ [
+    video_status_response "PROCESSING";
+    video_status_response "AVAILABLE";
+    created_post_response;
+  ]);
+  LinkedIn_with_sleep.post_single ~account_id:"test_account" ~text:"Wait for it"
+    ~media_urls:[ "https://cdn.example.com/upload/123" ]
+    ~author_urn:"urn:li:person:member123"
+    (handle_outcome
+      (fun post_id ->
+        assert (post_id = "urn:li:share:video789");
+        let requests = List.rev !Mock_http.requests in
+        assert_request_sequence requests ~expected:[
+          "GET https://cdn.example.com/upload/123";
+          "POST https://api.linkedin.com/rest/videos?action=initializeUpload";
+          "PUT " ^ part_url 0;
+          "POST https://api.linkedin.com/rest/videos?action=finalizeUpload";
+          "GET " ^ status_url;
+          "GET " ^ status_url;
+          "POST https://api.linkedin.com/rest/posts";
+        ];
+        assert (!recorded_sleeps = [ LinkedIn_with_sleep.video_status_poll_interval_seconds ]);
+        print_endline "✓ Video post waits (non-blocking sleep) until AVAILABLE")
+      (fun err -> failwith ("Video wait test failed: " ^ err)))
+
+(** [PROCESSING_FAILED] fails the post before [/rest/posts]. *)
+let test_video_processing_failed () =
+  Mock_config.reset ();
+  set_valid_linkedin_credentials ();
+  Mock_http.set_responses (video_responses_until_finalize () @ [
+    { status = 200; headers = [];
+      body = {|{"id": "urn:li:video:C5505AQH-oV1qvnFtKA", "status": "PROCESSING_FAILED", "processingFailureReason": "Unsupported codec"}|} };
+  ]);
+  LinkedIn_with_sleep.post_single ~account_id:"test_account" ~text:"Broken"
+    ~media_urls:[ "https://cdn.example.com/upload/123" ]
+    ~author_urn:"urn:li:person:member123"
+    (function
+      | Error_types.Failure err ->
+          assert (string_contains (Error_types.error_to_string err) "Unsupported codec");
+          assert (not (List.exists (fun (_, url, _, _) -> string_contains url "/rest/posts")
+                         !Mock_http.requests));
+          print_endline "✓ PROCESSING_FAILED video fails before creating the post"
+      | Error_types.Success _ | Error_types.Partial_success _ ->
+          failwith "Expected PROCESSING_FAILED to fail the post")
+
+(** A part PUT without an ETag cannot be finalized. *)
+let test_video_part_without_etag_fails () =
+  Mock_config.reset ();
+  set_valid_linkedin_credentials ();
+  Mock_http.set_responses [
+    { status = 200; body = String.make 2048 'v'; headers = [ ("content-type", "video/mp4") ] };
+    video_init_response [ (part_url 0, 0, 2047) ];
+    { status = 200; body = ""; headers = [] };
+  ];
+  LinkedIn.post_single ~account_id:"test_account" ~text:"No etag"
+    ~media_urls:[ "https://cdn.example.com/upload/123" ]
+    ~author_urn:"urn:li:person:member123"
+    (function
+      | Error_types.Failure err ->
+          assert (string_contains (Error_types.error_to_string err) "ETag");
+          assert (not (List.exists (fun (_, url, _, _) -> string_contains url "finalizeUpload")
+                         !Mock_http.requests));
+          print_endline "✓ Video part without ETag fails before finalize"
+      | Error_types.Success _ | Error_types.Partial_success _ ->
+          failwith "Expected missing ETag to fail")
+
+(** A presigned image URL with an image Content-Type stays on the Images API. *)
+let test_presigned_image_uses_images_api () =
+  Mock_config.reset ();
+  set_valid_linkedin_credentials ();
+  let media_url = "https://bucket.s3.amazonaws.com/photo.jpg?X-Amz-Signature=abc" in
+  Mock_http.set_responses [
+    { status = 200; body = "jpeg-bytes"; headers = [ ("Content-Type", "image/jpeg") ] };
+    { status = 200; headers = [];
+      body = {|{"value": {"uploadUrlExpiresAt": 1650567510704, "uploadUrl": "https://www.linkedin.com/dms-uploads/C4E10AQFoyyAjHPMQuQ/uploadedImage/0", "image": "urn:li:image:C4E10AQFoyyAjHPMQuQ"}}|} };
+    { status = 201; body = ""; headers = [] };
+    created_post_response;
+  ];
+  LinkedIn.post_single ~account_id:"test_account" ~text:"Photo"
+    ~media_urls:[ media_url ] ~author_urn:"urn:li:person:member123"
+    (handle_outcome
+      (fun _ ->
+        assert_request_sequence (List.rev !Mock_http.requests) ~expected:[
+          "GET " ^ media_url;
+          "POST https://api.linkedin.com/rest/images?action=initializeUpload";
+          "PUT https://www.linkedin.com/dms-uploads/C4E10AQFoyyAjHPMQuQ/uploadedImage/0";
+          "POST https://api.linkedin.com/rest/posts";
+        ];
+        print_endline "✓ Presigned image URL uploads through the Images API")
+      (fun err -> failwith ("Presigned image test failed: " ^ err)))
+
+(** Media kind resolution: declared kind, then Content-Type, then URL path
+    without its query string, then image. *)
+let test_media_kind_resolution () =
+  assert (media_kind_of_url "https://b.s3.amazonaws.com/a.mp4?X-Amz-Signature=x" = Video);
+  assert (media_kind_of_url "https://cdn.example.com/A.MOV#t=3" = Video);
+  assert (media_kind_of_url "https://cdn.example.com/a.jpg?v=.mp4" = Image);
+  assert (media_kind_of_url "https://cdn.example.com/blob" = Image);
+  assert (media_kind_of_content_type "video/mp4; codecs=avc1" = Some Video);
+  assert (media_kind_of_content_type " Image/PNG " = Some Image);
+  assert (media_kind_of_content_type "application/octet-stream" = None);
+  assert (resolve_media_kind ~declared:(Some Video) ~content_type:(Some "image/jpeg")
+            ~url:"https://x/a.jpg" = Video);
+  assert (resolve_media_kind ~declared:None ~content_type:(Some "video/quicktime")
+            ~url:"https://x/a.jpg" = Video);
+  assert (resolve_media_kind ~declared:None ~content_type:(Some "application/octet-stream")
+            ~url:"https://x/a.mp4?sig=1" = Video);
+  assert (resolve_media_kind ~declared:None ~content_type:None ~url:"https://x/a" = Image);
+  print_endline "✓ Media kind: declared > Content-Type > URL path (query ignored) > image"
+
+(** Upload-instruction parsing and part slicing. *)
+let test_video_upload_session_parsing () =
+  (match parse_video_upload_session {|{"value": {"video": "urn:li:video:1", "uploadInstructions": []}}|} with
+   | Error _ -> ()
+   | Ok _ -> failwith "Empty uploadInstructions must be an error");
+  (match parse_video_upload_session {|{"value": {"video": "urn:li:video:1", "uploadUrl": "https://x"}}|} with
+   | Error _ -> ()
+   | Ok _ -> failwith "Missing uploadInstructions must be an error");
+  let part = { upload_url = "u"; first_byte = 0; last_byte = 4194303 } in
+  assert (video_part_slice ~file_size:1055736 part = Ok (0, 1055736));
+  (match video_part_slice ~file_size:10 { part with first_byte = 10; last_byte = 20 } with
+   | Error _ -> ()
+   | Ok _ -> failwith "A part starting past the file must be an error");
+  assert (video_part_id_of_headers [ ("ETag", "\"abc\"") ] = Some "abc");
+  assert (video_part_id_of_headers [ ("Content-Length", "0") ] = None);
+  print_endline "✓ Video upload instructions parse, slice and ETag extraction"
+
+(** [register_upload ~media_type:"video"] cannot work (no file size, single
+    URL), so it refuses instead of sending an incomplete request. *)
+let test_register_upload_rejects_video () =
+  Mock_config.reset ();
+  LinkedIn.register_upload ~access_token:"test_token" ~owner_urn:"urn:li:person:test"
     ~media_type:"video"
-    (fun (asset, _upload_url) ->
-      assert (asset = "urn:li:video:videotest123");
-      (* Verify modern /rest/videos endpoint was used *)
-      let requests = !Mock_http.requests in
-      (match requests with
-      | (_, url, _, body) :: _ ->
-          assert (string_contains url "/rest/videos");
-          assert (string_contains body "initializeUploadRequest");
-          print_endline "✓ Register video upload uses /rest/videos endpoint"
-      | [] -> failwith "No requests recorded"))
-    (fun err -> failwith ("Register video upload failed: " ^ err))
+    (fun _ -> failwith "register_upload must not accept video")
+    (fun err ->
+      assert (string_contains err "upload_video");
+      assert (!Mock_http.requests = []);
+      print_endline "✓ register_upload refuses video (use upload_video)")
 
 (** Test: Video media validation - valid video *)
 let test_video_validation_valid () =
@@ -5435,42 +5658,29 @@ let test_video_validation_too_long () =
    | Error _ -> print_endline "✓ Video over 10 minutes rejected"
    | Ok () -> failwith "Video over 10 minutes should fail")
 
-(** Test: Post with mixed media (video detected from URL extension) *)
+(** Test: a [.mov] URL with no Content-Type is uploaded as a video *)
 let test_post_video_detection_from_url () =
   Mock_config.reset ();
-  
-  let future_time = 
-    let now = Ptime_clock.now () in
-    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
-    | Some t -> Ptime.to_rfc3339 t
-    | None -> failwith "Failed to calculate future time"
-  in
-  
-  let creds = {
-    access_token = "valid_token";
-    refresh_token = Some "refresh_token";
-    expires_at = Some future_time;
-    auth_type = Bearer;
-    scope = None;
-  } in
-  
-  Mock_config.set_credentials ~account_id:"test_account" ~credentials:creds;
-  Mock_http.set_responses (make_video_upload_responses ());
-  
-  (* URL with .mov extension should be detected as video *)
-  LinkedIn.post_single 
+  set_valid_linkedin_credentials ();
+  Mock_http.set_responses [
+    { status = 200; body = {|{"sub": "user123"}|}; headers = [] };
+    { status = 200; body = "fake_video_binary_data"; headers = [] };
+    video_init_response [ (part_url 0, 0, 21) ];
+    part_upload_response "/ambry-videoei/signedId/mov.bin";
+    finalize_response;
+    created_post_response;
+  ];
+  LinkedIn.post_single
     ~account_id:"test_account"
     ~text:"QuickTime video post"
     ~media_urls:["https://example.com/clip.mov"]
     ~alt_texts:[]
     (handle_outcome
       (fun _post_id ->
-        (* Verify /rest/videos endpoint was used (not /rest/images) *)
         let requests = List.rev !Mock_http.requests in
         let register_request = List.find_opt (fun (method_, url, _, _) ->
           method_ = "POST" && string_contains url "initializeUpload"
         ) requests in
-
         (match register_request with
         | Some (_, url, _, _) ->
             assert (string_contains url "/rest/videos");
@@ -6344,8 +6554,15 @@ let () =
   test_comments_count_cap ();
   
   print_endline "\n--- Video Upload Tests ---";
-  test_post_with_video ();
-  test_register_video_upload ();
+  test_post_with_video_single_part ();
+  test_post_with_video_multi_part_organization ();
+  test_video_waits_until_available ();
+  test_video_processing_failed ();
+  test_video_part_without_etag_fails ();
+  test_presigned_image_uses_images_api ();
+  test_media_kind_resolution ();
+  test_video_upload_session_parsing ();
+  test_register_upload_rejects_video ();
   test_video_validation_valid ();
   test_video_validation_too_large ();
   test_video_validation_too_long ();
