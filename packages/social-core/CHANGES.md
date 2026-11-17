@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Social_core.SLEEP`: the runtime timer interface
+  (`sleep : seconds:float -> (unit -> unit) -> (string -> unit) -> unit`).
+  Providers that back off or poll take it from their `Config` instead of
+  blocking the thread. `social-lwt` implements it as `Lwt_adapter.sleep`.
 - `Secure_random.bytes`: bytes from the OS CSPRNG (`/dev/urandom`), for
   secrets the SDK generates. Raises `Failure` rather than falling back to a
   predictable generator when no entropy source is readable.

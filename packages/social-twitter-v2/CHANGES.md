@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (Config implementers):** `CONFIG` now requires
+  `sleep : seconds:float -> (unit -> unit) -> (string -> unit) -> unit`
+  (`Social_core.SLEEP`). The media-processing poll used to block the whole
+  process with `Unix.select` while waiting `check_after_secs`; under Lwt or
+  Eio that froze every other request. It now waits through `Config.sleep`.
+  Lwt users: `let sleep = Social_lwt.Lwt_adapter.sleep`.
+
 - Forbidden 403 responses now carry Twitter's verbatim `detail` text via
   the new `platform_message` field on `Insufficient_permissions`. See
   `social-core/CHANGES.md` for the breaking variant change.

@@ -130,6 +130,30 @@ module type HTTP_CLIENT = sig
     unit
 end
 
+(** {1 Runtime Interface}
+
+    Timers belong to the async runtime, not to the SDK. Providers that wait
+    between attempts (retry backoff, media-processing polls) take this from
+    their [Config] so a cooperative runtime keeps serving other work while
+    one request backs off. Blocking the calling thread instead (for example
+    with [Unix.sleepf]) freezes every promise in an Lwt or Eio program.
+*)
+module type SLEEP = sig
+  (** [sleep ~seconds on_continue on_error] calls [on_continue ()] once,
+      after at least [seconds] have elapsed, without blocking the caller.
+      [on_error] is called instead if the runtime cannot schedule the
+      timer (for example because it was cancelled). Exactly one of the two
+      continuations is called.
+
+      [Social_lwt.Lwt_adapter.sleep] implements this for Lwt. A synchronous
+      program may simply block: [Unix.sleepf seconds; on_continue ()]. *)
+  val sleep :
+    seconds:float ->
+    (unit -> unit) ->
+    (string -> unit) ->
+    unit
+end
+
 (** {1 Storage Interface} 
 
     Abstract storage operations for media files.

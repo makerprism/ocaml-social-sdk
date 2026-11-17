@@ -3,10 +3,9 @@
  (public_name social-threads-v1)
  (modules social_threads_v1 threads_v1)
  (libraries
- social-core
+  social-core
   social-refresh
   yojson
- uri
-   ptime
-   ptime.clock.os
-   unix))
+  uri
+  ptime
+  ptime.clock.os))

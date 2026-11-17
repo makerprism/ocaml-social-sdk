@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Lwt_adapter.sleep`, a non-blocking `Social_core.SLEEP` (backed by `Lwt_unix.sleep`) for provider configs.
 - Lwt adapter for converting CPS-style interfaces to Lwt promises
 - `Cohttp_client` module providing HTTP client implementation using Cohttp_lwt_unix
 - `Lwt_adapter` module for wrapping CPS functions as Lwt.t values

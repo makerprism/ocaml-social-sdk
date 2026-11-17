@@ -77,6 +77,10 @@ module My_config = struct
   let get_env = Sys.getenv_opt
   let get_credentials ~account_id on_success on_error = ...
   (* ... other callbacks ... *)
+
+  (* Non-blocking timer for media-processing polls (Social_core.SLEEP).
+     With Lwt: *)
+  let sleep = Social_lwt.Lwt_adapter.sleep
 end
 
 (* Create provider instance *)

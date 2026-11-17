@@ -303,6 +303,10 @@ module type CONFIG = sig
   val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
+
+  (** Non-blocking timer used for retry backoff and media-processing polls.
+      See {!Social_core.SLEEP}. *)
+  include Social_core.SLEEP
 end
 
 (** Make functor to create Twitter provider with given configuration *)
@@ -1114,11 +1118,12 @@ module Make (Config : CONFIG) = struct
       on_error
 
   let wait_for_media_processing ~auth_ctx ~media_id ?(max_attempts=20) on_success on_error =
-    let sleep_for_poll_delay seconds =
+    let sleep_for_poll_delay seconds on_continue =
       if seconds > 0 then
-        try
-          ignore (Unix.select [] [] [] (float_of_int seconds))
-        with _ -> ()
+        Config.sleep ~seconds:(float_of_int seconds) on_continue (fun err ->
+          on_error (Printf.sprintf
+            "Media processing wait for media_id=%s interrupted: %s" media_id err))
+      else on_continue ()
     in
     let rec poll attempt last_check_after_secs =
       if attempt >= max_attempts then
@@ -1137,8 +1142,8 @@ module Make (Config : CONFIG) = struct
             | Media_processing_failed msg ->
                 on_error (Printf.sprintf "Media processing failed for media_id=%s: %s" media_id msg)
             | Media_processing_pending check_after_secs ->
-                sleep_for_poll_delay (Option.value ~default:1 check_after_secs);
-                poll (attempt + 1) check_after_secs)
+                sleep_for_poll_delay (Option.value ~default:1 check_after_secs)
+                  (fun () -> poll (attempt + 1) check_after_secs))
           on_error
     in
     poll 0 None

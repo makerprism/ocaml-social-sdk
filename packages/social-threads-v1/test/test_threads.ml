@@ -142,7 +142,7 @@ module Mock_config = struct
     health_status_updates := (status, error_message) :: !health_status_updates;
     on_success ()
 
-  let sleep _delay f = f ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Threads = Social_threads_v1.Make (Mock_config)
@@ -4279,7 +4279,7 @@ let test_poll_container_status_checks_before_sleeping () =
   let sleep_calls = ref 0 in
   let module Track_config = struct
     include Mock_config
-    let sleep _delay f = incr sleep_calls; f ()
+    let sleep ~seconds:_ on_continue _on_error = incr sleep_calls; on_continue ()
   end in
   let module Track_threads = Social_threads_v1.Make (Track_config) in
   Mock_http.set_responses
@@ -4295,6 +4295,54 @@ let test_poll_container_status_checks_before_sleeping () =
           assert (!sleep_calls = 0);
           print_endline "ok: poll checks before sleeping"
       | Error _ -> failwith "expected successful poll without sleep")
+
+let test_read_retry_backs_off_through_config_sleep () =
+  Mock_config.reset ();
+  let sleeps = ref [] in
+  let module Track_config = struct
+    include Mock_config
+    let sleep ~seconds on_continue _on_error =
+      sleeps := seconds :: !sleeps;
+      on_continue ()
+  end in
+  let module Track_threads = Social_threads_v1.Make (Track_config) in
+  Mock_http.set_responses
+    [
+      { status = 503; headers = []; body = "{}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+    ];
+  Track_threads.check_container_status ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Ok Social_threads_v1.Finished ->
+          (* one backoff of 0.1s, scheduled by the runtime, then the retry *)
+          assert (!sleeps = [ 0.1 ]);
+          assert (List.length !Mock_http.requests = 2);
+          print_endline "ok: read retry backs off through Config.sleep"
+      | _ -> failwith "expected Finished after one retry")
+
+let test_read_retry_returns_response_when_sleep_fails () =
+  Mock_config.reset ();
+  let module Failing_sleep_config = struct
+    include Mock_config
+    let sleep ~seconds:_ _on_continue on_error = on_error "timer cancelled"
+  end in
+  let module Failing_threads = Social_threads_v1.Make (Failing_sleep_config) in
+  Mock_http.set_responses
+    [
+      { status = 503; headers = []; body = "{}" };
+      { status = 200; headers = []; body = "{\"status\":\"FINISHED\"}" };
+    ];
+  Failing_threads.check_container_status ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Error (Error_types.Api_error { status_code = 503; _ }) ->
+          (* no retry without a backoff *)
+          assert (List.length !Mock_http.requests = 1);
+          print_endline "ok: read retry returns response when sleep fails"
+      | Error err ->
+          failwith ("unexpected error: " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "expected the 503 to be surfaced")
 
 let test_delete_post_success () =
   Mock_config.reset ();
@@ -4804,6 +4852,8 @@ let () =
   test_get_replies_api_error ();
   test_get_conversation_api_error ();
   test_poll_container_status_checks_before_sleeping ();
+  test_read_retry_backs_off_through_config_sleep ();
+  test_read_retry_returns_response_when_sleep_fails ();
   test_delete_post_success ();
   test_delete_post_rejects_empty_id ();
   test_delete_post_api_error ();

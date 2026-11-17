@@ -138,6 +138,7 @@ module Mock_config = struct
   
   let _current_time () =
     Unix.time ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
 
 module Pinterest = Make(Mock_config)
@@ -1227,6 +1228,47 @@ let test_with_retry_retries_on_500 () =
     assert (!call_count = 2);
     print_endline "✓ with_retry retries on 500 and succeeds")
 
+let test_with_retry_backs_off_through_config_sleep () =
+  Mock_config.reset ();
+  let sleeps = ref [] in
+  let module Track_config = struct
+    include Mock_config
+    let sleep ~seconds on_continue _on_error =
+      sleeps := seconds :: !sleeps;
+      on_continue ()
+  end in
+  let module Track_pinterest = Make (Track_config) in
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    if !call_count < 3 then
+      on_result { status = 503; body = "unavailable"; headers = [] }
+    else
+      on_result { status = 200; body = {|{"ok":true}|}; headers = [] }
+  in
+  Track_pinterest.with_retry ~max_retries:3 ~initial_delay_seconds:0.5 ~make_request (fun response ->
+    assert (response.status = 200);
+    (* exponential backoff, scheduled by the runtime *)
+    assert (List.rev !sleeps = [ 0.5; 1.0 ]);
+    print_endline "✓ with_retry backs off through Config.sleep")
+
+let test_with_retry_returns_response_when_sleep_fails () =
+  Mock_config.reset ();
+  let module Failing_sleep_config = struct
+    include Mock_config
+    let sleep ~seconds:_ _on_continue on_error = on_error "timer cancelled"
+  end in
+  let module Failing_pinterest = Make (Failing_sleep_config) in
+  let call_count = ref 0 in
+  let make_request on_result =
+    incr call_count;
+    on_result { status = 503; body = "unavailable"; headers = [] }
+  in
+  Failing_pinterest.with_retry ~max_retries:3 ~make_request (fun response ->
+    assert (response.status = 503);
+    assert (!call_count = 1);
+    print_endline "✓ with_retry returns the response when the backoff cannot be scheduled")
+
 let test_with_retry_gives_up_after_max_retries () =
   Mock_config.reset ();
 
@@ -1558,6 +1600,8 @@ let () =
   test_with_retry_no_retry_on_success ();
   test_with_retry_retries_on_429 ();
   test_with_retry_retries_on_500 ();
+  test_with_retry_backs_off_through_config_sleep ();
+  test_with_retry_returns_response_when_sleep_fails ();
   test_with_retry_gives_up_after_max_retries ();
   test_with_retry_no_retry_on_4xx ();
   test_with_retry_uses_rate_limit_reset_header ();

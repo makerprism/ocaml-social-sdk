@@ -326,6 +326,10 @@ module type CONFIG = sig
   val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
+
+  (** Non-blocking timer used for retry backoff and media-processing polls.
+      See {!Social_core.SLEEP}. *)
+  include Social_core.SLEEP
 end
 
 (** Make functor to create Pinterest provider with given configuration *)
@@ -504,8 +508,11 @@ module Make (Config : CONFIG) = struct
               else
                 delay
             in
-            let _ = Unix.select [] [] [] actual_delay in
-            loop (attempt + 1) (min (delay *. 2.0) max_delay)
+            (* If the runtime cannot schedule the backoff, hand back the
+               transient response rather than retrying immediately. *)
+            Config.sleep ~seconds:actual_delay
+              (fun () -> loop (attempt + 1) (min (delay *. 2.0) max_delay))
+              (fun _ -> on_result response)
           end else
             on_result response
         end else
@@ -1055,9 +1062,11 @@ module Make (Config : CONFIG) = struct
           | "succeeded" -> on_success ()
           | "failed" -> on_error "Media processing failed"
           | "processing" | "registered" ->
-              let _ = Unix.select [] [] [] delay_seconds in
               let next_delay = min 5.0 (delay_seconds *. 1.5) in
-              wait_for_media_ready ~access_token ~media_id ~attempts_left:(attempts_left - 1) ~delay_seconds:next_delay on_success on_error
+              Config.sleep ~seconds:delay_seconds
+                (fun () ->
+                  wait_for_media_ready ~access_token ~media_id ~attempts_left:(attempts_left - 1) ~delay_seconds:next_delay on_success on_error)
+                on_error
           | other -> on_error (Printf.sprintf "Unexpected media status: %s" other))
         on_error
 
