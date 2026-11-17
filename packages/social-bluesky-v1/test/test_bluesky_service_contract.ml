@@ -448,7 +448,245 @@ let test_strong_ref_post_id_round_trip () =
   assert (Social_bluesky_v1.strong_ref_of_post_id "at://x|" = None);
   assert (Social_bluesky_v1.strong_ref_of_post_id "a|b|c" = None)
 
+(* -- Video upload -------------------------------------------------------------- *)
+
+let sleeps : float list ref = ref []
+
+module Sleeping_options = struct
+  include Social_bluesky_v1.Default_options
+
+  let sleep =
+    Some
+      (fun ~seconds on_continue _on_error ->
+        sleeps := seconds :: !sleeps;
+        on_continue ())
+end
+
+module Video_bluesky =
+  Social_bluesky_v1.Make_with_options (Mock_config) (Sleeping_options)
+
+let video_url = "https://cdn.example.com/clip.mp4"
+let shard = "https://morel.us-east.host.bsky.network"
+let video_blob_json = {|{"$type":"blob","ref":{"$link":"bafkreivideo"},"mimeType":"video/mp4","size":4}|}
+
+let session_with_did_doc endpoint =
+  Printf.sprintf
+    {|{"did":"did:plc:alice","handle":"alice.test","didDoc":{"id":"did:plc:alice","service":[{"id":"#bsky_notif","type":"Other","serviceEndpoint":"https://notif.example"},{"id":"#atproto_pds","type":"AtprotoPersonalDataServer","serviceEndpoint":"%s"}]}}|}
+    endpoint
+
+let has_suffix suffix request =
+  let path = List.hd (String.split_on_char '?' request.url) in
+  String.ends_with ~suffix path
+
+(** A video service that answers each step as given. *)
+let video_responder ?(session = session_with_did_doc shard)
+    ?(service_auth = json_response {|{"token":"svc-token"}|})
+    ?(upload = json_response {|{"jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_CREATED"}}|})
+    ?(statuses = [])
+    () =
+  let remaining = ref statuses in
+  responder :=
+    fun request ->
+      if request.url = video_url then
+        Ok { Social_core.status = 200; headers = [ ("content-type", "video/mp4") ]; body = "\000\000\000\024ftypmp42" }
+      else if has_suffix "com.atproto.server.getSession" request then json_response session
+      else if has_suffix "com.atproto.server.getServiceAuth" request then service_auth
+      else if has_suffix "app.bsky.video.uploadVideo" request then upload
+      else if has_suffix "app.bsky.video.getJobStatus" request then
+        match !remaining with
+        | [ last ] -> last
+        | next :: rest ->
+            remaining := rest;
+            next
+        | [] -> json_response {|{"jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_ENCODING"}}|}
+      else if has_suffix "com.atproto.repo.uploadBlob" request then
+        json_response (Printf.sprintf {|{"blob":%s}|} video_blob_json)
+      else default_responder request
+
+module type POSTER = sig
+  val post_single :
+    account_id:string -> text:string -> media_urls:string list ->
+    ?alt_texts:string option list -> ?widths:int option list ->
+    ?heights:int option list -> ?skip_enrichments:bool ->
+    ?validate_media_before_upload:bool ->
+    (string Error_types.outcome -> unit) -> unit
+
+  val invalidate_session : account_id:string -> unit
+end
+
+let post_video (module B : POSTER) =
+  B.invalidate_session ~account_id:"acct";
+  sleeps := [];
+  let result = ref None in
+  B.post_single ~account_id:"acct" ~text:"clip" ~media_urls:[ video_url ]
+    (fun outcome -> result := Some outcome);
+  !result
+
+let find_request suffix =
+  match List.filter (has_suffix suffix) (sent ()) with
+  | request :: _ -> request
+  | [] -> fail "no %s request" suffix
+
+let count_requests suffix = List.length (List.filter (has_suffix suffix) (sent ()))
+
+let embedded_video () =
+  Yojson.Basic.Util.(
+    body_json (find_request "com.atproto.repo.createRecord")
+    |> member "record" |> member "embed")
+
+let query_param request key = Uri.get_query_param (Uri.of_string request.url) key
+
+let test_video_without_sleep_uses_upload_blob () =
+  reset ();
+  video_responder ();
+  ignore (expect_outcome_success "video without sleep" (post_video (module Default_bluesky)));
+  assert (count_requests "com.atproto.repo.uploadBlob" = 1);
+  assert (
+    (find_request "com.atproto.repo.uploadBlob").url
+    = "https://bsky.social/xrpc/com.atproto.repo.uploadBlob");
+  assert (count_requests "app.bsky.video.uploadVideo" = 0);
+  assert (count_requests "com.atproto.server.getServiceAuth" = 0);
+  let embed = embedded_video () in
+  assert (Yojson.Basic.Util.(member "$type" embed |> to_string) = "app.bsky.embed.video")
+
+let test_video_service_request_shapes () =
+  reset ();
+  video_responder
+    ~statuses:
+      [ json_response {|{"jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_ENCODING","progress":40}}|};
+        json_response
+          (Printf.sprintf
+             {|{"jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_COMPLETED","blob":%s}}|}
+             video_blob_json) ]
+    ();
+  ignore (expect_outcome_success "video service" (post_video (module Video_bluesky)));
+  (* Service auth is minted by the account's PDS shard, for that shard. *)
+  let auth = find_request "com.atproto.server.getServiceAuth" in
+  assert (String.starts_with ~prefix:(shard ^ "/xrpc/") auth.url);
+  assert (query_param auth "aud" = Some "did:web:morel.us-east.host.bsky.network");
+  assert (query_param auth "lxm" = Some "com.atproto.repo.uploadBlob");
+  (match query_param auth "exp" with
+  | Some exp -> assert (int_of_string exp > int_of_float (Unix.gettimeofday ()) + 1700)
+  | None -> fail "getServiceAuth without exp");
+  assert (List.assoc_opt "Authorization" auth.headers = Some "Bearer eyJaccess");
+  let upload = find_request "app.bsky.video.uploadVideo" in
+  assert (upload.meth = "POST");
+  assert (String.starts_with ~prefix:"https://video.bsky.app/xrpc/" upload.url);
+  assert (query_param upload "did" = Some "did:plc:alice");
+  assert (query_param upload "name" <> None);
+  assert (List.assoc_opt "Authorization" upload.headers = Some "Bearer svc-token");
+  assert (List.assoc_opt "Content-Type" upload.headers = Some "video/mp4");
+  (* Two polls, each after a wait, and no credentials sent with them. *)
+  assert (count_requests "app.bsky.video.getJobStatus" = 2);
+  assert (!sleeps = [ 2.0; 2.0 ]);
+  List.iter
+    (fun request ->
+      if has_suffix "app.bsky.video.getJobStatus" request then begin
+        assert (query_param request "jobId" = Some "job-1");
+        assert (List.assoc_opt "Authorization" request.headers = None)
+      end)
+    (sent ());
+  assert (count_requests "com.atproto.repo.uploadBlob" = 0);
+  let embed = embedded_video () in
+  assert (Yojson.Basic.Util.(member "$type" embed |> to_string) = "app.bsky.embed.video");
+  assert (
+    Yojson.Basic.Util.(member "video" embed |> member "ref" |> member "$link" |> to_string)
+    = "bafkreivideo")
+
+let test_video_already_exists_uses_earlier_blob () =
+  reset ();
+  video_responder
+    ~upload:(json_response ~status:409 {|{"error":"already_exists","message":"Video already processed","jobId":"job-0"}|})
+    ~statuses:
+      [ json_response ~status:400
+          (Printf.sprintf
+             {|{"error":"already_exists","jobStatus":{"jobId":"job-0","did":"did:plc:alice","state":"JOB_STATE_COMPLETED","blob":%s}}|}
+             video_blob_json) ]
+    ();
+  ignore (expect_outcome_success "already_exists" (post_video (module Video_bluesky)));
+  assert (query_param (find_request "app.bsky.video.getJobStatus") "jobId" = Some "job-0");
+  assert (count_requests "com.atproto.repo.uploadBlob" = 0)
+
+let test_video_job_failed_is_an_error () =
+  reset ();
+  video_responder
+    ~statuses:
+      [ json_response {|{"jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_FAILED","failureCode":"validation_failure","error":"Video too long"}}|} ]
+    ();
+  (match post_video (module Video_bluesky) with
+  | Some (Error_types.Failure err) ->
+      let message = Error_types.error_to_string err in
+      if not (Re.execp (Re.compile (Re.str "validation_failure")) message) then
+        fail "failed job: reason missing from %s" message
+  | Some _ -> fail "failed job: expected failure"
+  | None -> fail "failed job: never completed");
+  assert (count_requests "com.atproto.repo.createRecord" = 0);
+  assert (count_requests "com.atproto.repo.uploadBlob" = 0)
+
+let test_video_processing_timeout () =
+  reset ();
+  video_responder ();
+  (match post_video (module Video_bluesky) with
+  | Some (Error_types.Failure _) -> ()
+  | Some _ -> fail "timeout: expected failure"
+  | None -> fail "timeout: never completed");
+  assert (count_requests "app.bsky.video.getJobStatus" = Video_bluesky.video_job_max_polls);
+  assert (count_requests "com.atproto.repo.createRecord" = 0)
+
+let test_video_service_auth_failure_falls_back_to_upload_blob () =
+  reset ();
+  video_responder ~service_auth:(json_response ~status:500 {|{"error":"InternalServerError"}|}) ();
+  ignore (expect_outcome_success "service auth failure" (post_video (module Video_bluesky)));
+  assert (count_requests "app.bsky.video.uploadVideo" = 0);
+  assert (count_requests "com.atproto.repo.uploadBlob" = 1);
+  List.iter
+    (fun request ->
+      if String.starts_with ~prefix:"https://video.bsky.app" request.url then
+        fail "a request went to the video service: %s" request.url)
+    (sent ())
+
+let test_video_token_rejected_falls_back_to_upload_blob () =
+  reset ();
+  video_responder ~upload:(json_response ~status:401 {|{"error":"AuthMissing","message":"bad audience"}|}) ();
+  ignore (expect_outcome_success "token rejected" (post_video (module Video_bluesky)));
+  assert (count_requests "app.bsky.video.uploadVideo" = 1);
+  assert (count_requests "com.atproto.repo.uploadBlob" = 1)
+
+let test_unsafe_did_doc_endpoint_is_ignored () =
+  reset ();
+  video_responder ~session:(session_with_did_doc "http://169.254.169.254/latest")
+    ~upload:(json_response (Printf.sprintf {|{"jobStatus":{"jobId":"j","did":"did:plc:alice","state":"JOB_STATE_COMPLETED","blob":%s}}|} video_blob_json))
+    ();
+  ignore (expect_outcome_success "unsafe endpoint" (post_video (module Video_bluesky)));
+  let auth = find_request "com.atproto.server.getServiceAuth" in
+  assert (String.starts_with ~prefix:"https://bsky.social/xrpc/" auth.url);
+  assert (query_param auth "aud" = Some "did:web:bsky.social");
+  List.iter
+    (fun request ->
+      if String.starts_with ~prefix:"http://169.254" request.url then
+        fail "request sent to the DID document endpoint %s" request.url)
+    (sent ())
+
+let test_pds_endpoint_of_did_doc () =
+  let doc json = Yojson.Basic.from_string json in
+  assert (
+    Social_bluesky_v1.pds_endpoint_of_did_doc
+      (Yojson.Basic.Util.member "didDoc" (doc (session_with_did_doc shard)))
+    = Some shard);
+  assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|{"service":[]}|}) = None);
+  assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|{"id":"did:plc:x"}|}) = None);
+  assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|"not an object"|}) = None)
+
 let () =
+  test_video_without_sleep_uses_upload_blob ();
+  test_video_service_request_shapes ();
+  test_video_already_exists_uses_earlier_blob ();
+  test_video_job_failed_is_an_error ();
+  test_video_processing_timeout ();
+  test_video_service_auth_failure_falls_back_to_upload_blob ();
+  test_video_token_rejected_falls_back_to_upload_blob ();
+  test_unsafe_did_doc_endpoint_is_ignored ();
+  test_pds_endpoint_of_did_doc ();
   test_reply_to_post_request_shape ();
   test_post_thread_under_reply_to ();
   test_post_thread_without_reply_to_starts_a_thread ();

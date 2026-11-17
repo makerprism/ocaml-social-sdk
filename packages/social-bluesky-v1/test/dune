@@ -19,4 +19,7 @@
  (libraries
   social-core
   social-bluesky-v1
-  yojson))
+  yojson
+  re
+  uri
+  unix))

@@ -11,7 +11,7 @@ Bluesky AT Protocol v1 client for OCaml.
 - ✅ Delete posts
 - ✅ Full thread support with proper reply chains
 - ✅ Quote posts with optional media
-- ✅ Media upload (up to 4 images; video uses `app.bsky.video.uploadVideo` first with blob fallback)
+- ✅ Media upload (up to 4 images; one video via `app.bsky.video.uploadVideo` + job polling when `OPTIONS.sleep` is set, else `uploadBlob`)
 - ✅ Video upload validation (50MB size limit, duration check when duration metadata is available)
 
 ### Rich Text
@@ -145,6 +145,24 @@ end
 
 module Bluesky = Social_bluesky_v1.Make_with_options (My_config) (My_options)
 ```
+
+### Video
+
+Bluesky recommends uploading video to its video service and polling the
+processing job, so the clip is ready when the post appears. Polling needs a
+wait, and the SDK never blocks, so give it one in your runtime:
+
+```ocaml
+module My_options = struct
+  include Social_bluesky_v1.Default_options
+  let sleep =
+    Some (fun ~seconds on_continue _on_error ->
+      Lwt.async (fun () -> Lwt.map on_continue (Lwt_unix.sleep seconds)))
+end
+```
+
+With `sleep = None` (the default) video is uploaded with `uploadBlob`; it
+still publishes, but Bluesky processes it only after the post appears.
 
 ### Errors
 
