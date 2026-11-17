@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transport failures are `Network_error`, not `Internal_error`.** Every
+  request that got no HTTP response (connection refused, DNS, TLS, timeout)
+  was reported as `Internal_error`, which the error taxonomy reserves for SDK
+  bugs, so consumers routing on the variant treated outages as defects. They
+  are now `Network_error (Connection_failed msg)` (message still redacted).
+  Worse, Page-token recovery turned a failed `/me/accounts` request into
+  `Token_invalid`; after exhausting the candidates it recorded
+  `token_revoked` on a healthy account during an outage. It now stops on the
+  network error and writes no health status. Behaviour change for code that
+  matched `Internal_error` on these paths; types are unchanged.
 - **`OAuth.Make.get_user_pages` and `OAuth.Make.debug_token` percent-encode
   their tokens.** Both interpolated tokens into the query string raw. An app
   token is `app_id|app_secret`, and opaque tokens can contain `+`, `/`, `=` or

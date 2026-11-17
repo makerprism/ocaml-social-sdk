@@ -14,6 +14,7 @@
 type recovery_mode =
   | Me_accounts_expired_token  (** 190/463: the user token aged out *)
   | Me_accounts_invalid_token  (** 190, no subcode: the user token is dead *)
+  | Me_accounts_unreachable  (** no HTTP response at all *)
 
 let recovery_mode = ref Me_accounts_expired_token
 
@@ -31,13 +32,13 @@ let invalid_token_body =
   {|{"error":{"message":"Error validating access token: The user has not authorized application","type":"OAuthException","code":190,"fbtrace_id":"Atrace"}}|}
 
 module Mock_http : Social_core.HTTP_CLIENT = struct
-  let get ?headers:_ _url on_success _on_error =
-    let body =
-      match !recovery_mode with
-      | Me_accounts_expired_token -> expired_token_body
-      | Me_accounts_invalid_token -> invalid_token_body
-    in
-    on_success { Social_core.status = 400; headers = []; body }
+  let get ?headers:_ _url on_success on_error =
+    match !recovery_mode with
+    | Me_accounts_expired_token ->
+        on_success { Social_core.status = 400; headers = []; body = expired_token_body }
+    | Me_accounts_invalid_token ->
+        on_success { Social_core.status = 400; headers = []; body = invalid_token_body }
+    | Me_accounts_unreachable -> on_error "Connection refused"
 
   let post ?headers:_ ?body:_ _url on_success _on_error =
     on_success { Social_core.status = 200; headers = []; body = "{}" }
@@ -126,10 +127,26 @@ let test_invalid_user_token_still_records_token_revoked () =
     (Printf.sprintf "wrote exactly token_revoked (got: %s)" (describe_writes ()))
     (!health_writes = [ Health_status.to_string Health_status.Token_revoked ])
 
+(* Regression: the /me/accounts transport failure used to be reported as
+   Token_invalid, so an outage during recovery exhausted the candidates and
+   recorded token_revoked on a healthy account. *)
+let test_unreachable_graph_leaves_health_alone () =
+  Printf.printf "Test: recovery against an unreachable Graph API writes no health status\n";
+  reset Me_accounts_unreachable;
+  let err = run_recovery ~account_id:"acct-outage" in
+  check "the error is a network error"
+    (match err with
+     | Error_types.Network_error (Error_types.Connection_failed _) -> true
+     | _ -> false);
+  check
+    (Printf.sprintf "wrote no health status (got: %s)" (describe_writes ()))
+    (!health_writes = [])
+
 let () =
   Printf.printf "Running Facebook account-health contract tests\n\n";
   test_expired_user_token_records_token_expired ();
   test_invalid_user_token_still_records_token_revoked ();
+  test_unreachable_graph_leaves_health_alone ();
   Printf.printf "\n";
   if !failures > 0 then begin
     Printf.printf "%d check(s) failed\n" !failures;
