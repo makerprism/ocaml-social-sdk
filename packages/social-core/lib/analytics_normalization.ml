@@ -72,7 +72,12 @@ let facebook_metrics =
     ("total_video_views", Views) ]
 
 let instagram_metrics =
-  [ ("follower_count", Followers);
+  [ (* The [follower_count] insight is a per-day change (new followers per
+       day), not the follower total; the total is the profile field
+       [followers_count]. Same canonical metric as Facebook's
+       [page_daily_follows]. *)
+    ("follower_count", Follows);
+    ("followers_count", Followers);
     ("reach", Reach);
     ("likes", Likes);
     ("views", Views);

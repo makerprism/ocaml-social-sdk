@@ -1704,7 +1704,7 @@ let test_canonical_insights_adapters () =
   assert (List.length audience_series = 2);
   (match find_series "follower_count" audience_series with
    | Some item ->
-       assert (Analytics_types.canonical_metric_key item.metric = "followers");
+       assert (Analytics_types.canonical_metric_key item.metric = "follows");
        assert ((List.hd item.points).value = 301)
    | None -> failwith "Missing follower_count canonical series");
 

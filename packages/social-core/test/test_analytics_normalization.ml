@@ -66,6 +66,12 @@ let test_provider_mappings () =
     [ ("page_media_view", Views); ("page_total_media_view_unique", Reach);
       ("page_follows", Followers); ("page_daily_follows_unique", Follows);
       ("post_media_view", Views); ("fb_reels_total_plays", Views) ];
+  (* Regression: the daily follower_count insight was mapped to Followers,
+     so a one-day change could overwrite the follower total. *)
+  assert_metric ~context:"instagram follower_count" ~expected:Follows
+    (instagram_metric_to_canonical "follower_count");
+  assert_metric ~context:"instagram followers_count" ~expected:Followers
+    (instagram_metric_to_canonical "followers_count");
   print_endline "ok: provider mapping rules";
 
   if facebook_metric_to_canonical "does_not_exist" <> None then
