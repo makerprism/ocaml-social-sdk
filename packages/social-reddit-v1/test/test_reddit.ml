@@ -2035,7 +2035,40 @@ let test_post_to_subreddits_empty_list () =
 
 (** {1 Run All Tests} *)
 
+let test_oauth_get_me_typed () =
+  let module OAuth_http = OAuth.Make (Mock_http) in
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 200;
+      body = {|{"id":"abc12","name":"maker","icon_img":"https://i/x.png","total_karma":42,"created_utc":1600000000.0}|};
+      headers = [] };
+  OAuth_http.get_me ~user_agent:"web:com.example.app:v2.0.0 (by /u/example)" ~access_token:"tok" (function
+    | Stdlib.Ok user ->
+        assert (user.id = "abc12" && user.name = "maker" && user.total_karma = 42);
+        let (meth, url, headers, _) = List.hd !Mock_http.requests in
+        assert (meth = "GET" && url = "https://oauth.reddit.com/api/v1/me");
+        assert (List.assoc_opt "User-Agent" headers = Some "web:com.example.app:v2.0.0 (by /u/example)");
+        assert (List.assoc_opt "Authorization" headers = Some "Bearer tok")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_response { status = 401; body = {|{"message": "Unauthorized", "error": 401}|}; headers = [] };
+  OAuth_http.get_me ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Auth_error Error_types.Token_invalid) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Token_invalid");
+  Mock_http.reset ();
+  Mock_http.set_response { status = 429; body = "{}"; headers = [ ("x-ratelimit-reset", "120") ] };
+  OAuth_http.get_me ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Rate_limited { retry_after_seconds = Some 120; _ }) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited");
+  Mock_http.reset ();
+  Mock_http.set_response { status = 200; body = {|{"name":"x"}|}; headers = [] };
+  OAuth_http.get_me ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Internal_error _) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Internal_error");
+  print_endline "✓ OAuth.get_me returns user_info with typed errors"
+
 let () =
+  test_oauth_get_me_typed ();
   print_endline "\n=== Reddit Provider Tests ===\n";
   
   print_endline "--- OAuth Tests ---";

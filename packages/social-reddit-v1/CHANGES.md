@@ -4,6 +4,10 @@
 
 Initial release of the Reddit API v1 client.
 
+### Added
+
+- **`OAuth.Make(Http).get_me ?user_agent ~access_token`**: token-based `GET /api/v1/me` returning `user_info Error_types.api_result` with typed failures (401 `Token_invalid`, 403 `Insufficient_permissions ["identity"]`, 429 `Rate_limited` with `x-ratelimit-reset`, otherwise `Api_error` with the body). `get_user_info` (string errors) is unchanged. Pure `OAuth.parse_me` / `OAuth.me_error`.
+
 ### Changed
 
 - The `User-Agent` is configurable. Reddit requires a per-app agent

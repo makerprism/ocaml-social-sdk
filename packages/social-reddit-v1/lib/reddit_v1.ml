@@ -245,6 +245,58 @@ module OAuth = struct
     ) params |> String.concat "&" in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
   
+  (** Parses a [/api/v1/me] body into {!user_info}. Missing karma or
+      creation time read as [0]. [Error] without [id] and [name]. *)
+  let parse_me body : (user_info, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Stdlib.Error ("/api/v1/me response is not JSON: " ^ message)
+    | `Assoc fields -> (
+        let text key =
+          match List.assoc_opt key fields with
+          | Some (`String value) when value <> "" -> Some value
+          | Some (`String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
+        in
+        match text "id", text "name" with
+        | Some id, Some name ->
+            Stdlib.Ok
+              { id;
+                name;
+                icon_img = text "icon_img";
+                total_karma =
+                  (match List.assoc_opt "total_karma" fields with
+                   | Some (`Int karma) -> karma
+                   | Some (`Float karma) -> int_of_float karma
+                   | Some (`Null | `Bool _ | `String _ | `List _ | `Assoc _) | None -> 0);
+                created_utc =
+                  (match List.assoc_opt "created_utc" fields with
+                   | Some (`Float created) -> created
+                   | Some (`Int created) -> float_of_int created
+                   | Some (`Null | `Bool _ | `String _ | `List _ | `Assoc _) | None -> 0.0) }
+        | (Some _ | None), _ -> Stdlib.Error "/api/v1/me response has no id or name")
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "/api/v1/me response is not an object"
+
+  (** The SDK error for a failed identity read. *)
+  let me_error ~status_code ~headers body =
+    match status_code with
+    | 401 -> Error_types.Auth_error Error_types.Token_invalid
+    | 403 ->
+        Error_types.Auth_error
+          (Error_types.Insufficient_permissions { required = [ "identity" ]; platform_message = None })
+    | 429 ->
+        let retry_after_seconds =
+          List.find_map
+            (fun (key, value) ->
+              if String.lowercase_ascii key = "x-ratelimit-reset" then
+                Option.map int_of_float (float_of_string_opt (String.trim value))
+              else None)
+            headers
+        in
+        Error_types.make_rate_limited ?retry_after_seconds ~remaining:0 ()
+    | _ ->
+        Error_types.make_api_error ~platform:Platform_types.Reddit ~status_code
+          ~message:(Printf.sprintf "Reddit /api/v1/me failed (%d)" status_code) ~raw_response:body ()
+
   (** OAuth operations requiring HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Helper to create Basic Auth header
@@ -411,6 +463,28 @@ module OAuth = struct
             on_error (Printf.sprintf "Get user info failed (%d): %s" response.status response.body))
         on_error
     
+    (** {!get_user_info} with typed errors, as [user_info Error_types.api_result]:
+        [GET https://oauth.reddit.com/api/v1/me]
+        ({{:https://www.reddit.com/dev/api/#GET_api_v1_me}}, scope
+        [identity]), before any account is stored. 401 is [Token_invalid],
+        403 [Insufficient_permissions ["identity"]], 429 [Rate_limited] (with
+        [x-ratelimit-reset] when sent), otherwise [Api_error] with the body;
+        a body without [id] and [name] is [Internal_error].
+
+        @param user_agent Reddit requires a unique, descriptive User-Agent
+          per app ({!default_user_agent} otherwise). *)
+    let get_me ?(user_agent = default_user_agent) ~access_token on_result =
+      let headers = [ ("Authorization", "Bearer " ^ access_token); ("User-Agent", user_agent) ] in
+      Http.get ~headers (Metadata.api_base ^ "/api/v1/me")
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match parse_me response.body with
+            | Stdlib.Ok user -> on_result (Stdlib.Ok user)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result (Stdlib.Error (me_error ~status_code:response.status ~headers:response.headers response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
+
     (** Revoke access token
         
         @param client_id Reddit App ID
