@@ -27,6 +27,15 @@ let oauth_authorize_url = "https://www.facebook.com/" ^ api_version ^ "/dialog/o
 (** OAuth token endpoint (code exchange, long-lived token exchange). *)
 let token_endpoint = graph_api_base ^ "/oauth/access_token"
 
+(** Typed Page post comments ([GET /{object-id}/comments]); see
+    {!Facebook_graph_v25_comments}. *)
+module Comments = Facebook_graph_v25_comments
+
+(** Hosts a [paging.next] / [paging.previous] URL may point at before a
+    reader sends the caller's token to it
+    ({!Meta_graph_paging.resolve_page_url}). *)
+let paging_url_hosts = [ "graph.facebook.com" ]
+
 (** OAuth 2.0 module for Facebook
     
     Facebook uses OAuth 2.0 WITHOUT PKCE support.
@@ -859,14 +868,15 @@ type rate_limit_info = {
 
 (** {1 Pagination Types} *)
 
-(** Pagination cursors *)
-type paging_cursors = {
+(** Pagination cursors. The same type as {!Meta_graph_paging.cursors},
+    shared with the Instagram and Threads packages. *)
+type paging_cursors = Meta_graph_paging.cursors = {
   before : string option;
   after : string option;
 }
 
-(** Paginated response *)
-type 'a page_result = {
+(** Paginated response. The same type as {!Meta_graph_paging.page}. *)
+type 'a page_result = 'a Meta_graph_paging.page = {
   data : 'a list;
   paging : paging_cursors option;
   next_url : string option;
@@ -1209,6 +1219,29 @@ module Make (Config : CONFIG) = struct
       }, next_url, previous_url
     with _ -> None, None, None
   
+  (** GET an absolute Graph URL with the token as a Bearer header and, when
+      an app secret is configured, [appsecret_proof] added to the query. *)
+  let get_url ~url ~access_token ~required_permissions on_result =
+    let final_url =
+      match compute_app_secret_proof ~access_token with
+      | Some proof ->
+          let existing_query = if String.contains url '?' then "&" else "?" in
+          url ^ existing_query ^ Uri.encoded_of_query [ ("appsecret_proof", [ proof ]) ]
+      | None -> url
+    in
+    let headers = [ ("Authorization", Printf.sprintf "Bearer %s" access_token) ] in
+    Config.Http.get ~headers final_url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          on_result (Ok response)
+        else
+          on_result
+            (Error
+               (parse_api_error_with_permissions ~required_permissions
+                  ~status_code:response.status ~response_body:response.body)))
+      (fun err -> on_result (Error (transport_error err)))
+
   (** Generic GET request with pagination support.
 
       [?query] accepts arbitrary additional query-string params for
@@ -1237,37 +1270,9 @@ module Make (Config : CONFIG) = struct
         Printf.sprintf "%s/%s" graph_api_base path
     in
     
-    let proof = compute_app_secret_proof ~access_token in
-    let auth_params = match proof with
-      | Some p -> [("appsecret_proof", [p])]
-      | None -> []
-    in
-    
-    let final_url = 
-      if List.length auth_params > 0 then
-        let existing_query = if String.contains url '?' then "&" else "?" in
-        url ^ existing_query ^ Uri.encoded_of_query auth_params
-      else url
-    in
-    
-    let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_token);
-    ] in
-    
-    Config.Http.get ~headers final_url
-      (fun response ->
-        update_rate_limits response;
-        if response.status >= 200 && response.status < 300 then
-          on_result (Ok response)
-        else
-          on_result (Error (parse_api_error_with_permissions
-            ~required_permissions:(permissions_for_path path)
-            ~status_code:response.status
-            ~response_body:response.body)))
-      (fun err ->
-        on_result
-          (Error (transport_error err)))
-  
+    get_url ~url ~access_token ~required_permissions:(permissions_for_path path)
+      on_result
+
   (** {1 Token Management} *)
   
   (** Check if token is expired or expiring soon *)
@@ -3039,6 +3044,193 @@ module Make (Config : CONFIG) = struct
             with e ->
               on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse comments response: %s" (Printexc.to_string e)))))
         | Error e -> on_result (Error e))
+
+  (* Reading Page post comments needs pages_read_engagement, and other
+     people's comments pages_read_user_content; replying, liking, hiding and
+     deleting need pages_manage_engagement. *)
+  let comment_read_permissions = [ "pages_read_engagement"; "pages_read_user_content" ]
+  let comment_manage_permissions = [ "pages_manage_engagement" ]
+
+  let invalid_input message =
+    Error_types.Validation_error [ Error_types.Invalid_url message ]
+
+  let parse_failure what msg =
+    Error_types.Internal_error (Printf.sprintf "Failed to parse %s response: %s" what msg)
+
+  (* URL of one page of [/{object_id}/comments]: a checked [Page_url] as Meta
+     returned it (credentials are added by [get_url]), or a request rebuilt
+     from the id and options. *)
+  let comments_page_url ~object_id ?filter ?order ?limit position =
+    match (position : Meta_graph_paging.position) with
+    | Page_url url ->
+        Meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
+          ~edge:"comments" url
+        |> Result.map Uri.to_string
+        |> Result.map_error invalid_input
+    | First | After _ | Before _ ->
+        if String.trim object_id = "" then
+          Error (invalid_input "object_id must not be empty")
+        else
+          let params =
+            [ ("fields", [ Comments.fields ]) ]
+            @ (match filter with
+               | Some f -> [ ("filter", [ Comments.string_of_filter f ]) ]
+               | None -> [])
+            @ (match order with
+               | Some o -> [ ("order", [ Comments.string_of_order o ]) ]
+               | None -> [])
+            @ (match limit with
+               | Some n when n > 0 -> [ ("limit", [ string_of_int n ]) ]
+               | Some _ | None -> [])
+            @ Meta_graph_paging.cursor_query position
+          in
+          Ok
+            (Printf.sprintf "%s/%s/comments?%s" graph_api_base
+               (Uri.pct_encode (String.trim object_id))
+               (Uri.encoded_of_query params))
+
+  (** One page of comments on a Page post, photo, video or comment
+      ([GET /{object_id}/comments], fields {!Comments.fields}), with a Page
+      access token and [appsecret_proof] when [FACEBOOK_APP_SECRET] is set.
+
+      - [filter]: [Stream] lists every level as one flat list in which
+        [parent_id] places replies; omitted, the API default ([Toplevel]).
+      - [order]: omitted, the API default (chronological).
+      - [position]: a cursor or a [paging.next] URL on [graph.facebook.com]
+        (see {!Meta_graph_paging}); with [Page_url] the other options come
+        from the URL.
+
+      Needs [pages_read_engagement] and [pages_read_user_content]; [from]
+      can be missing (see {!Comments}).
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/object/comments/>
+      @see <https://developers.facebook.com/docs/graph-api/results> *)
+  let get_comments_page ~object_id ~access_token ?filter ?order
+      ?(position = Meta_graph_paging.First) ?limit on_result =
+    match comments_page_url ~object_id ?filter ?order ?limit position with
+    | Error err -> on_result (Error err)
+    | Ok url ->
+        get_url ~url ~access_token ~required_permissions:comment_read_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match
+                  Meta_graph_paging.of_body ~item:Comments.parse_comment response.body
+                with
+                | Ok page -> on_result (Ok page)
+                | Error msg -> on_result (Error (parse_failure "comments" msg))))
+
+  (** {!get_comments_page} with the account's stored Page token. *)
+  let get_comments_page_for_account ~account_id ~object_id ?filter ?order
+      ?position ?limit on_result =
+    ensure_valid_token ~account_id
+      (fun access_token ->
+        get_comments_page ~object_id ~access_token ?filter ?order ?position
+          ?limit on_result)
+      (fun err -> on_result (Error err))
+
+  (* Graph answers moderation calls with {"success": true|false}. *)
+  let expect_success ~what (response : Social_core.response) =
+    match Yojson.Basic.from_string response.body with
+    | `Assoc fields -> (
+        match List.assoc_opt "success" fields with
+        | Some (`Bool true) -> Ok ()
+        | Some (`Bool false) ->
+            Error
+              (Error_types.Api_error
+                 { status_code = response.status;
+                   message = Printf.sprintf "Facebook did not %s" what;
+                   platform = Platform_types.FacebookPage;
+                   raw_response = Some response.body;
+                   request_id = None })
+        | Some _ | None -> Error (parse_failure what "no success flag"))
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Error (parse_failure what "expected a JSON object")
+    | exception Yojson.Json_error msg -> Error (parse_failure what msg)
+
+  let require_id ~name id on_result k =
+    if String.trim id = "" then
+      on_result (Error (invalid_input (name ^ " must not be empty")))
+    else k (Uri.pct_encode (String.trim id))
+
+  (** Reply to a comment as the Page ([POST /{comment_id}/comments] with
+      [message]); returns the new comment's id. Facebook shows comments two
+      levels deep, so reply to a top-level comment (see {!Comments}). Needs
+      [pages_manage_engagement].
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/object/comments/> *)
+  let reply_to_comment ~comment_id ~access_token ~message on_result =
+    require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
+        post ~path:(comment_id ^ "/comments") ~access_token
+          ~params:[ ("message", message) ]
+          ~required_permissions:comment_manage_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match Yojson.Basic.from_string response.body with
+                | `Assoc fields -> (
+                    match List.assoc_opt "id" fields with
+                    | Some (`String id) -> on_result (Ok id)
+                    | Some _ | None -> on_result (Error (parse_failure "reply" "no id")))
+                | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+                    on_result (Error (parse_failure "reply" "expected a JSON object"))
+                | exception Yojson.Json_error msg ->
+                    on_result (Error (parse_failure "reply" msg)))))
+
+  (** Hide ([hidden:true]) or unhide a comment on a Page's post
+      ([POST /{comment_id}] with [is_hidden]; Page comments only). Needs
+      [pages_manage_engagement].
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/comment/> *)
+  let set_comment_hidden ~comment_id ~access_token ~hidden on_result =
+    require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
+        post ~path:comment_id ~access_token
+          ~params:[ ("is_hidden", string_of_bool hidden) ]
+          ~required_permissions:comment_manage_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response ->
+                on_result
+                  (expect_success
+                     ~what:(if hidden then "hide the comment" else "unhide the comment")
+                     response)))
+
+  (** Delete a comment ([DELETE /{comment_id}]). Needs
+      [pages_manage_engagement].
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/comment/> *)
+  let delete_comment ~comment_id ~access_token on_result =
+    require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
+        delete ~path:comment_id ~access_token
+          ~required_permissions:comment_manage_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response ->
+                on_result (expect_success ~what:"delete the comment" response)))
+
+  (** Like a comment or Page post as the Page ([POST /{object_id}/likes]).
+      The Page must not already like it. Needs [pages_manage_engagement].
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/object/likes/> *)
+  let like_object ~object_id ~access_token on_result =
+    require_id ~name:"object_id" object_id on_result (fun object_id ->
+        post ~path:(object_id ^ "/likes") ~access_token ~params:[]
+          ~required_permissions:comment_manage_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> on_result (expect_success ~what:"like the object" response)))
+
+  (** Remove the Page's like ([DELETE /{object_id}/likes]). Needs
+      [pages_manage_engagement].
+
+      @see <https://developers.facebook.com/docs/graph-api/reference/object/likes/> *)
+  let unlike_object ~object_id ~access_token on_result =
+    require_id ~name:"object_id" object_id on_result (fun object_id ->
+        delete ~path:(object_id ^ "/likes") ~access_token
+          ~required_permissions:comment_manage_permissions
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> on_result (expect_success ~what:"unlike the object" response)))
 
   (** {1 Page Info} *)
 
