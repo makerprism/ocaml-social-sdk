@@ -1,3 +1,9 @@
 (test
  (name test_lwt_adapter)
+ (modules test_lwt_adapter)
  (libraries social-lwt lwt lwt.unix))
+
+(test
+ (name test_cohttp_client)
+ (modules test_cohttp_client)
+ (libraries social-core social-lwt lwt lwt.unix unix))
