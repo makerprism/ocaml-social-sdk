@@ -631,6 +631,22 @@ let to_canonical_post_insights_series (post_insights : post_insight list) =
                   ~provider_metric:(string_of_insight_metric insight.metric)
                   [ Analytics_types.make_datapoint insight.value ]))
 
+(** Reads [permalink] from a [GET /{id}?fields=permalink] response body.
+    [Ok None] when the post exists but Meta returns no permalink for it
+    (absent, [null] or empty); [Error] when the body is not a JSON object
+    or the field is not a string. *)
+let parse_permalink_response body : (string option, string) Stdlib.result =
+  match Yojson.Basic.from_string body with
+  | exception Yojson.Json_error msg -> Error msg
+  | `Assoc fields -> (
+      match List.assoc_opt "permalink" fields with
+      | None | Some `Null | Some (`String "") -> Ok None
+      | Some (`String permalink) -> Ok (Some permalink)
+      | Some (`Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) ->
+          Error "permalink is not a string")
+  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+      Error "expected a JSON object"
+
 type media_kind =
   | Image
   | Video
@@ -2284,6 +2300,46 @@ module Make (Config : CONFIG) = struct
       (function
         | Ok insights -> on_result (Ok (to_canonical_post_insights_series insights))
         | Error err -> on_result (Error err))
+
+  (** Permalink of a post or reply by id: [GET /{post_id}?fields=permalink].
+      [Ok None] when Meta returns no permalink for the object. Takes a token,
+      so it works without stored credentials; reads go through the same
+      retry policy as the other readers.
+
+      @see <https://developers.facebook.com/docs/threads/threads-media> *)
+  let get_permalink ~access_token ~post_id on_result =
+    let query =
+      Uri.encoded_of_query
+        [ ("fields", [ "permalink" ]); ("access_token", [ access_token ]) ]
+    in
+    let url =
+      Printf.sprintf "%s/%s?%s" threads_api_base (String.trim post_id) query
+    in
+    http_get_with_retry url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          match parse_permalink_response response.body with
+          | Ok permalink -> on_result (Ok permalink)
+          | Error msg ->
+              on_result
+                (Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse permalink response: %s"
+                         msg)))
+        else
+          on_result
+            (Error
+               (parse_api_error ~status_code:response.status
+                  ~headers:response.headers ~response_body:response.body)))
+      (fun err -> on_result (Error (network_error err)))
+
+  (** {!get_permalink} with the account's stored (and, if configured,
+      refreshed) credentials. *)
+  let get_permalink_for_account ~account_id ~post_id on_result =
+    with_valid_credentials ~account_id
+      (fun creds ->
+        get_permalink ~access_token:creds.access_token ~post_id on_result)
+      (fun err -> on_result (Error err))
 
   let post_single
       ~account_id

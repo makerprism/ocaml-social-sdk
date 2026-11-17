@@ -453,6 +453,22 @@ type 'a page_result = {
   previous_url : string option;
 }
 
+(** Reads [permalink_url] from a [GET /{id}?fields=permalink_url] response body.
+    [Ok None] when the object exists but Meta returns no permalink_url for it
+    (absent, [null] or empty); [Error] when the body is not a JSON object
+    or the field is not a string. *)
+let parse_permalink_response body : (string option, string) Stdlib.result =
+  match Yojson.Basic.from_string body with
+  | exception Yojson.Json_error msg -> Error msg
+  | `Assoc fields -> (
+      match List.assoc_opt "permalink_url" fields with
+      | None | Some `Null | Some (`String "") -> Ok None
+      | Some (`String permalink) -> Ok (Some permalink)
+      | Some (`Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) ->
+          Error "permalink_url is not a string")
+  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+      Error "expected a JSON object"
+
 (** Configuration module type for Facebook provider *)
 module type CONFIG = sig
   module Http : HTTP_CLIENT
@@ -2348,6 +2364,30 @@ module Make (Config : CONFIG) = struct
             })))
         | Error e -> on_result (Error e))
   
+  (** Permalink of a post (or any object with [permalink_url]) by id:
+      [GET /{post_id}?fields=permalink_url], with [appsecret_proof] when an
+      app secret is configured. [Ok None] when Meta returns no permalink. *)
+  let get_permalink ~post_id ~access_token on_result =
+    get ~path:post_id ~access_token ~fields:[ "permalink_url" ]
+      ~required_permissions:[ "pages_read_engagement" ]
+      (function
+        | Error err -> on_result (Error err)
+        | Ok response -> (
+            match parse_permalink_response response.body with
+            | Ok permalink -> on_result (Ok permalink)
+            | Error msg ->
+                on_result
+                  (Error
+                     (Error_types.Internal_error
+                        (Printf.sprintf "Failed to parse permalink response: %s"
+                           msg)))))
+
+  (** {!get_permalink} with the account's stored Page token. *)
+  let get_permalink_for_account ~account_id ~post_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token -> get_permalink ~post_id ~access_token on_result)
+      (fun err -> on_result (Error err))
+
   (** Get a page of results from a collection endpoint *)
   let get_page ~path ~access_token ?fields ?cursor (parse_data : Yojson.Basic.t -> 'a list) on_result =
     get_paginated ~path ~access_token ?fields ?cursor

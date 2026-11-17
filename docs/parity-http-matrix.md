@@ -17,6 +17,7 @@ Interpretation:
 | Publish Reel (`social-facebook-graph-v25`) | POST + POST + POST | `POST https://graph.facebook.com/v25.0/{page_id}/video_reels` (`upload_phase=start`), then `POST https://rupload.facebook.com/video-upload/v25.0/{video_id}`, then `POST .../{page_id}/video_reels` (`upload_phase=finish`) | start/finish: `Content-Type: application/x-www-form-urlencoded`; upload: `Authorization: OAuth <page_token>`, `file_url: <video_url>` | start: `upload_phase`, `access_token`, optional `appsecret_proof`; upload: empty body; finish: `upload_phase`, `video_id`, `video_state=PUBLISHED`, `description`, optional `place`, `access_token`, optional `appsecret_proof`. Upload and finish must answer `{"success": true}` | `Facebook.upload_video_reel_typed`, `Facebook.post_reel` | `test_upload_video_reel`, `test_upload_video_reel_with_place`, `test_upload_video_reel_failures`, `test_post_reel_with_place_recovers_on_finish_auth_error` |
 | Account analytics | GET | `https://graph.facebook.com/v20.0/{id}/insights?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views&period=day&since&until&access_token` | none | none (query-token contract) | `Facebook.get_account_analytics` | `test_account_analytics_request_contract` |
 | Post analytics | GET | `https://graph.facebook.com/v20.0/{post_id}/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token` | none | none (query-token contract) | `Facebook.get_post_analytics` | `test_post_analytics_request_contract` |
+| Permalink by id (`social-facebook-graph-v25`) | GET | `https://graph.facebook.com/v25.0/{post_id}?fields=permalink_url[&appsecret_proof]` | `Authorization: Bearer <token>` | none | `Facebook.get_permalink`, `Facebook.get_permalink_for_account` | `test_get_permalink` |
 
 Known subtle bug traps:
 - Account/post insights are pinned to `v20.0` while most Graph calls use `v21.0`.
@@ -34,6 +35,7 @@ Known subtle bug traps:
 | Account analytics (audience) | GET | `/v21.0/{id}/insights?metric=follower_count,reach&period=day&since&until&access_token` | none | none (query-token contract) | `Instagram.get_account_audience_insights` | `test_account_audience_insights_request_contract` |
 | Account analytics (engagement) | GET | `/v21.0/{id}/insights?metric_type=total_value&metric=likes,views,comments,shares,saves,replies&period=day&since&until&access_token` | none | none (query-token contract) | `Instagram.get_account_engagement_insights` | `test_account_engagement_insights_request_contract` |
 | Post analytics | GET | `/v21.0/{post_id}/insights?metric=views,reach,saved,likes,comments,shares&access_token` | none | none (query-token contract) | `Instagram.get_media_insights` | `test_media_insights_request_contract` |
+| Permalink by id (`social-instagram-standalone-v25`) | GET | `https://graph.instagram.com/v25.0/{media_id}?fields=permalink[&appsecret_proof]` | `Authorization: Bearer <token>` | none | `Instagram.get_permalink`, `Instagram.get_permalink_for_account` | `test_get_permalink` |
 
 Known subtle bug traps:
 - Engagement insights require `metric_type=total_value`; omitting it changes response shape.
@@ -53,6 +55,7 @@ Known subtle bug traps:
 | Replies / conversation / pending replies | GET | `GET /v1.0/{media_id}/replies`, `/conversation`, `/pending_replies` with `fields=<reply_fields>` (`pending_reply_fields` for pending), `limit`, optional `reverse`, `approval_status`, `after`, `access_token` | none | none (query-token contract) | `Threads.get_replies`, `Threads.get_conversation`, `Threads.get_pending_replies` | `test_get_conversation_parses_reply_fields`, `test_get_replies_requests_reply_fields`, `test_get_pending_replies_approval_status` |
 | Hide / unhide reply | POST | `POST /v1.0/{reply_id}/manage_reply` | `Content-Type: application/x-www-form-urlencoded` | form body: `hide=true\|false`, `access_token` | `Threads.hide_reply`, `Threads.unhide_reply` | `test_hide_reply_success`, `test_unhide_reply_success` |
 | Approve / ignore pending reply | POST | `POST /v1.0/{reply_id}/manage_pending_reply` | `Content-Type: application/x-www-form-urlencoded` | form body: `approve=true\|false`, `access_token` | `Threads.approve_reply`, `Threads.ignore_reply` | `test_approve_reply_success`, `test_ignore_reply_success` |
+| Permalink by id | GET | `GET /v1.0/{post_id}?fields=permalink&access_token=...` | none | none (query-token contract) | `Threads.get_permalink`, `Threads.get_permalink_for_account` | `test_get_permalink`, `test_get_permalink_for_account` |
 
 Known subtle bug traps:
 - For publish endpoints, `access_token` is part of form/query contract (not Authorization header).

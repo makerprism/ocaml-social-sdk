@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `let sleep = Social_lwt.Lwt_adapter.sleep`. A timer the runtime cannot
   schedule fails the post. `BASE_CONFIG` holds everything else `CONFIG`
   required.
+- **`get_permalink ~media_id ~access_token`** and **`get_permalink_for_account ~account_id ~media_id`**: fetch an object's `permalink` by id (`GET /{id}?fields=permalink`, with `appsecret_proof` when an app secret is configured). The result is `string option api_result`: `Ok None` when Meta returns no permalink for an object that exists. The pure parser is exported as `parse_permalink_response`.
 
 ### Deprecated
 

@@ -506,6 +506,22 @@ module OAuth = struct
   end
 end
 
+(** Reads [permalink] from a [GET /{id}?fields=permalink] response body.
+    [Ok None] when the media exists but Meta returns no permalink for it
+    (absent, [null] or empty); [Error] when the body is not a JSON object
+    or the field is not a string. *)
+let parse_permalink_response body : (string option, string) Stdlib.result =
+  match Yojson.Basic.from_string body with
+  | exception Yojson.Json_error msg -> Error msg
+  | `Assoc fields -> (
+      match List.assoc_opt "permalink" fields with
+      | None | Some `Null | Some (`String "") -> Ok None
+      | Some (`String permalink) -> Ok (Some permalink)
+      | Some (`Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) ->
+          Error "permalink is not a string")
+  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+      Error "expected a JSON object"
+
 (** {1 Rate Limiting Types} *)
 
 (** Rate limit usage information from X-App-Usage header *)
@@ -1836,6 +1852,40 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
     ensure_valid_token ~account_id
       (fun access_token ->
         delete_media ~media_id ~access_token on_result)
+      (fun err -> on_result (Error err))
+
+  (** Permalink of a media object by id: [GET /{media_id}?fields=permalink].
+      [Ok None] when Meta returns no permalink for the object.
+
+      @param media_id The ID of the media (post, reel, story, carousel)
+      @param access_token Valid access token *)
+  let get_permalink ~media_id ~access_token on_result =
+    let proof_params = match compute_app_secret_proof ~access_token with
+      | Some proof -> [("appsecret_proof", [proof])]
+      | None -> []
+    in
+    let query = Uri.encoded_of_query ([("fields", ["permalink"])] @ proof_params) in
+    let url = Printf.sprintf "%s/%s?%s" graph_api_base media_id query in
+    let headers = [
+      ("Authorization", Printf.sprintf "Bearer %s" access_token);
+    ] in
+    Config.Http.get ~headers url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          match parse_permalink_response response.body with
+          | Ok permalink -> on_result (Ok permalink)
+          | Error msg ->
+              on_result (Error (Error_types.Internal_error
+                (Printf.sprintf "Failed to parse permalink response: %s" msg)))
+        else
+          on_result (Error (api_error_of_response response)))
+      (fun err -> on_result (Error (network_error_of_string err)))
+
+  (** {!get_permalink} using account credentials (auto-refreshes token) *)
+  let get_permalink_for_account ~account_id ~media_id on_result =
+    ensure_valid_token ~account_id
+      (fun access_token -> get_permalink ~media_id ~access_token on_result)
       (fun err -> on_result (Error err))
 
   (** Post Reel (short-form video) *)

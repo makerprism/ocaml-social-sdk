@@ -4769,6 +4769,64 @@ let test_api_error_detail_survives_redaction () =
    | None -> failwith "expected provider detail");
   print_endline "ok: api error detail survives redaction"
 
+
+(* Permalink by id: GET /{id}?fields=permalink with the token in the query,
+   percent-encoded, and the three outcomes callers branch on. *)
+let test_get_permalink () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = [];
+        body = {|{"permalink":"https://www.threads.com/@alice/post/abc","id":"post-1"}|} } ];
+  let token = "tok+en/with=&reserved" in
+  Threads.get_permalink ~access_token:token ~post_id:" post-1 " (function
+    | Ok (Some "https://www.threads.com/@alice/post/abc") -> ()
+    | Ok _ -> failwith "expected the permalink"
+    | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v1.0/post-1");
+       assert (Uri.get_query_param uri "fields" = Some "permalink");
+       assert (Uri.get_query_param uri "access_token" = Some token)
+   | _ -> failwith "expected one GET");
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"id":"post-1"}|} } ];
+  Threads.get_permalink ~access_token:"t" ~post_id:"post-1" (function
+    | Ok None -> ()
+    | _ -> failwith "a missing permalink is Ok None");
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 400; headers = [];
+        body = {|{"error":{"message":"Object does not exist","type":"OAuthException","code":100,"error_subcode":33}}|} } ];
+  Threads.get_permalink ~access_token:"t" ~post_id:"gone" (function
+    | Error (Error_types.Resource_not_found _) -> ()
+    | Error err -> failwith ("expected Resource_not_found, got " ^ Error_types.error_to_string err)
+    | Ok _ -> failwith "expected an error");
+  print_endline "ok: get_permalink"
+
+let test_get_permalink_for_account () =
+  with_reply_account ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"permalink":"https://www.threads.com/@a/post/x"}|} } ];
+  Threads.get_permalink_for_account ~account_id:"acct-1" ~post_id:"post-1" (function
+    | Ok (Some "https://www.threads.com/@a/post/x") -> ()
+    | _ -> failwith "expected the permalink");
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] -> assert (query_param url "access_token" = "access-xyz")
+   | _ -> failwith "expected one GET");
+  print_endline "ok: get_permalink_for_account"
+
+let test_parse_permalink_response () =
+  let parse = Social_threads_v1.parse_permalink_response in
+  let is_error body = match parse body with Error _ -> true | Ok _ -> false in
+  assert (parse {|{"permalink":"https://x"}|} = Ok (Some "https://x"));
+  assert (parse {|{"permalink":null}|} = Ok None);
+  assert (parse {|{"permalink":""}|} = Ok None);
+  assert (is_error {|{"permalink":42}|});
+  assert (is_error {|[]|});
+  assert (is_error "not json");
+  print_endline "ok: parse_permalink_response"
+
 let () =
   test_oauth_url ();
   test_exported_api_constants ();
@@ -4947,4 +5005,7 @@ let () =
   test_get_conversation_parses_reply_fields ();
   test_get_replies_requests_reply_fields ();
   test_get_pending_replies_approval_status ();
+  test_get_permalink ();
+  test_get_permalink_for_account ();
+  test_parse_permalink_response ();
   print_endline "Threads tests passed"
