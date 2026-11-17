@@ -42,3 +42,8 @@
  (name test_token_expiry)
  (modules test_token_expiry)
  (libraries social-core yojson ptime))
+
+(test
+ (name test_meta_debug_token)
+ (modules test_meta_debug_token)
+ (libraries social-core))

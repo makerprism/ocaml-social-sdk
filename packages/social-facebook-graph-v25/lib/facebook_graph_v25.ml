@@ -213,6 +213,90 @@ module OAuth = struct
     let query = Uri.encoded_of_query (List.map (fun (k, v) -> (k, [v])) params) in
     Printf.sprintf "%s?%s" Metadata.authorization_endpoint query
   
+  (** {2 Token tooling helpers} *)
+
+  (** [app_secret_proof ~app_secret ~access_token] is the [appsecret_proof]
+      Graph expects when the app enables "Require App Secret": the
+      lowercase-hex HMAC-SHA256 of the access token keyed with the app
+      secret ({{:https://developers.facebook.com/docs/graph-api/securing-requests}}). *)
+  let app_secret_proof ~app_secret ~access_token =
+    Digestif.SHA256.to_hex (Digestif.SHA256.hmac_string ~key:app_secret access_token)
+
+  (** Query parameters carrying [access_token] and, when [app_secret] is
+      given, its [appsecret_proof]. *)
+  let token_query ?app_secret access_token =
+    ("access_token", [ access_token ])
+    ::
+    (match app_secret with
+     | Some app_secret -> [ ("appsecret_proof", [ app_secret_proof ~app_secret ~access_token ]) ]
+     | None -> [])
+
+  (** A transport failure message can echo the request URL, which carries
+      tokens; keep only messages that do not. *)
+  let redact_transport_message message =
+    let lower = String.lowercase_ascii message in
+    let mentions needle =
+      let n = String.length needle and h = String.length lower in
+      let rec scan i = i + n <= h && (String.sub lower i n = needle || scan (i + 1)) in
+      scan 0
+    in
+    if List.exists mentions [ "token"; "secret"; "appsecret_proof" ] then
+      "[REDACTED_SENSITIVE_TEXT]"
+    else message
+
+  (** Status of one entry of [/me/permissions]. *)
+  type permission_status =
+    | Granted
+    | Declined
+    | Expired  (** The user granted it, but the grant has lapsed (re-request it). *)
+    | Unknown_status of string  (** A value Meta's reference does not list. *)
+
+  type permission = {
+    permission : string;
+    status : permission_status;
+  }
+
+  let permission_status_of_string = function
+    | "granted" -> Granted
+    | "declined" -> Declined
+    | "expired" -> Expired
+    | other -> Unknown_status other
+
+  (** Parses a [/me/permissions] body: [{"data": [{"permission", "status"}]}].
+      Entries without both members are skipped. *)
+  let parse_permissions body : (permission list, string) Stdlib.result =
+    match Yojson.Basic.from_string body with
+    | exception Yojson.Json_error message -> Error ("permissions response is not JSON: " ^ message)
+    | `Assoc fields -> (
+        match List.assoc_opt "data" fields with
+        | Some (`List entries) ->
+            Ok
+              (List.filter_map
+                 (function
+                   | `Assoc entry -> (
+                       match List.assoc_opt "permission" entry, List.assoc_opt "status" entry with
+                       | Some (`String permission), Some (`String status) ->
+                           Some { permission; status = permission_status_of_string status }
+                       | _, _ -> None)
+                   | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None)
+                 entries)
+        | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None ->
+            Error "permissions response has no data array")
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Error "permissions response is not an object"
+
+  (** The names with status [Granted], and with status [Declined], in
+      response order. *)
+  let granted_permissions permissions =
+    List.filter_map
+      (fun p -> match p.status with Granted -> Some p.permission | Declined | Expired | Unknown_status _ -> None)
+      permissions
+
+  let declined_permissions permissions =
+    List.filter_map
+      (fun p -> match p.status with Declined -> Some p.permission | Granted | Expired | Unknown_status _ -> None)
+      permissions
+
   (** Make functor for OAuth operations that need HTTP client *)
   module Make (Http : HTTP_CLIENT) = struct
     (** Exchange authorization code for short-lived access token
@@ -401,6 +485,60 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Debug token failed (%d): %s" response.status response.body))
         on_error
+
+    (** {2 Typed token reads} *)
+
+    let graph_error ~status_code body =
+      Meta_graph_error.to_error ~platform:Platform_types.FacebookPage ~status_code
+        ~required_permissions:[] body
+
+    (** GET [url]; a 2xx body goes through [parse], anything else becomes the
+        shared Graph error, and a transport failure a [Network_error]. *)
+    let get_parsed url parse on_result =
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match (parse response.body : (_, string) Stdlib.result) with
+            | Stdlib.Ok value -> on_result (Stdlib.Ok value)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else on_result (Stdlib.Error (graph_error ~status_code:response.status response.body)))
+        (fun err ->
+          on_result (Stdlib.Error (Meta_graph_error.transport_error (redact_transport_message err))))
+
+    (** Inspect a token with [GET /debug_token]
+        ({{:https://developers.facebook.com/docs/graph-api/reference/debug_token/}}).
+
+        Typed replacement for {!debug_token}, which returns raw JSON through
+        string continuations and stays for compatibility.
+
+        @param app_access_token An app access token, e.g.
+          {!Meta_debug_token.app_access_token} ["app_id|app_secret"].
+          Keep it server-side.
+        @param input_token The user or Page token to inspect.
+
+        A token Meta considers invalid is [Ok] with [is_valid = false] (and
+        usually [error]); [Error] means the call itself failed. *)
+    let debug_token_info ~app_access_token ~input_token on_result =
+      let query =
+        Uri.encoded_of_query
+          [ ("input_token", [ input_token ]); ("access_token", [ app_access_token ]) ]
+      in
+      get_parsed
+        (Printf.sprintf "%s/debug_token?%s" Metadata.api_base query)
+        Meta_debug_token.of_body on_result
+
+    (** The permissions a user granted, declined or let expire, from
+        [GET /me/permissions]
+        ({{:https://developers.facebook.com/docs/graph-api/reference/user/permissions/}}).
+        Use {!granted_permissions} / {!declined_permissions} to split them.
+
+        @param access_token A user access token.
+        @param app_secret Sends [appsecret_proof] when given. *)
+    let get_permissions ~access_token ?app_secret on_result =
+      let query = Uri.encoded_of_query (token_query ?app_secret access_token) in
+      get_parsed
+        (Printf.sprintf "%s/me/permissions?%s" Metadata.api_base query)
+        parse_permissions on_result
   end
 end
 

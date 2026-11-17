@@ -20,6 +20,8 @@ Rows describe `social-facebook-graph-v25` (Graph API `v25.0`, the `api_version` 
 | Account analytics | GET | `https://graph.facebook.com/v25.0/{id}/insights?metric=page_impressions_unique,page_posts_impressions_unique,page_post_engagements,page_daily_follows,page_video_views&period=day&since&until&access_token` | none | none (query-token contract) | `Facebook.get_account_analytics` | `test_account_analytics_request_contract` |
 | Post analytics | GET | `https://graph.facebook.com/v25.0/{post_id}/insights?metric=post_impressions_unique,post_reactions_by_type_total,post_clicks,post_clicks_by_type&access_token` | none | none (query-token contract) | `Facebook.get_post_analytics` | `test_post_analytics_request_contract` |
 | Permalink by id | GET | `https://graph.facebook.com/v25.0/{post_id}?fields=permalink_url[&appsecret_proof]` | `Authorization: Bearer <token>` | none | `Facebook.get_permalink`, `Facebook.get_permalink_for_account` | `test_get_permalink` |
+| Token inspection | GET | `https://graph.facebook.com/v25.0/debug_token?input_token&access_token=<app_id\|app_secret>` | none | none (query-token contract) | `OAuth_http.debug_token_info` | `test_debug_token_info_typed`, `test_debug_token_info_errors` |
+| Granted / declined permissions | GET | `https://graph.facebook.com/v25.0/me/permissions?access_token[&appsecret_proof]` | none | none (query-token contract) | `OAuth_http.get_permissions` | `test_get_permissions` |
 
 Known subtle bug traps:
 - Account/post insights carry the token as a percent-encoded query parameter and send no `appsecret_proof`.
@@ -60,6 +62,7 @@ Known subtle bug traps:
 | Hide / unhide reply | POST | `POST /v1.0/{reply_id}/manage_reply` | `Content-Type: application/x-www-form-urlencoded` | form body: `hide=true\|false`, `access_token` | `Threads.hide_reply`, `Threads.unhide_reply` | `test_hide_reply_success`, `test_unhide_reply_success` |
 | Approve / ignore pending reply | POST | `POST /v1.0/{reply_id}/manage_pending_reply` | `Content-Type: application/x-www-form-urlencoded` | form body: `approve=true\|false`, `access_token` | `Threads.approve_reply`, `Threads.ignore_reply` | `test_approve_reply_success`, `test_ignore_reply_success` |
 | Permalink by id | GET | `GET /v1.0/{post_id}?fields=permalink&access_token=...` | none | none (query-token contract) | `Threads.get_permalink`, `Threads.get_permalink_for_account` | `test_get_permalink`, `test_get_permalink_for_account` |
+| Token inspection | GET | `GET /v1.0/debug_token?input_token&access_token=TH\|app_id\|app_secret` | none | none (query-token contract) | `OAuth_http.debug_token_info` | `test_debug_token_info` |
 
 Known subtle bug traps:
 - For publish endpoints, `access_token` is part of form/query contract (not Authorization header).

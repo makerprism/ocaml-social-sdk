@@ -425,6 +425,38 @@ module OAuth = struct
                   response.status
                   response_body))
         on_error
+
+    (** Inspect a token with [GET /debug_token]
+        ({{:https://developers.facebook.com/docs/threads/reference/debug}}):
+        validity, granted scopes, expiry and user id as Meta recorded them.
+
+        @param app_access_token The Threads app access token,
+          {!Meta_debug_token.threads_app_access_token}
+          (["TH|app_id|app_secret"],
+          {{:https://developers.facebook.com/docs/threads/get-started/app-access-tokens}}),
+          or a tester's user token for the same app. Keep it server-side.
+        @param input_token The token to inspect.
+
+        A token Meta considers invalid is [Ok] with [is_valid = false];
+        [Error] means the call itself failed. *)
+    let debug_token_info ~app_access_token ~input_token on_result =
+      let query =
+        Uri.encoded_of_query
+          [ ("input_token", [ input_token ]); ("access_token", [ app_access_token ]) ]
+      in
+      let url = Printf.sprintf "%s/debug_token?%s" threads_api_base query in
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match Meta_debug_token.of_body response.body with
+            | Stdlib.Ok info -> on_result (Stdlib.Ok info)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result
+              (Stdlib.Error
+                 (parse_api_error ~status_code:response.status ~headers:response.headers
+                    ~response_body:response.body)))
+        (fun err -> on_result (Stdlib.Error (network_error err)))
   end
 end
 

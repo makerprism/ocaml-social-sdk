@@ -417,6 +417,88 @@ let test_debug_token_encodes_tokens () =
       | _ -> failwith "expected one GET for debug_token")
     (fun err -> failwith ("debug_token failed: " ^ err))
 
+let test_debug_token_info_typed () =
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 200;
+      body = {|{"data":{"app_id":"1","type":"USER","is_valid":true,"expires_at":0,
+               "scopes":["pages_show_list","pages_manage_posts"],
+               "granular_scopes":[{"scope":"pages_manage_posts","target_ids":["42"]}],
+               "user_id":"7"}}|};
+      headers = [] };
+  let app_access_token = Meta_debug_token.app_access_token ~app_id:"1234" ~app_secret:"s3cr+t/=" in
+  OAuth_http.debug_token_info ~app_access_token ~input_token:tricky_token (function
+    | Stdlib.Ok info ->
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] ->
+             assert (string_contains url "https://graph.facebook.com/v25.0/debug_token?");
+             assert (query_param url "input_token" = tricky_token);
+             assert (query_param url "access_token" = "1234|s3cr+t/=")
+         | _ -> failwith "expected one GET for debug_token_info");
+        assert info.Meta_debug_token.is_valid;
+        assert (info.expires_at = Some Meta_debug_token.Never_expires);
+        assert (Meta_debug_token.granted_for_target ~target_id:"42" ~scope:"pages_manage_posts" info);
+        assert (not (Meta_debug_token.granted_for_target ~target_id:"43" ~scope:"pages_manage_posts" info));
+        print_endline "✓ debug_token_info returns the typed answer"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err))
+
+let test_debug_token_info_errors () =
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 400;
+      body = {|{"error":{"message":"Invalid OAuth access token.","type":"OAuthException","code":190}}|};
+      headers = [] };
+  OAuth_http.debug_token_info ~app_access_token:"1|bad" ~input_token:"t" (function
+    | Stdlib.Error (Error_types.Auth_error _) -> ()
+    | Stdlib.Error err -> failwith ("unexpected error " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected an error for a bad app token");
+  Mock_http.reset ();
+  Mock_http.set_errors [ "connect failed for https://graph.facebook.com/?access_token=SECRET" ];
+  OAuth_http.debug_token_info ~app_access_token:"1|s" ~input_token:"t" (function
+    | Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed message)) ->
+        assert (not (string_contains message "SECRET"))
+    | Stdlib.Error err -> failwith ("unexpected error " ^ Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected a network error");
+  Mock_http.reset ();
+  Mock_http.set_response { status = 200; body = {|{"data":{}}|}; headers = [] };
+  OAuth_http.debug_token_info ~app_access_token:"1|s" ~input_token:"t" (function
+    | Stdlib.Error (Error_types.Internal_error _) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Internal_error for an unreadable answer");
+  print_endline "✓ debug_token_info maps Graph, transport and parse failures"
+
+let test_get_permissions () =
+  Mock_http.reset ();
+  Mock_http.set_response
+    { status = 200;
+      body = {|{"data":[{"permission":"public_profile","status":"granted"},
+                        {"permission":"pages_manage_posts","status":"declined"},
+                        {"permission":"read_insights","status":"expired"},
+                        {"permission":"odd"}],"paging":{}}|};
+      headers = [] };
+  OAuth_http.get_permissions ~access_token:tricky_token ~app_secret:"appsecret" (function
+    | Stdlib.Ok permissions ->
+        (match !Mock_http.requests with
+         | [ ("GET", url, _, _) ] ->
+             assert (string_contains url "https://graph.facebook.com/v25.0/me/permissions?");
+             assert (query_param url "access_token" = tricky_token);
+             assert (
+               query_param url "appsecret_proof"
+               = OAuth.app_secret_proof ~app_secret:"appsecret" ~access_token:tricky_token)
+         | _ -> failwith "expected one GET for get_permissions");
+        assert (List.length permissions = 3);
+        assert (OAuth.granted_permissions permissions = [ "public_profile" ]);
+        assert (OAuth.declined_permissions permissions = [ "pages_manage_posts" ]);
+        assert (List.exists (fun p -> p.OAuth.status = OAuth.Expired) permissions);
+        print_endline "✓ get_permissions parses granted/declined/expired"
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err))
+
+let test_app_secret_proof_known_answer () =
+  (* HMAC-SHA256("token", key "secret"), lowercase hex. *)
+  assert (
+    OAuth.app_secret_proof ~app_secret:"secret" ~access_token:"token"
+    = "e941110e3d2bfe82621f0e3e1434730d7305d106c5f68c87165d0b27a4611a4a");
+  print_endline "✓ app_secret_proof matches HMAC-SHA256 known answer"
+
 (** Test: Field selection *)
 let test_field_selection () =
   Mock_config.reset ();
@@ -3384,4 +3466,10 @@ let () =
 
   test_get_permalink ();
 
-  print_endline "\n=== All 80 tests passed! ===\n"
+  print_endline "\n--- Token Tooling Tests ---";
+  test_debug_token_info_typed ();
+  test_debug_token_info_errors ();
+  test_get_permissions ();
+  test_app_secret_proof_known_answer ();
+
+  print_endline "\n=== All 84 tests passed! ===\n"
