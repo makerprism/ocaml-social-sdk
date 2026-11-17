@@ -9,8 +9,11 @@ let of_float value =
   | FP_nan -> None
   | FP_infinite -> Some (if value > 0.0 then max_expires_in else 0)
   | FP_zero | FP_normal | FP_subnormal ->
-      if value >= float_of_int max_expires_in then Some max_expires_in
-      else Some (clamp (int_of_float (Float.ceil value)))
+      (* Bound before converting: int_of_float is unspecified outside the
+         int range. *)
+      if value <= 0.0 then Some 0
+      else if value >= float_of_int max_expires_in then Some max_expires_in
+      else Some (int_of_float (Float.ceil value))
 
 let expires_in_of_json json =
   match json with
@@ -42,10 +45,15 @@ let seconds_until ?now expires_at =
       let span = Ptime.diff instant (now_or_clock now) in
       Some (int_of_float (Float.round (Ptime.Span.to_float_s span)))
 
+(* Compares exact instants, so a sub-second clock never reads as expired
+   early. *)
 let is_expired ?(buffer_seconds = 0) ?now expires_at =
   match expires_at with
   | None -> false
   | Some expires_at -> (
-      match seconds_until ?now expires_at with
-      | None -> true
-      | Some remaining -> remaining <= buffer_seconds)
+      match Ptime.of_rfc3339 expires_at with
+      | Error _ -> true
+      | Ok (instant, _, _) -> (
+          match Ptime.add_span (now_or_clock now) (Ptime.Span.of_int_s buffer_seconds) with
+          | Some threshold -> not (Ptime.is_later instant ~than:threshold)
+          | None -> true))

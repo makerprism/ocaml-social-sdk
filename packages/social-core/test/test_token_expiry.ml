@@ -13,6 +13,7 @@ let test_expires_in_of_json () =
   assert (read {|{"expires_in": -5}|} = Some 0);
   assert (read {|{"expires_in": 99999999999}|} = Some Token_expiry.max_expires_in);
   assert (read {|{"expires_in": 1e300}|} = Some Token_expiry.max_expires_in);
+  assert (read {|{"expires_in": -1e300}|} = Some 0);
   assert (read {|{"expires_in": null}|} = None);
   assert (read {|{"expires_in": "soon"}|} = None);
   assert (read {|{"access_token": "x"}|} = None);
@@ -44,6 +45,13 @@ let test_is_expired () =
   assert (not (Token_expiry.is_expired ~buffer_seconds:1799 ~now later));
   assert (Token_expiry.is_expired ~now (Some "2025-12-31T00:00:00Z"));
   assert (Token_expiry.is_expired ~now (Some "garbage"));
+  (* Exact instants: 0.25 s left is not expired with no buffer. *)
+  let now_frac =
+    match Ptime.of_rfc3339 "2026-01-01T00:00:00.75Z" with
+    | Ok (t, _, _) -> t
+    | Error _ -> assert false
+  in
+  assert (not (Token_expiry.is_expired ~now:now_frac (Some "2026-01-01T00:00:01Z")));
   (* Round trip with what expires_at_of_expires_in writes. *)
   let written = Token_expiry.expires_at_of_expires_in ~now 60 in
   assert (not (Token_expiry.is_expired ~now written));

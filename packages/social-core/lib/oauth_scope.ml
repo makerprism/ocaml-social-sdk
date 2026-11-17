@@ -3,7 +3,7 @@ type separator =
   | Space
 
 let is_delimiter = function
-  | ',' | ' ' | '\t' | '\n' | '\r' | '\012' -> true
+  | ',' | ' ' | '\t' | '\n' | '\011' | '\012' | '\r' -> true
   | _ -> false
 
 let split raw =

@@ -4,6 +4,8 @@ let test_split_shapes () =
   (* Mixed and repeated delimiters, as left by an application that joined
      a comma list with spaces. *)
   assert (Oauth_scope.split " a, b ,,c\td\n" = [ "a"; "b"; "c"; "d" ]);
+  assert (Oauth_scope.split "a\011b\012c" = [ "a"; "b"; "c" ]);
+  assert (Oauth_scope.granted ~scope:(Some "read\011write") "read");
   assert (Oauth_scope.split "" = []);
   assert (Oauth_scope.split " , " = []);
   (* Case is kept so the list can be stored unchanged. *)
