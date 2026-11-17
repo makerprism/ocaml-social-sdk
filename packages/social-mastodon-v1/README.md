@@ -376,11 +376,48 @@ Mastodon.get_instance_limits
   )
 ```
 
+### Read: Threads, Notifications and WebFinger (typed)
+
+`Social_mastodon_v1.Entities` holds the typed Status, Context, Notification
+and WebFinger entities. `Reads.Make (Http)` calls them with a token you hold
+(or none, for public data); `Make` has the same calls for a stored account.
+
+```ocaml
+module Reads = Social_mastodon_v1.Reads.Make (Social_lwt.Cohttp_client.Make)
+module E = Social_mastodon_v1.Entities
+
+(* Replies under a status, rebuilt as a tree with in_reply_to_id *)
+Reads.get_status_context ~instance_url:"https://mastodon.social"
+  ~access_token ~status_id:"109999999999999999"
+  (function
+    | Ok { E.descendants; _ } ->
+        List.iter
+          (fun (s : E.status) ->
+            Printf.printf "%s replied to %s: %s\n" s.account.acct
+              (Option.value s.in_reply_to_id ~default:"?")
+              (E.html_to_plain_text s.content))
+          descendants
+    | Error err -> prerr_endline (Error_types.error_to_string err))
+
+(* New mentions since the last seen notification *)
+Reads.get_notifications ~instance_url ~access_token ~types:[ E.Mention ]
+  ~min_id:last_seen_id
+  (function
+    | Ok page -> (* page.notifications, page.cursors.prev_min_id *) ()
+    | Error _ -> ())
+
+(* Does alice@example.social exist? Vet the domain before calling. *)
+Reads.webfinger ~username:"alice" ~domain:"example.social" (function
+  | Ok jrd -> ignore (E.webfinger_actor_url jrd)
+  | Error (Error_types.Resource_not_found _) -> (* no such account *) ()
+  | Error _ -> ())
+```
+
 ## Not Yet Implemented
 
 - Timeline reading (partial; home/public/tag timelines and single status lookup are implemented)
 - Account operations (partial; follow/unfollow/block/unblock/mute/unmute, follow request list/approve/reject, account read operations including followers/following, account lookup by acct, and featured tags reads are implemented)
-- Notifications (partial; fetch/list and dismiss/clear are implemented)
+- Notifications (partial; fetch/list with type filters and `Link` cursors, and dismiss/clear are implemented; grouped notifications (`/api/v2/notifications`) are not)
 - Search (partial; status/account/hashtag search and combined search payload parsing are implemented)
 - Streaming API
 - Filters (partial; list/create/update/delete via `/api/v2/filters` are implemented)

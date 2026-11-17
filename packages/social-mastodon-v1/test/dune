@@ -57,3 +57,8 @@
  (name test_mastodon_health_contract)
  (modules test_mastodon_health_contract)
  (libraries social_mastodon_v1 social-core))
+
+(test
+ (name test_mastodon_status_reads_contract)
+ (modules test_mastodon_status_reads_contract)
+ (libraries social_mastodon_v1 social-core yojson str uri))
