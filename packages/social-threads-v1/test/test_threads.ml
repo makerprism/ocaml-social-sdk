@@ -3609,6 +3609,59 @@ let test_poll_container_status_error_status () =
           print_endline "ok: poll container status error status"
       | _ -> failwith "expected error on error status")
 
+let check_status_of_body body on_status =
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body } ];
+  Threads.check_container_status ~access_token:"access-xyz"
+    ~container_id:"container-1" on_status
+
+let test_check_container_status_published () =
+  check_status_of_body "{\"status\":\"PUBLISHED\",\"id\":\"container-1\"}"
+    (function
+      | Ok Social_threads_v1.Published ->
+          print_endline "ok: check container status published"
+      | _ -> failwith "expected Published status")
+
+let test_check_container_status_expired () =
+  check_status_of_body "{\"status\":\"EXPIRED\",\"id\":\"container-1\"}"
+    (function
+      | Ok Social_threads_v1.Expired ->
+          print_endline "ok: check container status expired"
+      | _ -> failwith "expected Expired status")
+
+let test_check_container_status_error_without_message () =
+  check_status_of_body "{\"status\":\"ERROR\"}"
+    (function
+      | Ok (Social_threads_v1.Error_status msg) ->
+          assert (msg = "ERROR");
+          print_endline "ok: check container status error without message"
+      | _ -> failwith "expected Error_status carrying the raw status")
+
+let test_poll_container_status_published_is_duplicate () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = "{\"status\":\"PUBLISHED\"}" } ];
+  Threads.poll_container_status ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Error Error_types.Duplicate_content ->
+          assert (List.length !Mock_http.requests = 1);
+          print_endline "ok: poll container status published is duplicate"
+      | _ -> failwith "expected Duplicate_content for a published container")
+
+let test_poll_container_status_expired () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = "{\"status\":\"EXPIRED\"}" } ];
+  Threads.poll_container_status ~access_token:"access-xyz"
+    ~container_id:"container-1"
+    (function
+      | Error (Error_types.Internal_error msg) ->
+          assert (string_contains msg "expired");
+          assert (List.length !Mock_http.requests = 1);
+          print_endline "ok: poll container status expired"
+      | _ -> failwith "expected an expiry error without further polling")
+
 (* H1: Carousel/multi-media posts *)
 let test_post_carousel_success () =
   Mock_config.reset ();
@@ -4603,6 +4656,11 @@ let () =
   test_poll_container_status_retries_then_finishes ();
   test_poll_container_status_max_attempts_exceeded ();
   test_poll_container_status_error_status ();
+  test_check_container_status_published ();
+  test_check_container_status_expired ();
+  test_check_container_status_error_without_message ();
+  test_poll_container_status_published_is_duplicate ();
+  test_poll_container_status_expired ();
   test_post_carousel_success ();
   test_post_carousel_rejects_single_media ();
   test_post_carousel_rejects_too_many_media ();
