@@ -516,8 +516,9 @@ type rate_limit_info = {
   percentage_used : float;
 }
 
-(** Configuration module type for Instagram Standalone provider *)
-module type CONFIG = sig
+(** Configuration shared by {!CONFIG} and {!NONBLOCKING_CONFIG}:
+    everything the Instagram Standalone provider needs except the timer. *)
+module type BASE_CONFIG = sig
   module Http : HTTP_CLIENT
 
   val get_env : string -> string option
@@ -527,14 +528,35 @@ module type CONFIG = sig
   val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
   val get_ig_user_id : account_id:string -> (string -> unit) -> (string -> unit) -> unit
-  val sleep : float -> (unit -> 'a) -> 'a
 
   (** Optional: Called when rate limit info is updated *)
   val on_rate_limit_update : rate_limit_info -> unit
 end
 
-(** Make functor to create Instagram Standalone provider with given configuration *)
-module Make (Config : CONFIG) = struct
+(** Configuration module type for Instagram Standalone provider ({!Make}).
+
+    @deprecated [sleep] must return its continuation's result, so it can
+    only be implemented by blocking the calling thread. Under Lwt or Eio
+    that freezes every other promise for the whole container-polling
+    backoff. Implement {!NONBLOCKING_CONFIG} and use {!Make_nonblocking}
+    instead. *)
+module type CONFIG = sig
+  include BASE_CONFIG
+
+  val sleep : float -> (unit -> 'a) -> 'a
+end
+
+(** Configuration for {!Make_nonblocking}. The timer is
+    {!Social_core.SLEEP}, which a cooperative runtime implements without
+    blocking: [let sleep = Social_lwt.Lwt_adapter.sleep] under Lwt. *)
+module type NONBLOCKING_CONFIG = sig
+  include BASE_CONFIG
+  include Social_core.SLEEP
+end
+
+(** Make functor to create Instagram Standalone provider with given configuration.
+    Container polling waits through [Config.sleep] without blocking. *)
+module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
   (* Alias of the top-level constant, kept for code that referenced it
      through the functor. *)
   let graph_api_base = graph_api_base
@@ -1458,7 +1480,7 @@ module Make (Config : CONFIG) = struct
         | _ -> 13.0
       in
 
-      Config.sleep delay (fun () ->
+      Config.sleep ~seconds:delay (fun () ->
         check_container_status ~container_id ~access_token
           (function
             | Ok (status_code, status) ->
@@ -1487,6 +1509,7 @@ module Make (Config : CONFIG) = struct
                 (* Status check failed - retry until max attempts *)
                 poll_container_status ~container_id ~access_token ~ig_user_id
                   ~attempt:(attempt + 1) ~max_attempts on_success on_error))
+        on_error
 
   (** Create child containers for carousel (recursive) *)
   let rec create_carousel_children ~ig_user_id ~access_token ~media_urls_with_alt ~index ~acc on_success on_error =
@@ -2144,4 +2167,16 @@ module Make (Config : CONFIG) = struct
       Error "All carousel media items must be publicly accessible HTTP(S) URLs"
     else
       Ok ()
+end
+
+(** {!Make_nonblocking} over a {!CONFIG} whose [sleep] blocks. Kept so
+    existing implementers keep compiling; prefer {!Make_nonblocking}. *)
+module Make (Config : CONFIG) = struct
+  module Nonblocking_config = struct
+    include Config
+
+    let sleep ~seconds on_continue _on_error = Config.sleep seconds on_continue
+  end
+
+  include Make_nonblocking (Nonblocking_config)
 end
