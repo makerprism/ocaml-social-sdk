@@ -3461,6 +3461,177 @@ let test_get_permalink () =
       | _ -> failwith "an unparseable 2xx body is Internal_error");
   print_endline "PASS get_permalink"
 
+(* A filter=stream page of /{post-id}/comments as Graph returns it to a Page
+   token: a top-level comment, a reply placed by parent{id}, and a comment
+   without [from] (no Business Asset User Profile Access), plus cursors and a
+   next link that echoes the token. *)
+let stream_comments_body ~next =
+  Printf.sprintf
+    {|{"data":[
+      {"id":"122105_9001","message":"When does the event start?","created_time":"2026-11-16T09:12:44+0000","from":{"id":"7034918273","name":"Alice Example"},"permalink_url":"https://www.facebook.com/122105/posts/122105?comment_id=9001"},
+      {"id":"122105_9002","message":"At 7pm!","created_time":"2026-11-16T09:20:01+0000","from":{"id":"104857","name":"Example Page"},"permalink_url":"https://www.facebook.com/122105/posts/122105?comment_id=9002&reply_comment_id=9002","parent":{"id":"122105_9001"}},
+      {"id":"122105_9003","created_time":"2026-11-16T10:01:00+0000","permalink_url":"https://www.facebook.com/122105/posts/122105?comment_id=9003"}],
+     "paging":{"cursors":{"before":"WTI5dGJXVnU","after":"WTI5dGJXVnV"}%s}}|}
+    (match next with
+     | Some url -> Printf.sprintf {|,"next":%S|} url
+     | None -> "")
+
+let comments_next_url =
+  "https://graph.facebook.com/v25.0/104857_122105/comments?access_token=EAAOLD&fields=id%2Cmessage%2Cfrom%7Bid%2Cname%7D%2Cparent%7Bid%7D&filter=stream&order=reverse_chronological&limit=3&after=WTI5dGJXVnV"
+
+let test_get_comments_page_stream () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  Mock_http.set_response
+    { status = 200; headers = []; body = stream_comments_body ~next:(Some comments_next_url) };
+  Facebook.get_comments_page ~object_id:"104857_122105" ~access_token:"page-token"
+    ~filter:Comments.Stream ~order:Comments.Reverse_chronological ~limit:3
+    (function
+      | Ok page ->
+          (match page.data with
+           | [ top; reply; anonymous ] ->
+               assert (top.Comments.message = Some "When does the event start?");
+               assert (top.from = Some { Comments.author_id = "7034918273"; author_name = Some "Alice Example" });
+               assert (top.parent_id = None);
+               assert (reply.parent_id = Some "122105_9001");
+               assert (anonymous.from = None);
+               assert (anonymous.message = None);
+               assert (anonymous.permalink_url <> None)
+           | _ -> failwith "expected three comments");
+          assert (Meta_graph_paging.next_after page = Some "WTI5dGJXVnV")
+      | Error e -> failwith (Error_types.error_to_string e));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.path uri = "/v25.0/104857_122105/comments");
+       assert (Uri.get_query_param uri "filter" = Some "stream");
+       assert (Uri.get_query_param uri "order" = Some "reverse_chronological");
+       assert (Uri.get_query_param uri "limit" = Some "3");
+       assert (Uri.get_query_param uri "fields" = Some Comments.fields);
+       assert (Uri.get_query_param uri "access_token" = None);
+       assert (Uri.get_query_param uri "appsecret_proof" <> None);
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer page-token")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ Get comments page (filter=stream, typed, optional from)"
+
+let test_get_comments_page_positions () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = stream_comments_body ~next:None };
+      { status = 200; headers = []; body = stream_comments_body ~next:None } ];
+  let expect_last = function
+    | Ok page -> assert (Meta_graph_paging.next_after page = None)
+    | Error e -> failwith (Error_types.error_to_string e)
+  in
+  Facebook.get_comments_page ~object_id:"104857_122105" ~access_token:"page-token"
+    ~position:(Meta_graph_paging.After "WTI5dGJXVnV") expect_last;
+  Facebook.get_comments_page ~object_id:"ignored" ~access_token:"page-token"
+    ~filter:Comments.Toplevel ~position:(Meta_graph_paging.Page_url comments_next_url)
+    expect_last;
+  (match List.rev !Mock_http.requests with
+   | [ ("GET", cursor_url, _, _); ("GET", followed_url, headers, _) ] ->
+       let cursor_uri = Uri.of_string cursor_url in
+       assert (Uri.get_query_param cursor_uri "after" = Some "WTI5dGJXVnV");
+       assert (Uri.get_query_param cursor_uri "filter" = None);
+       let uri = Uri.of_string followed_url in
+       assert (Uri.path uri = "/v25.0/104857_122105/comments");
+       (* the URL's own options win; the echoed token is dropped *)
+       assert (Uri.get_query_param uri "filter" = Some "stream");
+       assert (Uri.get_query_param uri "after" = Some "WTI5dGJXVnV");
+       assert (Uri.get_query_param uri "access_token" = None);
+       assert (Uri.get_query_param uri "appsecret_proof" <> None);
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer page-token")
+   | _ -> failwith "expected two GETs");
+  Mock_config.reset ();
+  Facebook.get_comments_page ~object_id:"x" ~access_token:"page-token"
+    ~position:(Meta_graph_paging.Page_url "https://graph.facebook.com.evil.example/v25.0/1/comments")
+    (function
+      | Error (Error_types.Validation_error _) -> ()
+      | _ -> failwith "expected a foreign host to be rejected");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ Get comments page (cursor, next URL, foreign host)"
+
+let test_get_comments_page_error () =
+  Mock_config.reset ();
+  Mock_http.set_response
+    { status = 400; headers = [];
+      body = {|{"error":{"message":"(#10) This endpoint requires the 'pages_read_engagement' permission or the 'Page Public Content Access' feature.","type":"OAuthException","code":10,"fbtrace_id":"AbCdEf"}}|} };
+  Facebook.get_comments_page ~object_id:"104857_122105" ~access_token:"t" (function
+    | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required; _ })) ->
+        assert (List.mem "pages_read_engagement" required)
+    | Error e -> failwith ("unexpected error " ^ Error_types.error_to_string e)
+    | Ok _ -> failwith "expected an error");
+  print_endline "✓ Get comments page (permission error)"
+
+let test_comment_moderation () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"id":"122105_9004"}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} } ];
+  let ok = function Ok _ -> () | Error e -> failwith (Error_types.error_to_string e) in
+  Facebook.reply_to_comment ~comment_id:"122105_9001" ~access_token:"pt"
+    ~message:"Thanks & see you!" (function
+    | Ok id -> assert (id = "122105_9004")
+    | Error e -> failwith (Error_types.error_to_string e));
+  Facebook.set_comment_hidden ~comment_id:"122105_9001" ~access_token:"pt" ~hidden:true ok;
+  Facebook.set_comment_hidden ~comment_id:"122105_9001" ~access_token:"pt" ~hidden:false ok;
+  Facebook.like_object ~object_id:"122105_9001" ~access_token:"pt" ok;
+  Facebook.unlike_object ~object_id:"122105_9001" ~access_token:"pt" ok;
+  Facebook.delete_comment ~comment_id:"122105_9003" ~access_token:"pt" ok;
+  (match List.rev !Mock_http.requests with
+   | [ ("POST", reply_url, reply_headers, reply_body);
+       ("POST", hide_url, _, hide_body);
+       ("POST", _, _, unhide_body);
+       ("POST", like_url, _, like_body);
+       ("DELETE", unlike_url, _, _);
+       ("DELETE", delete_url, delete_headers, _) ] ->
+       assert (String.ends_with ~suffix:"/v25.0/122105_9001/comments" reply_url);
+       assert (string_contains reply_body "message=Thanks%20%26%20see%20you%21"
+               || string_contains reply_body "message=Thanks+%26+see+you%21");
+       assert (string_contains reply_body "appsecret_proof=");
+       assert (List.assoc_opt "Authorization" reply_headers = Some "Bearer pt");
+       assert (String.ends_with ~suffix:"/v25.0/122105_9001" hide_url);
+       assert (string_contains hide_body "is_hidden=true");
+       assert (string_contains unhide_body "is_hidden=false");
+       assert (String.ends_with ~suffix:"/v25.0/122105_9001/likes" like_url);
+       assert (string_contains like_body "appsecret_proof=");
+       assert (string_contains unlike_url "/v25.0/122105_9001/likes?appsecret_proof=");
+       assert (string_contains delete_url "/v25.0/122105_9003?appsecret_proof=");
+       assert (List.assoc_opt "Authorization" delete_headers = Some "Bearer pt")
+   | _ -> failwith "unexpected moderation requests");
+  print_endline "✓ Comment reply, hide/unhide, like/unlike, delete"
+
+let test_comment_moderation_failures () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"success":false}|} };
+      { status = 400; headers = [];
+        body = {|{"error":{"message":"(#200) Permissions error","type":"OAuthException","code":200,"fbtrace_id":"Ab"}}|} };
+      { status = 400; headers = [];
+        body = {|{"error":{"message":"Unsupported post request. Object with ID '122105_404' does not exist","type":"GraphMethodException","code":100,"error_subcode":33,"fbtrace_id":"Ab"}}|} } ];
+  Facebook.set_comment_hidden ~comment_id:"c" ~access_token:"pt" ~hidden:true (function
+    | Error (Error_types.Api_error { raw_response = Some _; _ }) -> ()
+    | _ -> failwith "success=false must be an error");
+  Facebook.like_object ~object_id:"c" ~access_token:"pt" (function
+    | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required; _ })) ->
+        assert (required = [ "pages_manage_engagement" ])
+    | _ -> failwith "expected a permission error");
+  Facebook.delete_comment ~comment_id:"122105_404" ~access_token:"pt" (function
+    | Error (Error_types.Resource_not_found _) -> ()
+    | _ -> failwith "expected Resource_not_found");
+  Mock_config.reset ();
+  Facebook.reply_to_comment ~comment_id:"  " ~access_token:"pt" ~message:"x" (function
+    | Error (Error_types.Validation_error _) -> ()
+    | _ -> failwith "expected a validation error");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ Comment moderation failures"
+
 let () =
   print_endline "\n=== Facebook Provider Tests ===\n";
   
@@ -3565,6 +3736,11 @@ let () =
   test_get_comments ();
   test_get_comments_empty ();
   test_get_comments_missing_from ();
+  test_get_comments_page_stream ();
+  test_get_comments_page_positions ();
+  test_get_comments_page_error ();
+  test_comment_moderation ();
+  test_comment_moderation_failures ();
 
   print_endline "\n--- Link Posts and Scheduling Tests ---";
   test_post_with_link ();
@@ -3590,4 +3766,6 @@ let () =
   test_get_managed_pages_follows_paging ();
   test_get_all_business_pages ();
 
-  print_endline "\n=== All 88 tests passed! ===\n"
+  print_endline "
+=== All 93 tests passed! ===
+"
