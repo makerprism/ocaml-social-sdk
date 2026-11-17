@@ -1320,12 +1320,16 @@ module Make (Config : CONFIG) = struct
       @param title Optional article title. Only used when text contains a URL and no media
              is attached (LinkedIn article payload). Falls back to the first line of text
              truncated to 200 chars when omitted.
+      @param link_preview When [true] (the default) and no media is attached, the first
+             URL in [text] becomes an [article] content block, so LinkedIn renders a link
+             card. Pass [false] to publish the text alone; the URL stays clickable in the
+             commentary. The commentary is Little Text Format-escaped either way.
       @param validate_media_before_upload When true, validates media size after download
              but before upload. LinkedIn limits: 200MB video, 10min duration, 8MB images.
              Default: false
       @param on_result Callback receiving the outcome with post ID
   *)
-  let post_single ~account_id ~text ~media_urls ?author_urn ?(alt_texts=[]) ?title ?(validate_media_before_upload=false) on_result =
+  let post_single ~account_id ~text ~media_urls ?author_urn ?(alt_texts=[]) ?title ?(link_preview=true) ?(validate_media_before_upload=false) on_result =
     (* Validate before making any API calls *)
     let media_count = List.length media_urls in
     let author_validation =
@@ -1390,8 +1394,11 @@ module Make (Config : CONFIG) = struct
                 
                 upload_all_media urls_with_alt []
                   (fun uploaded_media ->
-                    (* Extract URL from text for link preview *)
-                    let text_url = extract_first_url text in
+                    (* Extract URL from text for link preview, unless the caller
+                       opted out of the article card. *)
+                    let text_url =
+                      if link_preview then extract_first_url text else None
+                    in
 
                     (* Build modern /rest/posts body *)
                     let base_fields = [
@@ -1532,10 +1539,11 @@ module Make (Config : CONFIG) = struct
       @param alt_texts_per_post Alt texts for each post's media
       @param title Optional article title forwarded to post_single (used only when the
              first post is a link-preview article with no media).
+      @param link_preview Forwarded to post_single. Default: true
       @param validate_media_before_upload When true, validates media after download. Default: false
       @param on_result Callback receiving the outcome with thread_result
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?author_urn ?(alt_texts_per_post=[]) ?title ?(validate_media_before_upload=false) on_result =
+  let post_thread ~account_id ~texts ~media_urls_per_post ?author_urn ?(alt_texts_per_post=[]) ?title ?link_preview ?(validate_media_before_upload=false) on_result =
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
     | Error errs ->
@@ -1544,7 +1552,7 @@ module Make (Config : CONFIG) = struct
         let first_text = List.hd texts in
         let first_media = if List.length media_urls_per_post > 0 then List.hd media_urls_per_post else [] in
         let first_alt_texts = if List.length alt_texts_per_post > 0 then List.hd alt_texts_per_post else [] in
-        post_single ~account_id ~text:first_text ~media_urls:first_media ?author_urn ~alt_texts:first_alt_texts ?title ~validate_media_before_upload
+        post_single ~account_id ~text:first_text ~media_urls:first_media ?author_urn ~alt_texts:first_alt_texts ?title ?link_preview ~validate_media_before_upload
           (fun outcome ->
             match outcome with
             | Error_types.Success post_id ->
