@@ -3357,7 +3357,7 @@ let is_permission_error = function
   | _ -> false
 
 (** Facebook maps Graph codes through the table shared with Instagram and
-    Threads ([Meta_graph_error]). Before, 3, 102, 341, 201-298 and 100/33
+    Threads ([Social_meta_graph_error]). Before, 3, 102, 341, 201-298 and 100/33
     were plain Api_errors and 368 was "temporarily unavailable". *)
 let test_shared_meta_graph_error_contract () =
   let parse ?(status_code = 400) body =
@@ -3398,13 +3398,13 @@ let test_shared_meta_graph_error_contract () =
    | None -> failwith "expected a Graph error");
   print_endline "✓ Shared Meta Graph error contract"
 
-(** [Provider_error_detail] reads the code back out of a Facebook Api_error. *)
+(** [Social_provider_error_detail] reads the code back out of a Facebook Api_error. *)
 let test_api_error_provider_detail () =
   let body =
     graph_error_body ~subcode:1487390 ~message:"(#100) Invalid parameter" 100
   in
   (match
-     Provider_error_detail.of_error
+     Social_provider_error_detail.of_error
        (Facebook.parse_api_error ~status_code:400 ~response_body:body)
    with
    | Some detail ->
@@ -3498,7 +3498,7 @@ let test_get_comments_page_stream () =
                assert (anonymous.message = None);
                assert (anonymous.permalink_url <> None)
            | _ -> failwith "expected three comments");
-          assert (Meta_graph_paging.next_after page = Some "WTI5dGJXVnV")
+          assert (Social_meta_graph_paging.next_after page = Some "WTI5dGJXVnV")
       | Error e -> failwith (Error_types.error_to_string e));
   (match !Mock_http.requests with
    | [ ("GET", url, headers, _) ] ->
@@ -3521,13 +3521,13 @@ let test_get_comments_page_positions () =
     [ { status = 200; headers = []; body = stream_comments_body ~next:None };
       { status = 200; headers = []; body = stream_comments_body ~next:None } ];
   let expect_last = function
-    | Ok page -> assert (Meta_graph_paging.next_after page = None)
+    | Ok page -> assert (Social_meta_graph_paging.next_after page = None)
     | Error e -> failwith (Error_types.error_to_string e)
   in
   Facebook.get_comments_page ~object_id:"104857_122105" ~access_token:"page-token"
-    ~position:(Meta_graph_paging.After "WTI5dGJXVnV") expect_last;
+    ~position:(Social_meta_graph_paging.After "WTI5dGJXVnV") expect_last;
   Facebook.get_comments_page ~object_id:"ignored" ~access_token:"page-token"
-    ~filter:Comments.Toplevel ~position:(Meta_graph_paging.Page_url comments_next_url)
+    ~filter:Comments.Toplevel ~position:(Social_meta_graph_paging.Page_url comments_next_url)
     expect_last;
   (match List.rev !Mock_http.requests with
    | [ ("GET", cursor_url, _, _); ("GET", followed_url, headers, _) ] ->
@@ -3545,7 +3545,7 @@ let test_get_comments_page_positions () =
    | _ -> failwith "expected two GETs");
   Mock_config.reset ();
   Facebook.get_comments_page ~object_id:"x" ~access_token:"page-token"
-    ~position:(Meta_graph_paging.Page_url "https://graph.facebook.com.evil.example/v25.0/1/comments")
+    ~position:(Social_meta_graph_paging.Page_url "https://graph.facebook.com.evil.example/v25.0/1/comments")
     (function
       | Error (Error_types.Validation_error _) -> ()
       | _ -> failwith "expected a foreign host to be rejected");

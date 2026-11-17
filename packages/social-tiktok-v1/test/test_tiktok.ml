@@ -2948,7 +2948,7 @@ let test_init_photo_post_403_scope_mapping () =
 (* Issue #63: the TikTok error code is readable as a field, not only as a
    prefix of the message. *)
 let test_init_photo_post_error_code_detail () =
-  print_string "Test: init_photo_post error code via Provider_error_detail... ";
+  print_string "Test: init_photo_post error code via Social_provider_error_detail... ";
   reset_mock_state ();
   Mock_http.set_custom_post_handler (fun url _headers _body ->
     if String.ends_with ~suffix:"content/init/" url then
@@ -2973,7 +2973,7 @@ let test_init_photo_post_error_code_detail () =
     ~photo_post_info:photo_info
     (function
       | Error err ->
-          (match Provider_error_detail.of_error err with
+          (match Social_provider_error_detail.of_error err with
            | Some detail ->
                assert (detail.http_status = 400);
                assert (detail.code = Some "url_ownership_unverified");

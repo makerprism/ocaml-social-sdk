@@ -11,11 +11,16 @@
   content_validator
   url_extractor
   error_types
+  social_provider_error_detail
   provider_error_detail
+  social_meta_graph_error
   meta_graph_error
+  social_meta_graph_paging
   meta_graph_paging
   health_status
+  social_secure_random
   secure_random
+  social_oauth_pkce
   oauth_pkce
   social_oauth_scope
   social_token_expiry

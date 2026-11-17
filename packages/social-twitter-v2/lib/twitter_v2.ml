@@ -105,17 +105,17 @@ module OAuth = struct
   (** PKCE helpers for OAuth 2.0 with Proof Key for Code Exchange *)
   module Pkce = struct
     (** Generate a code verifier: 64 base64url characters from 48 bytes of
-        the OS CSPRNG ({!Oauth_pkce.generate_verifier}).
+        the OS CSPRNG ({!Social_oauth_pkce.generate_verifier}).
 
         @raise Failure if the OS entropy source cannot be read
     *)
-    let generate_code_verifier () = Oauth_pkce.generate_verifier ~bytes:48 ()
+    let generate_code_verifier () = Social_oauth_pkce.generate_verifier ~bytes:48 ()
 
     (** Generate code_challenge from code_verifier using SHA256 (S256 method)
 
         code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
     *)
-    let generate_code_challenge = Oauth_pkce.challenge_s256
+    let generate_code_challenge = Social_oauth_pkce.challenge_s256
   end
   
   (** Generate authorization URL for Twitter OAuth 2.0 flow

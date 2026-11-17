@@ -1,4 +1,4 @@
-(** Contract tests for {!Meta_graph_error}: one realistic Graph error body
+(** Contract tests for {!Social_meta_graph_error}: one realistic Graph error body
     per documented code, and the SDK error each one becomes.
 
     The Facebook, Instagram and Threads packages all delegate to this table,
@@ -27,12 +27,12 @@ let graph_body ?subcode ?error_type ?(is_transient = false) ~message code =
   Printf.sprintf {|{"error":{%s}}|} (String.concat "," fields)
 
 let classification body =
-  Option.map Meta_graph_error.classify (Meta_graph_error.of_body body)
+  Option.map Social_meta_graph_error.classify (Social_meta_graph_error.of_body body)
 
 let show = function
   | None -> "not a Graph error"
   | Some c ->
-      (match (c : Meta_graph_error.classification) with
+      (match (c : Social_meta_graph_error.classification) with
        | Resource_not_found -> "Resource_not_found"
        | Invalid_request -> "Invalid_request"
        | Transient -> "Transient"
@@ -52,7 +52,7 @@ let oauth = "OAuthException"
 
 let test_classification_per_code () =
   Printf.printf "Test: classification per documented code\n";
-  let open Meta_graph_error in
+  let open Social_meta_graph_error in
   (* Object ids that no longer resolve (deleted post, comment, container). *)
   expect "100/33 object missing"
     (graph_body ~subcode:33 ~error_type:"GraphMethodException"
@@ -153,23 +153,23 @@ let test_of_body () =
     {|{"error":{"message":"(#4) Application request limit reached","type":"OAuthException","is_transient":true,"code":4,"error_subcode":1349210,"error_user_title":"Slow down","error_user_msg":"Try again later","fbtrace_id":"AvX3kq0Lm2P"}}|}
   in
   check "every field parsed"
-    (Meta_graph_error.of_body body
+    (Social_meta_graph_error.of_body body
      = Some
-         { Meta_graph_error.code = Some 4; subcode = Some 1349210;
+         { Social_meta_graph_error.code = Some 4; subcode = Some 1349210;
            error_type = Some "OAuthException";
            message = Some "(#4) Application request limit reached";
            user_title = Some "Slow down"; user_message = Some "Try again later";
            fbtrace_id = Some "AvX3kq0Lm2P"; is_transient = Some true });
   check "HTML is not a Graph error"
-    (Meta_graph_error.of_body "<html><body>502 Bad Gateway</body></html>" = None);
+    (Social_meta_graph_error.of_body "<html><body>502 Bad Gateway</body></html>" = None);
   check "atproto envelope is not a Graph error"
-    (Meta_graph_error.of_body {|{"error":"ExpiredToken","message":"Token has expired"}|} = None);
+    (Social_meta_graph_error.of_body {|{"error":"ExpiredToken","message":"Token has expired"}|} = None);
   check "success body is not a Graph error"
-    (Meta_graph_error.of_body {|{"id":"123"}|} = None)
+    (Social_meta_graph_error.of_body {|{"id":"123"}|} = None)
 
 let to_error ?(status_code = 400) ?retry_after_seconds ?request_id ?redact_body
     ?redact_message body =
-  Meta_graph_error.to_error ~platform:Platform_types.FacebookPage ~status_code
+  Social_meta_graph_error.to_error ~platform:Platform_types.FacebookPage ~status_code
     ~required_permissions:[ "pages_manage_posts" ] ?retry_after_seconds
     ?request_id ?redact_body ?redact_message body
 
@@ -239,10 +239,10 @@ let test_to_error () =
      | Error_types.Api_error { status_code = 400; _ } -> true
      | _ -> false);
   check "2 with HTTP 400 classifies as Transient via of_error"
-    (Option.map Meta_graph_error.classify (Meta_graph_error.of_error transient_400)
-     = Some Meta_graph_error.Transient);
+    (Option.map Social_meta_graph_error.classify (Social_meta_graph_error.of_error transient_400)
+     = Some Social_meta_graph_error.Transient);
   check "of_error is None for non-Api_error"
-    (Meta_graph_error.of_error (Error_types.Auth_error Error_types.Token_invalid) = None);
+    (Social_meta_graph_error.of_error (Error_types.Auth_error Error_types.Token_invalid) = None);
   let html = "<html><body>502 Bad Gateway</body></html>" in
   check "non-Graph body -> Api_error with the body as message"
     (to_error ~status_code:502 html
@@ -256,7 +256,7 @@ let test_to_error () =
      | Error_types.Api_error { message = "MSG"; raw_response = Some "BODY"; _ } -> true
      | _ -> false);
   check "transport_error -> Network_error"
-    (Meta_graph_error.transport_error "connection refused"
+    (Social_meta_graph_error.transport_error "connection refused"
      = Error_types.Network_error (Error_types.Connection_failed "connection refused"))
 
 (* The point of the taxonomy for consumers: which failures say something
@@ -273,10 +273,10 @@ let test_health_evidence () =
   check "368 temporarily blocked -> no health write"
     (health (graph_body ~error_type:oauth ~message:"temporarily blocked" (Some 368)) = None);
   check "transport failure -> no health write"
-    (Health_status.of_error (Meta_graph_error.transport_error "timeout") = None)
+    (Health_status.of_error (Social_meta_graph_error.transport_error "timeout") = None)
 
 let () =
-  Printf.printf "Running Meta_graph_error contract tests\n\n";
+  Printf.printf "Running Social_meta_graph_error contract tests\n\n";
   test_classification_per_code ();
   test_of_body ();
   test_to_error ();
@@ -285,4 +285,4 @@ let () =
     Printf.printf "\n%d check(s) failed\n" !failures;
     exit 1
   end
-  else Printf.printf "\nAll Meta_graph_error checks passed\n"
+  else Printf.printf "\nAll Social_meta_graph_error checks passed\n"

@@ -33,7 +33,7 @@ module Comments = Facebook_graph_v25_comments
 
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it
-    ({!Meta_graph_paging.resolve_page_url}). *)
+    ({!Social_meta_graph_paging.resolve_page_url}). *)
 let paging_url_hosts = [ "graph.facebook.com" ]
 
 (** OAuth 2.0 module for Facebook
@@ -676,7 +676,7 @@ module OAuth = struct
     (** {2 Typed token reads} *)
 
     let graph_error ~status_code body =
-      Meta_graph_error.to_error ~platform:Platform_types.FacebookPage ~status_code
+      Social_meta_graph_error.to_error ~platform:Platform_types.FacebookPage ~status_code
         ~required_permissions:[] body
 
     (** GET [url]; a 2xx body goes through [parse], anything else becomes the
@@ -690,7 +690,7 @@ module OAuth = struct
             | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
           else on_result (Stdlib.Error (graph_error ~status_code:response.status response.body)))
         (fun err ->
-          on_result (Stdlib.Error (Meta_graph_error.transport_error (redact_transport_message err))))
+          on_result (Stdlib.Error (Social_meta_graph_error.transport_error (redact_transport_message err))))
 
     (** Inspect a token with [GET /debug_token]
         ({{:https://developers.facebook.com/docs/graph-api/reference/debug_token/}}).
@@ -868,15 +868,15 @@ type rate_limit_info = {
 
 (** {1 Pagination Types} *)
 
-(** Pagination cursors. The same type as {!Meta_graph_paging.cursors},
+(** Pagination cursors. The same type as {!Social_meta_graph_paging.cursors},
     shared with the Instagram and Threads packages. *)
-type paging_cursors = Meta_graph_paging.cursors = {
+type paging_cursors = Social_meta_graph_paging.cursors = {
   before : string option;
   after : string option;
 }
 
-(** Paginated response. The same type as {!Meta_graph_paging.page}. *)
-type 'a page_result = 'a Meta_graph_paging.page = {
+(** Paginated response. The same type as {!Social_meta_graph_paging.page}. *)
+type 'a page_result = 'a Social_meta_graph_paging.page = {
   data : 'a list;
   paging : paging_cursors option;
   next_url : string option;
@@ -1021,22 +1021,22 @@ module Make (Config : CONFIG) = struct
   
   (* Projects the shared classification onto the older variant. *)
   let facebook_error_code_of_classification ~code = function
-    | Meta_graph_error.Token_invalid _ -> Invalid_token
-    | Meta_graph_error.Rate_limited -> Rate_limit_exceeded
-    | Meta_graph_error.Permission_denied -> Permission_denied
-    | Meta_graph_error.Resource_not_found | Meta_graph_error.Invalid_request ->
+    | Social_meta_graph_error.Token_invalid _ -> Invalid_token
+    | Social_meta_graph_error.Rate_limited -> Rate_limit_exceeded
+    | Social_meta_graph_error.Permission_denied -> Permission_denied
+    | Social_meta_graph_error.Resource_not_found | Social_meta_graph_error.Invalid_request ->
         Invalid_parameter
-    | Meta_graph_error.Transient -> Temporarily_unavailable
-    | Meta_graph_error.Duplicate_content -> Duplicate_post
-    | Meta_graph_error.Unclassified -> Unknown code
+    | Social_meta_graph_error.Transient -> Temporarily_unavailable
+    | Social_meta_graph_error.Duplicate_content -> Duplicate_post
+    | Social_meta_graph_error.Unclassified -> Unknown code
 
   (** Graph error code as a [facebook_error_code]. The table is
-      {!Meta_graph_error.classify}'s, shared with Instagram and Threads. A
+      {!Social_meta_graph_error.classify}'s, shared with Instagram and Threads. A
       bare code has no subcode or [is_transient] flag; {!parse_facebook_error}
       classifies the whole error instead. *)
   let parse_error_code code =
-    Meta_graph_error.classify
-      { Meta_graph_error.code = Some code; subcode = None; error_type = None;
+    Social_meta_graph_error.classify
+      { Social_meta_graph_error.code = Some code; subcode = None; error_type = None;
         message = None; user_title = None; user_message = None;
         fbtrace_id = None; is_transient = None }
     |> facebook_error_code_of_classification ~code
@@ -1058,13 +1058,13 @@ module Make (Config : CONFIG) = struct
   
   (** Parse Facebook API error from response *)
   let parse_facebook_error response_body =
-    match Meta_graph_error.of_body response_body with
+    match Social_meta_graph_error.of_body response_body with
     | None -> None
     | Some graph ->
         let code =
           facebook_error_code_of_classification
             ~code:(Option.value ~default:0 graph.code)
-            (Meta_graph_error.classify graph)
+            (Social_meta_graph_error.classify graph)
         in
         Some {
           message = Option.value ~default:"Unknown error" graph.message;
@@ -1105,7 +1105,7 @@ module Make (Config : CONFIG) = struct
       provider_required_permissions
 
   let parse_api_error_with_permissions ~required_permissions ~status_code ~response_body =
-    Meta_graph_error.to_error
+    Social_meta_graph_error.to_error
       ~platform:Platform_types.FacebookPage
       ~status_code
       ~required_permissions
@@ -1146,7 +1146,7 @@ module Make (Config : CONFIG) = struct
       evidence about the credentials. Consumers routing on the error
       variant, and {!Health_status.of_error}, rely on this distinction. *)
   let transport_error err =
-    Meta_graph_error.transport_error (redact_sensitive_text_if_needed err)
+    Social_meta_graph_error.transport_error (redact_sensitive_text_if_needed err)
 
   (** {1 Rate Limiting} *)
   
@@ -3061,9 +3061,9 @@ module Make (Config : CONFIG) = struct
      returned it (credentials are added by [get_url]), or a request rebuilt
      from the id and options. *)
   let comments_page_url ~object_id ?filter ?order ?limit position =
-    match (position : Meta_graph_paging.position) with
+    match (position : Social_meta_graph_paging.position) with
     | Page_url url ->
-        Meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
+        Social_meta_graph_paging.resolve_page_url ~allowed_hosts:paging_url_hosts
           ~edge:"comments" url
         |> Result.map Uri.to_string
         |> Result.map_error invalid_input
@@ -3082,7 +3082,7 @@ module Make (Config : CONFIG) = struct
             @ (match limit with
                | Some n when n > 0 -> [ ("limit", [ string_of_int n ]) ]
                | Some _ | None -> [])
-            @ Meta_graph_paging.cursor_query position
+            @ Social_meta_graph_paging.cursor_query position
           in
           Ok
             (Printf.sprintf "%s/%s/comments?%s" graph_api_base
@@ -3097,7 +3097,7 @@ module Make (Config : CONFIG) = struct
         [parent_id] places replies; omitted, the API default ([Toplevel]).
       - [order]: omitted, the API default (chronological).
       - [position]: a cursor or a [paging.next] URL on [graph.facebook.com]
-        (see {!Meta_graph_paging}); with [Page_url] the other options come
+        (see {!Social_meta_graph_paging}); with [Page_url] the other options come
         from the URL.
 
       Needs [pages_read_engagement] and [pages_read_user_content]; [from]
@@ -3106,7 +3106,7 @@ module Make (Config : CONFIG) = struct
       @see <https://developers.facebook.com/docs/graph-api/reference/object/comments/>
       @see <https://developers.facebook.com/docs/graph-api/results> *)
   let get_comments_page ~object_id ~access_token ?filter ?order
-      ?(position = Meta_graph_paging.First) ?limit on_result =
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
     match comments_page_url ~object_id ?filter ?order ?limit position with
     | Error err -> on_result (Error err)
     | Ok url ->
@@ -3115,7 +3115,7 @@ module Make (Config : CONFIG) = struct
             | Error err -> on_result (Error err)
             | Ok response -> (
                 match
-                  Meta_graph_paging.of_body ~item:Comments.parse_comment response.body
+                  Social_meta_graph_paging.of_body ~item:Comments.parse_comment response.body
                 with
                 | Ok page -> on_result (Ok page)
                 | Error msg -> on_result (Error (parse_failure "comments" msg))))

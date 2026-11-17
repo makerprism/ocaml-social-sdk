@@ -23,7 +23,7 @@ let percent_encode s =
    per timestamp, but drawing it from the OS avoids reseeding the global
    [Random] state as a side effect of linking this module. *)
 let generate_nonce () =
-  Secure_random.bytes 32
+  Social_secure_random.bytes 32
   |> String.to_seq
   |> Seq.map (fun c -> Printf.sprintf "%02x" (Char.code c))
   |> List.of_seq |> String.concat ""

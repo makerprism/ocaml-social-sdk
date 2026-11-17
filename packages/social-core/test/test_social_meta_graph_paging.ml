@@ -1,4 +1,4 @@
-(** Tests for {!Meta_graph_paging}: the page shape Facebook, Instagram and
+(** Tests for {!Social_meta_graph_paging}: the page shape Facebook, Instagram and
     Threads list edges return, and the checks a [paging.next] URL must pass
     before a reader attaches credentials to it. *)
 
@@ -33,41 +33,41 @@ let last_page =
 
 let test_parse () =
   Printf.printf "parse\n";
-  (match Meta_graph_paging.of_body ~item:id_of middle_page with
+  (match Social_meta_graph_paging.of_body ~item:id_of middle_page with
    | Ok page ->
        check "data" (page.data = [ "1_2"; "1_3" ]);
        check "cursors"
-         (page.paging = Some { Meta_graph_paging.before = Some "QVFIUm1"; after = Some "QVFIUnd" });
+         (page.paging = Some { Social_meta_graph_paging.before = Some "QVFIUm1"; after = Some "QVFIUnd" });
        check "next url" (Option.is_some page.next_url);
        check "previous url" (Option.is_some page.previous_url);
-       check "has_next" (Meta_graph_paging.has_next page);
-       check "next_after" (Meta_graph_paging.next_after page = Some "QVFIUnd")
+       check "has_next" (Social_meta_graph_paging.has_next page);
+       check "next_after" (Social_meta_graph_paging.next_after page = Some "QVFIUnd")
    | Error msg -> check ("middle page parses: " ^ msg) false);
-  (match Meta_graph_paging.of_body ~item:id_of last_page with
+  (match Social_meta_graph_paging.of_body ~item:id_of last_page with
    | Ok page ->
-       check "last page has no next" (not (Meta_graph_paging.has_next page));
-       check "last page after cursor is not offered" (Meta_graph_paging.next_after page = None);
+       check "last page has no next" (not (Social_meta_graph_paging.has_next page));
+       check "last page after cursor is not offered" (Social_meta_graph_paging.next_after page = None);
        check "last page keeps its cursors" (Option.is_some page.paging)
    | Error msg -> check ("last page parses: " ^ msg) false);
-  (match Meta_graph_paging.of_body ~item:id_of {|{"data":[]}|} with
+  (match Social_meta_graph_paging.of_body ~item:id_of {|{"data":[]}|} with
    | Ok page -> check "no paging block" (page.paging = None && page.next_url = None)
    | Error _ -> check "empty page parses" false);
   check "missing data is an error"
-    (Result.is_error (Meta_graph_paging.of_body ~item:id_of {|{"error":{}}|}));
+    (Result.is_error (Social_meta_graph_paging.of_body ~item:id_of {|{"error":{}}|}));
   check "bad item is an error"
-    (Result.is_error (Meta_graph_paging.of_body ~item:id_of {|{"data":[{"x":1}]}|}));
+    (Result.is_error (Social_meta_graph_paging.of_body ~item:id_of {|{"data":[{"x":1}]}|}));
   check "not JSON is an error"
-    (Result.is_error (Meta_graph_paging.of_body ~item:id_of "<html>"))
+    (Result.is_error (Social_meta_graph_paging.of_body ~item:id_of "<html>"))
 
 let test_cursor_query () =
   Printf.printf "cursor_query\n";
-  check "first" (Meta_graph_paging.cursor_query First = []);
-  check "after" (Meta_graph_paging.cursor_query (After "c") = [ ("after", [ "c" ]) ]);
-  check "before" (Meta_graph_paging.cursor_query (Before "c") = [ ("before", [ "c" ]) ]);
-  check "page url" (Meta_graph_paging.cursor_query (Page_url "https://x") = [])
+  check "first" (Social_meta_graph_paging.cursor_query First = []);
+  check "after" (Social_meta_graph_paging.cursor_query (After "c") = [ ("after", [ "c" ]) ]);
+  check "before" (Social_meta_graph_paging.cursor_query (Before "c") = [ ("before", [ "c" ]) ]);
+  check "page url" (Social_meta_graph_paging.cursor_query (Page_url "https://x") = [])
 
 let resolve url =
-  Meta_graph_paging.resolve_page_url ~allowed_hosts:[ "graph.facebook.com" ]
+  Social_meta_graph_paging.resolve_page_url ~allowed_hosts:[ "graph.facebook.com" ]
     ~edge:"comments" url
 
 let test_resolve_page_url () =
@@ -98,7 +98,7 @@ let test_resolve_page_url () =
   check "rejects a relative URL" (Result.is_error (resolve "/v25.0/1/comments?after=x"))
 
 let () =
-  Printf.printf "Running Meta_graph_paging tests\n\n";
+  Printf.printf "Running Social_meta_graph_paging tests\n\n";
   test_parse ();
   test_cursor_query ();
   test_resolve_page_url ();
@@ -106,4 +106,4 @@ let () =
     Printf.printf "\n%d check(s) failed\n" !failures;
     exit 1
   end
-  else Printf.printf "\nAll Meta_graph_paging checks passed\n"
+  else Printf.printf "\nAll Social_meta_graph_paging checks passed\n"

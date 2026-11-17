@@ -20,7 +20,7 @@
       ([type], [application], [data_access_expires_at], [expires_at],
       [is_valid], [issued_at], [scopes], [user_id]).
 
-    Lives in [social-core] next to {!Meta_graph_error} so the provider
+    Lives in [social-core] next to {!Social_meta_graph_error} so the provider
     packages gain no new dependency. *)
 
 type expiry =

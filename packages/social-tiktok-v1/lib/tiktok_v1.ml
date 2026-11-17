@@ -192,7 +192,7 @@ module OAuth = struct
   (** Parses a token endpoint answer. TikTok reports OAuth failures with
       HTTP 200 and [{"error", "error_description", "log_id"}]; those become
       [Api_error] (status 400 when TikTok sent 200, the raw body kept for
-      {!Provider_error_detail}). [previous_refresh_token] is kept when a
+      {!Social_provider_error_detail}). [previous_refresh_token] is kept when a
       refresh answer omits [refresh_token]. *)
   let parse_token_response ?previous_refresh_token ~status_code body
       : (token_response, Error_types.error) Stdlib.result =
