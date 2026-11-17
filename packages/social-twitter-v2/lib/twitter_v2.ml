@@ -290,6 +290,28 @@ module OAuth = struct
           else
             on_error (Printf.sprintf "Token revocation failed (%d): %s" response.status (redact_sensitive_text response.body)))
         on_error
+
+    (** The user behind an OAuth 2.0 user token, [GET https://api.x.com/2/users/me]
+        ({!Twitter_user}), before any account is stored. Needs [tweet.read]
+        and [users.read]. The account-bound [Make.get_me] (raw JSON) is
+        unchanged.
+
+        @param user_fields Defaults to {!Twitter_user.default_user_fields}. *)
+    let get_me ~access_token ?(user_fields = Twitter_user.default_user_fields) on_result =
+      Http.get
+        ~headers:[ ("Authorization", "Bearer " ^ access_token) ]
+        (Twitter_user.me_url ~user_fields)
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            match Twitter_user.parse response.body with
+            | Stdlib.Ok user -> on_result (Stdlib.Ok user)
+            | Stdlib.Error message -> on_result (Stdlib.Error (Error_types.Internal_error message))
+          else
+            on_result
+              (Stdlib.Error
+                 (Twitter_user.error_of_response ~status_code:response.status
+                    ~headers:response.headers response.body)))
+        (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
   end
 end
 

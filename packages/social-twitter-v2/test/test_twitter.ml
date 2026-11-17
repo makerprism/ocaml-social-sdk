@@ -6005,7 +6005,88 @@ let test_no_share_without_community () =
   print_endline "✓ No share_with_followers without community_id test passed"
 
 (** Run all tests *)
+(* Records requests and replays one canned response, for the token-based
+   users/me reads. *)
+module Mock_http_me = struct
+  let requests : (string * (string * string) list) list ref = ref []
+  let response : Social_core.response option ref = ref None
+
+  let reset r =
+    requests := [];
+    response := Some r
+
+  let answer on_success on_error =
+    match !response with
+    | Some r -> on_success r
+    | None -> on_error "no mock response"
+
+  include (struct
+    let get ?(headers = []) url on_success on_error =
+      requests := (url, headers) :: !requests;
+      answer on_success on_error
+
+    let post ?headers:_ ?body:_ _url _on_success on_error = on_error "unexpected POST"
+    let put ?headers:_ ?body:_ _url _on_success on_error = on_error "unexpected PUT"
+    let delete ?headers:_ _url _on_success on_error = on_error "unexpected DELETE"
+    let post_multipart ?headers:_ ~parts:_ _url _on_success on_error = on_error "unexpected POST"
+  end : Social_core.HTTP_CLIENT)
+end
+
+module Twitter_oauth_me = Social_twitter_v2.OAuth.Make (Mock_http_me)
+module Twitter_oauth1a_me = Social_twitter_v2.Oauth1a.Make (Mock_http_me)
+
+let me_body =
+  {|{"data":{"id":"2244994945","name":"X Dev","username":"XDevelopers","verified":true,
+     "verified_type":"business","profile_image_url":"https://pbs/x.jpg","description":"",
+     "public_metrics":{"followers_count":10,"following_count":2,"post_count":7,"listed_count":1,"like_count":3,"media_count":4}}}|}
+
+let test_token_based_get_me () =
+  Mock_http_me.reset { Social_core.status = 200; body = me_body; headers = [] };
+  Twitter_oauth_me.get_me ~access_token:"tok" (function
+    | Ok user ->
+        assert (user.Social_twitter_v2.User.id = "2244994945");
+        assert (user.username = "XDevelopers" && user.name = "X Dev");
+        assert (user.verified = Some true && user.description = None);
+        (match user.public_metrics with
+         | Some metrics -> assert (metrics.tweet_count = Some 7 && metrics.followers_count = Some 10)
+         | None -> failwith "expected public_metrics");
+        (match !Mock_http_me.requests with
+         | [ (url, headers) ] ->
+             let uri = Uri.of_string url in
+             assert (Uri.host uri = Some "api.x.com" && Uri.path uri = "/2/users/me");
+             assert (Uri.get_query_param uri "user.fields"
+                     = Some (String.concat "," Social_twitter_v2.User.default_user_fields));
+             assert (List.assoc_opt "Authorization" headers = Some "Bearer tok")
+         | _ -> failwith "expected one GET")
+    | Error err -> failwith (Error_types.error_to_string err));
+  Mock_http_me.reset { Social_core.status = 200; body = me_body; headers = [] };
+  Twitter_oauth1a_me.get_me ~consumer_key:"ck" ~consumer_secret:"cs" ~token:"t" ~token_secret:"ts"
+    ~user_fields:[ "name" ] (function
+    | Ok user ->
+        assert (user.Social_twitter_v2.User.username = "XDevelopers");
+        (match !Mock_http_me.requests with
+         | [ (url, headers) ] ->
+             assert (url = "https://api.x.com/2/users/me?user.fields=name");
+             (match List.assoc_opt "Authorization" headers with
+              | Some auth -> assert (String.starts_with ~prefix:"OAuth " auth)
+              | None -> failwith "missing OAuth header")
+         | _ -> failwith "expected one GET")
+    | Error err -> failwith (Error_types.error_to_string err));
+  Mock_http_me.reset
+    { Social_core.status = 429; body = {|{"title":"Too Many Requests","detail":"Too Many Requests","type":"about:blank","status":429}|};
+      headers = [ ("x-rate-limit-reset", "0") ] };
+  Twitter_oauth_me.get_me ~access_token:"tok" (function
+    | Error (Error_types.Rate_limited { retry_after_seconds = Some 1; _ }) -> ()
+    | Error err -> failwith ("unexpected " ^ Error_types.error_to_string err)
+    | Ok _ -> failwith "expected Rate_limited");
+  Mock_http_me.reset { Social_core.status = 200; body = {|{"data":{"id":"1"}}|}; headers = [] };
+  Twitter_oauth_me.get_me ~access_token:"tok" (function
+    | Error (Error_types.Internal_error _) -> ()
+    | Error _ | Ok _ -> failwith "expected Internal_error for an incomplete user");
+  print_endline "✓ Token-based users/me (OAuth 2.0 and 1.0a) returns the typed user"
+
 let () =
+  test_token_based_get_me ();
   print_endline "===========================================";
   print_endline "Twitter API v2 Provider - Test Suite";
   print_endline "===========================================";
