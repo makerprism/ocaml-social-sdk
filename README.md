@@ -156,8 +156,8 @@ Facebook, Instagram and Threads classify Graph errors with one shared table,
 `Meta_graph_error` (`of_body`, `classify`, `to_error`), which is also usable on
 bodies your application fetched itself.
 
-Their paged list reads (Threads reply reads, Facebook comment pages)
-return one `Meta_graph_paging.page` (`data`, `paging` cursors, `next_url`,
+Their paged list reads (Threads reply reads, Facebook and Instagram comment
+pages) return one `Meta_graph_paging.page` (`data`, `paging` cursors, `next_url`,
 `previous_url`) and take a `?position`: `First`, `After cursor`,
 `Before cursor`, or `Page_url next_url`. Use cursors to rebuild the request
 with your own options, or hand back the `paging.next` URL Meta returned; the

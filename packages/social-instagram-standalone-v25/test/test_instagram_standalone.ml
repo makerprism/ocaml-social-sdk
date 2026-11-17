@@ -1802,6 +1802,188 @@ let test_get_permalink () =
       | _ -> failwith "an unparseable 2xx body is Internal_error");
   print_endline "PASS get_permalink"
 
+(* /{media-id}/comments as graph.instagram.com returns it with the replies
+   expansion: newest first, one comment with a first page of replies that
+   has its own paging.next, one without replies, and a top-level next link
+   that echoes the token. *)
+let media_comments_body =
+  {|{"data":[
+     {"id":"17858893269000001","text":"Love this!","username":"alice.example","timestamp":"2026-11-16T10:05:00+0000","hidden":false,"like_count":3,
+      "replies":{"data":[
+        {"id":"17858893269000101","text":"@alice.example thank you!","username":"example.brand","timestamp":"2026-11-16T10:07:00+0000","hidden":false,"parent_id":"17858893269000001","like_count":0}],
+       "paging":{"cursors":{"before":"QVFIUnJ","after":"QVFIUnK"},
+                 "next":"https://graph.instagram.com/v25.0/17858893269000001/replies?access_token=IGOLD&fields=id%2Ctext%2Cparent_id&limit=1&after=QVFIUnK"}}},
+     {"id":"17858893269000002","text":"Where can I buy it?","username":"bob.example","timestamp":"2026-11-16T09:00:00+0000","hidden":true,"like_count":0}],
+   "paging":{"cursors":{"before":"QVFIUmF","after":"QVFIUmG"},
+             "next":"https://graph.instagram.com/v25.0/17900000000000001/comments?access_token=IGOLD&fields=id&limit=2&after=QVFIUmG"}}|}
+
+let test_get_comments_page_with_replies () =
+  Mock_config.reset ();
+  Mock_config.set_env "INSTAGRAM_APP_SECRET" "app_secret";
+  Mock_http.set_responses [ { status = 200; headers = []; body = media_comments_body } ];
+  Instagram.get_comments_page ~media_id:"17900000000000001" ~access_token:"ig-token"
+    ~replies_limit:1 ~limit:2
+    (function
+      | Ok page ->
+          (match page.data with
+           | [ first; second ] ->
+               assert (first.Comments.username = Some "alice.example");
+               assert (first.hidden = Some false);
+               assert (first.like_count = Some 3);
+               assert (first.parent_id = None);
+               (match first.replies with
+                | Some replies ->
+                    (match replies.data with
+                     | [ reply ] ->
+                         assert (reply.parent_id = Some "17858893269000001");
+                         assert (reply.replies = None)
+                     | _ -> failwith "expected one reply");
+                    assert (Meta_graph_paging.next_after replies = Some "QVFIUnK")
+                | None -> failwith "expected a replies page");
+               assert (second.hidden = Some true);
+               assert (second.replies = None)
+           | _ -> failwith "expected two comments");
+          assert (Meta_graph_paging.next_after page = Some "QVFIUmG")
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+   | [ ("GET", url, headers, _) ] ->
+       let uri = Uri.of_string url in
+       assert (Uri.host uri = Some "graph.instagram.com");
+       assert (Uri.path uri = "/v25.0/17900000000000001/comments");
+       assert (Uri.get_query_param uri "fields"
+               = Some "id,text,username,timestamp,hidden,parent_id,like_count,replies.limit(1){id,text,username,timestamp,hidden,parent_id,like_count}");
+       assert (Uri.get_query_param uri "limit" = Some "2");
+       assert (Uri.get_query_param uri "access_token" = None);
+       assert (Uri.get_query_param uri "appsecret_proof" <> None);
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer ig-token")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ get_comments_page with nested replies"
+
+let test_get_comment_replies_page_follow_ups () =
+  Mock_config.reset ();
+  let replies_body =
+    {|{"data":[{"id":"17858893269000102","text":"+1","username":"carol.example","timestamp":"2026-11-16T10:09:00+0000","hidden":false,"parent_id":"17858893269000001","like_count":0}],
+       "paging":{"cursors":{"before":"QVFIUnL","after":"QVFIUnL"}}}|}
+  in
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = replies_body };
+      { status = 200; headers = []; body = replies_body } ];
+  let expect_last = function
+    | Ok page ->
+        assert (List.length page.Meta_graph_paging.data = 1);
+        assert (Meta_graph_paging.next_after page = None)
+    | Error err -> failwith (Error_types.error_to_string err)
+  in
+  Instagram.get_comment_replies_page ~comment_id:"17858893269000001" ~access_token:"ig-token"
+    ~position:(Meta_graph_paging.After "QVFIUnK") ~limit:500 expect_last;
+  Instagram.get_comment_replies_page ~comment_id:"ignored" ~access_token:"ig-token"
+    ~position:
+      (Meta_graph_paging.Page_url
+         "https://graph.instagram.com/v25.0/17858893269000001/replies?access_token=IGOLD&fields=id%2Ctext%2Cparent_id&limit=1&after=QVFIUnK")
+    expect_last;
+  (match List.rev !Mock_http.requests with
+   | [ ("GET", cursor_url, _, _); ("GET", followed_url, headers, _) ] ->
+       let cursor_uri = Uri.of_string cursor_url in
+       assert (Uri.path cursor_uri = "/v25.0/17858893269000001/replies");
+       assert (Uri.get_query_param cursor_uri "after" = Some "QVFIUnK");
+       assert (Uri.get_query_param cursor_uri "limit" = Some "50");
+       assert (Uri.get_query_param cursor_uri "fields" = Some Comments.reply_fields);
+       let uri = Uri.of_string followed_url in
+       assert (Uri.path uri = "/v25.0/17858893269000001/replies");
+       assert (Uri.get_query_param uri "fields" = Some "id,text,parent_id");
+       assert (Uri.get_query_param uri "access_token" = None);
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer ig-token")
+   | _ -> failwith "expected two GETs");
+  List.iter
+    (fun url ->
+      Mock_config.reset ();
+      Instagram.get_comment_replies_page ~comment_id:"c" ~access_token:"ig-token"
+        ~position:(Meta_graph_paging.Page_url url)
+        (function
+          | Error (Error_types.Validation_error _) -> ()
+          | _ -> failwith ("expected a rejected paging URL: " ^ url));
+      assert (!Mock_http.requests = []))
+    [ "https://graph.facebook.com/v25.0/c/replies?after=x";
+      "https://graph.instagram.com/v25.0/c/comments?after=x" ];
+  print_endline "✓ get_comment_replies_page (cursor, replies.paging.next, rejected URLs)"
+
+let test_comment_reply_hide_delete () =
+  Mock_config.reset ();
+  Mock_config.set_env "INSTAGRAM_APP_SECRET" "app_secret";
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"id":"17873440459141029"}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} };
+      { status = 200; headers = []; body = {|{"success":true}|} } ];
+  Instagram.reply_to_comment ~comment_id:"17858893269000001" ~access_token:"ig-token"
+    ~message:"Thanks for sharing!" (function
+    | Ok id -> assert (id = "17873440459141029")
+    | Error err -> failwith (Error_types.error_to_string err));
+  Instagram.set_comment_hidden ~comment_id:"17858893269000002" ~access_token:"ig-token"
+    ~hidden:true (function
+    | Ok () -> ()
+    | Error err -> failwith (Error_types.error_to_string err));
+  Instagram.delete_comment ~comment_id:"17858893269000002" ~access_token:"ig-token"
+    (function
+      | Ok () -> ()
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match List.rev !Mock_http.requests with
+   | [ ("POST", reply_url, reply_headers, reply_body);
+       ("POST", hide_url, _, hide_body);
+       ("DELETE", delete_url, delete_headers, _) ] ->
+       assert (reply_url = "https://graph.instagram.com/v25.0/17858893269000001/replies");
+       assert (string_contains reply_body "message=Thanks");
+       assert (string_contains reply_body "appsecret_proof=");
+       assert (not (string_contains reply_body "access_token"));
+       assert (List.assoc_opt "Authorization" reply_headers = Some "Bearer ig-token");
+       assert (hide_url = "https://graph.instagram.com/v25.0/17858893269000002");
+       assert (string_contains hide_body "hide=true");
+       let delete_uri = Uri.of_string delete_url in
+       assert (Uri.path delete_uri = "/v25.0/17858893269000002");
+       assert (Uri.get_query_param delete_uri "appsecret_proof" <> None);
+       assert (List.assoc_opt "Authorization" delete_headers = Some "Bearer ig-token")
+   | _ -> failwith "unexpected moderation requests");
+  print_endline "✓ reply_to_comment, set_comment_hidden, delete_comment"
+
+let test_comment_moderation_errors () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"success":false}|} };
+      { status = 400; headers = [];
+        body = {|{"error":{"message":"Unsupported post request. Object with ID '17858893269000404' does not exist, cannot be loaded due to missing permissions, or does not support this operation","type":"GraphMethodException","code":100,"error_subcode":33,"fbtrace_id":"AbC"}}|} } ];
+  Instagram.set_comment_hidden ~comment_id:"c" ~access_token:"t" ~hidden:false (function
+    | Error (Error_types.Api_error { raw_response = Some _; _ }) -> ()
+    | _ -> failwith "success=false must be an error");
+  Instagram.reply_to_comment ~comment_id:"17858893269000404" ~access_token:"t" ~message:"hi"
+    (function
+      | Error (Error_types.Resource_not_found _) -> ()
+      | Error err -> failwith ("expected Resource_not_found, got " ^ Error_types.error_to_string err)
+      | Ok _ -> failwith "expected an error");
+  Mock_config.reset ();
+  Instagram.delete_comment ~comment_id:" " ~access_token:"t" (function
+    | Error (Error_types.Validation_error _) -> ()
+    | _ -> failwith "expected a validation error");
+  Instagram.get_comments_page ~media_id:"" ~access_token:"t" (function
+    | Error (Error_types.Validation_error _) -> ()
+    | _ -> failwith "expected a validation error");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ comment moderation errors"
+
+let test_comments_page_for_account () =
+  Mock_config.reset ();
+  Mock_config.set_credentials ~account_id:"acct"
+    ~credentials:
+      { access_token = "stored-token"; refresh_token = None;
+        expires_at = Some "2099-01-01T00:00:00Z"; auth_type = Bearer; scope = None };
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"data":[]}|} } ];
+  Instagram.get_comments_page_for_account ~account_id:"acct" ~media_id:"m" (function
+    | Ok { data = []; next_url = None; _ } -> ()
+    | _ -> failwith "expected an empty page");
+  (match List.filter (fun (m, _, _, _) -> m = "GET") !Mock_http.requests with
+   | [ ("GET", _, headers, _) ] ->
+       assert (List.assoc_opt "Authorization" headers = Some "Bearer stored-token")
+   | _ -> failwith "expected one GET");
+  print_endline "✓ get_comments_page_for_account"
+
 let () =
   print_endline "\n=== Instagram Standalone Provider Tests ===\n";
 
@@ -1880,5 +2062,12 @@ let () =
   test_post_reel_e2e_with_params ();
 
   test_get_permalink ();
+
+  print_endline "\n--- Comment Read and Moderation Tests (I-1) ---";
+  test_get_comments_page_with_replies ();
+  test_get_comment_replies_page_follow_ups ();
+  test_comment_reply_hide_delete ();
+  test_comment_moderation_errors ();
+  test_comments_page_for_account ();
 
   print_endline "\n=== All standalone tests passed! ===\n"
