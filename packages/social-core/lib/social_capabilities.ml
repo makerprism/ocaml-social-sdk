@@ -515,13 +515,72 @@ type video_format = Reel | Regular
 (** Classify a video as Reel or Regular based on dimensions and duration.
     Returns [Reel] if the video is vertical (aspect ratio <= 0.6) and short
     (under 90 seconds). This matches the criteria for Instagram Reels and
-    Facebook Reels. *)
+    Facebook Reels.
+
+    @deprecated choosing Reel over Regular is a publishing preference, not
+    a platform fact: a vertical short video is *eligible* for Reels but the
+    caller decides the format. Use {!eligible_video_formats} for the
+    platform facts and pick the default in application code. Kept for
+    backward compatibility. *)
 let classify_video_format ~width ~height ~duration_seconds =
   if width > 0 && height > 0 then
     let aspect_ratio = float_of_int width /. float_of_int height in
     if aspect_ratio <= 0.6 && duration_seconds <= 90.0 then Reel
     else Regular
   else Regular
+
+(** The posting formats a platform actually distinguishes for video
+    publishing, in a stable order. Platforms not listed have a single
+    video mode, reported as [PostFormat]; TikTok's [PostFormat] is its
+    photo mode, so video publishing there is [ReelFormat] alone. *)
+let video_posting_formats = function
+  | Instagram -> [PostFormat; ReelFormat; StoryFormat]
+  | FacebookPage -> [PostFormat; ReelFormat; StoryFormat]
+  | TikTok -> [ReelFormat]
+  | Twitter | LinkedIn | Bluesky | Mastodon | YouTubeShorts | Pinterest
+  | Threads | Reddit | GoogleBusinessProfile ->
+      [PostFormat]
+
+let video_meets_format_constraints ~width ~height ~duration_seconds (cap : capability) =
+  let duration_ok = match cap.video_max_duration_seconds with
+    | Some max when duration_seconds > float_of_int max -> false
+    | _ -> true
+  in
+  let ratio_ok =
+    cap.video_aspect_ratios = []
+    || (width > 0 && height > 0
+        && List.exists
+          (fun ratio_str ->
+             match parse_aspect_ratio_string ratio_str with
+             | Some target ->
+                 aspect_ratio_matches
+                   ~actual:(float_of_int width /. float_of_int height)
+                   ~target
+             | None -> false)
+          cap.video_aspect_ratios)
+  in
+  cap.video_formats <> [] && duration_ok && ratio_ok
+
+(** The posting formats a video with these dimensions can be published in
+    on [platform], computed from the format-specific constraints of
+    {!get_capability_with_format}: the aspect ratio must match one of the
+    format's [video_aspect_ratios] within the 5% tolerance of
+    {!aspect_ratio_matches} (any ratio passes when the list is empty, and
+    no format matches when the dimensions are unknown), and the duration
+    must not exceed the format's [video_max_duration_seconds] (a duration
+    of [0.0] counts as unknown and never excludes a format).
+
+    Eligibility is a platform fact; which eligible format to publish in is
+    the caller's decision. Example: a 9:16 video of 30 seconds is
+    [\[ReelFormat; StoryFormat\]] on Instagram (its feed ratios are
+    [1:1], [4:5] and [1.91:1]), [\[PostFormat\]] on Twitter, and [\[\]]
+    on YouTube Shorts once it exceeds 60 seconds. *)
+let eligible_video_formats ~platform ~width ~height ~duration_seconds =
+  List.filter
+    (fun format ->
+       video_meets_format_constraints ~width ~height ~duration_seconds
+         (get_capability_with_format platform (Some format)))
+    (video_posting_formats platform)
 
 (** Check if a platform+format combination is video-first (vertical video preferred) *)
 let is_vertical_video_platform ?format platform =

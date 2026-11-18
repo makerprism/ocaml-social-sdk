@@ -1382,6 +1382,256 @@ let test_upload_recovery_network_error () =
           failwith ("Network recovery failed: " ^ Error_types.error_to_string err)
       | _ -> failwith "Unexpected outcome for network recovery")
 
+(** {2 Explicit-metadata upload (upload_video)} *)
+
+(* Download/init/upload responses for one happy-path upload; the init POST
+   is what the assertions read back. *)
+let setup_explicit_upload () =
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+  Mock_http.set_responses [
+    { status = 200; body = "video_data"; headers = [("content-type", "video/mp4")] };
+    { status = 200; body = "{}"; headers = [("location", "https://upload.example.com/explicit")] };
+    { status = 200; body = {|{"id":"up_1"}|}; headers = [] };
+  ]
+
+(* The resumable-upload init request: the only POST of the flow. *)
+let init_request () =
+  match List.filter (fun (m, _, _, _) -> m = "POST") (List.rev !Mock_http.requests) with
+  | [ (_m, url, _headers, body) ] -> (url, body)
+  | _ -> failwith "expected exactly one POST (the resumable-upload init)"
+
+let has_key json key =
+  match json with
+  | `Assoc fields -> List.mem_assoc key fields
+  | _ -> false
+
+(** Test: upload_video sends exactly the caller's metadata: no [#Shorts]
+    suffix, no derived tags, no default visibility or category. *)
+let test_upload_video_sends_explicit_metadata () =
+  setup_explicit_upload ();
+  YouTube.upload_video
+    ~account_id:"test_account"
+    ~media_urls:["https://example.com/v.mp4"]
+    { YouTube.title = "My explicit title";
+      description = "Exactly what the caller wrote";
+      tags = ["news"];
+      category_id = "25";
+      privacy_status = YouTube.Unlisted;
+      made_for_kids = true;
+      publish_at = None;
+      notify_subscribers = false;
+      recording_location = None }
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid -> assert (vid = "up_1")
+      | Error_types.Failure err ->
+          failwith ("explicit upload failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for explicit upload");
+  let url, body = init_request () in
+  assert (string_contains url "part=snippet,status&");
+  assert (string_contains url "notifySubscribers=false");
+  let open Yojson.Basic.Util in
+  let json = Yojson.Basic.from_string body in
+  let snippet = json |> member "snippet" in
+  assert (snippet |> member "title" |> to_string = "My explicit title");
+  assert (snippet |> member "description" |> to_string = "Exactly what the caller wrote");
+  assert (snippet |> member "tags" |> to_list |> List.map to_string = ["news"]);
+  assert (snippet |> member "categoryId" |> to_string = "25");
+  let status = json |> member "status" in
+  assert (status |> member "privacyStatus" |> to_string = "unlisted");
+  assert (status |> member "selfDeclaredMadeForKids" |> to_bool = true);
+  assert (not (has_key status "publishAt"));
+  assert (not (has_key json "recordingDetails"));
+  assert (not (string_contains body "#Shorts"));
+  assert (not (string_contains body "\"shorts\""));
+  print_endline "PASS upload_video sends exactly the caller's metadata"
+
+(** Test: empty tags and category omit the fields instead of inventing
+    Shorts defaults. *)
+let test_upload_video_empty_tags_and_category_omitted () =
+  setup_explicit_upload ();
+  YouTube.upload_video
+    ~account_id:"test_account"
+    ~media_urls:["https://example.com/v.mp4"]
+    { YouTube.title = "Plain video";
+      description = "d";
+      tags = [];
+      category_id = "";
+      privacy_status = YouTube.Private;
+      made_for_kids = false;
+      publish_at = None;
+      notify_subscribers = true;
+      recording_location = None }
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success _ -> ()
+      | Error_types.Failure err ->
+          failwith ("explicit upload failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for explicit upload");
+  let _url, body = init_request () in
+  let open Yojson.Basic.Util in
+  let snippet = Yojson.Basic.from_string body |> member "snippet" in
+  assert (not (has_key snippet "tags"));
+  assert (not (has_key snippet "categoryId"));
+  print_endline "PASS upload_video omits empty tags and category"
+
+(** Test: a scheduled upload is forced to private, whatever the requested
+    visibility (endpoint requirement, kept from post_single). *)
+let test_upload_video_publish_at_forces_private () =
+  setup_explicit_upload ();
+  YouTube.upload_video
+    ~account_id:"test_account"
+    ~media_urls:["https://example.com/v.mp4"]
+    { YouTube.title = "Scheduled";
+      description = "d";
+      tags = [];
+      category_id = "22";
+      privacy_status = YouTube.Public;
+      made_for_kids = false;
+      publish_at = Some "2026-03-01T12:00:00Z";
+      notify_subscribers = true;
+      recording_location = None }
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid -> assert (vid = "up_1")
+      | Error_types.Failure err ->
+          failwith ("scheduled explicit upload failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for scheduled explicit upload");
+  let _url, body = init_request () in
+  let open Yojson.Basic.Util in
+  let status = Yojson.Basic.from_string body |> member "status" in
+  assert (status |> member "privacyStatus" |> to_string = "private");
+  assert (status |> member "publishAt" |> to_string = "2026-03-01T12:00:00Z");
+  print_endline "PASS upload_video publishAt forces private"
+
+(** Test: recording_location adds recordingDetails and its [part], as on
+    post_single. *)
+let test_upload_video_recording_location () =
+  setup_explicit_upload ();
+  YouTube.upload_video
+    ~account_id:"test_account"
+    ~media_urls:["https://example.com/v.mp4"]
+    { YouTube.title = "Located";
+      description = "d";
+      tags = [];
+      category_id = "22";
+      privacy_status = YouTube.Public;
+      made_for_kids = false;
+      publish_at = None;
+      notify_subscribers = true;
+      recording_location = Some { YouTube.latitude = 52.52; longitude = 13.405 } }
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success _ -> ()
+      | Error_types.Failure err ->
+          failwith ("located explicit upload failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for located explicit upload");
+  let url, body = init_request () in
+  assert (string_contains url "part=snippet,status,recordingDetails&");
+  let open Yojson.Basic.Util in
+  let location =
+    Yojson.Basic.from_string body |> member "recordingDetails" |> member "location" in
+  assert (location |> member "latitude" |> to_number = 52.52);
+  assert (location |> member "longitude" |> to_number = 13.405);
+  print_endline "PASS upload_video recording_location adds recordingDetails"
+
+(** Test: endpoint-encoded validation runs on the payload actually sent:
+    the title is required and capped at 100 bytes, the description at 5000,
+    and a video URL is required. None of these reach HTTP. *)
+let test_upload_video_validation () =
+  let base = YouTube.{ title = "t"; description = "d"; tags = []; category_id = "22";
+                       privacy_status = Public; made_for_kids = false; publish_at = None;
+                       notify_subscribers = true; recording_location = None } in
+  let expect_validation ~label metadata ~media_urls error =
+    YouTube.upload_video ~account_id:"test_account" ~media_urls metadata
+      (fun outcome ->
+         match outcome with
+         | Error_types.Failure (Error_types.Validation_error errors) ->
+             assert (List.mem error errors)
+         | other ->
+             failwith
+               (label ^ ": expected validation error, got "
+                ^ (match other with
+                   | Error_types.Success v -> "success " ^ v
+                   | Error_types.Partial_success _ -> "partial success"
+                   | Error_types.Failure e -> Error_types.error_to_string e)))
+  in
+  Mock_config.reset ();
+  expect_validation ~label:"empty title"
+    { base with YouTube.title = "" } ~media_urls:["https://e.com/v.mp4"]
+    Error_types.Text_empty;
+  expect_validation ~label:"101-byte title"
+    { base with YouTube.title = String.make 101 'x' } ~media_urls:["https://e.com/v.mp4"]
+    (Error_types.Text_too_long { length = 101; max = 100 });
+  expect_validation ~label:"5001-byte description"
+    { base with YouTube.description = String.make 5001 'x' }
+    ~media_urls:["https://e.com/v.mp4"]
+    (Error_types.Text_too_long { length = 5001; max = 5000 });
+  expect_validation ~label:"no media" base ~media_urls:[]
+    Error_types.Media_required;
+  print_endline "PASS upload_video validates title, description and media"
+
+(** Test: maximum-length and multibyte payloads pass verbatim. A title of
+    exactly 100 multibyte bytes is sent untouched, and so is a 5000-byte
+    description (unlike post_single, which appends [" #Shorts"] after
+    validating the shorter text). *)
+let test_upload_video_max_length_and_multibyte () =
+  setup_explicit_upload ();
+  (* 50 two-byte characters = exactly 100 bytes *)
+  let accented_title = String.concat "" (List.init 50 (fun _ -> "é")) in
+  assert (String.length accented_title = 100);
+  YouTube.upload_video
+    ~account_id:"test_account"
+    ~media_urls:["https://example.com/v.mp4"]
+    { YouTube.title = accented_title;
+      description = String.make 5000 'd';
+      tags = [];
+      category_id = "";
+      privacy_status = YouTube.Public;
+      made_for_kids = false;
+      publish_at = None;
+      notify_subscribers = true;
+      recording_location = None }
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success _ -> ()
+      | Error_types.Failure err ->
+          failwith ("max-length upload failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for max-length upload");
+  let _url, body = init_request () in
+  let open Yojson.Basic.Util in
+  let snippet = Yojson.Basic.from_string body |> member "snippet" in
+  assert (snippet |> member "title" |> to_string = accented_title);
+  assert (String.length (snippet |> member "description" |> to_string) = 5000);
+  print_endline "PASS upload_video keeps 100-byte multibyte titles and 5000-byte descriptions verbatim"
+
+(** Test: the deprecated post_single keeps deriving the Shorts payload.
+    This pins the compatibility surface until the derivation is removed. *)
+let test_post_single_legacy_derivation_pinned () =
+  setup_explicit_upload ();
+  YouTube.post_single
+    ~account_id:"test_account"
+    ~text:"Hello"
+    ~media_urls:["https://example.com/v.mp4"]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Success vid -> assert (vid = "up_1")
+      | Error_types.Failure err ->
+          failwith ("legacy upload failed: " ^ Error_types.error_to_string err)
+      | _ -> failwith "Unexpected outcome for legacy upload");
+  let url, body = init_request () in
+  assert (string_contains url "notifySubscribers=true");
+  let open Yojson.Basic.Util in
+  let json = Yojson.Basic.from_string body in
+  let snippet = json |> member "snippet" in
+  assert (snippet |> member "title" |> to_string = "Hello");
+  assert (snippet |> member "description" |> to_string = "Hello #Shorts");
+  assert (snippet |> member "tags" |> to_list |> List.map to_string = ["shorts"; "short"]);
+  assert (snippet |> member "categoryId" |> to_string = "22");
+  assert (json |> member "status" |> member "privacyStatus" |> to_string = "public");
+  print_endline "PASS post_single legacy Shorts derivation unchanged"
+
 (** Run all tests *)
 module Youtube_oauth = OAuth.Make (Mock_http)
 
@@ -1503,6 +1753,16 @@ let () =
   test_upload_recovery_network_error ();
 
   print_endline "";
+  print_endline "--- Explicit Metadata Upload Tests ---";
+  test_upload_video_sends_explicit_metadata ();
+  test_upload_video_empty_tags_and_category_omitted ();
+  test_upload_video_publish_at_forces_private ();
+  test_upload_video_recording_location ();
+  test_upload_video_validation ();
+  test_upload_video_max_length_and_multibyte ();
+  test_post_single_legacy_derivation_pinned ();
+
+  print_endline "";
   print_endline "=== All tests passed! ===";
   print_endline "";
   print_endline "Test Coverage Summary:";
@@ -1517,5 +1777,6 @@ let () =
   print_endline "  - Video update (4 tests)";
   print_endline "  - Playlist management (4 tests)";
   print_endline "  - Upload recovery (2 tests)";
+  print_endline "  - Explicit metadata upload (7 tests)";
   print_endline "";
-  print_endline "Total: 38 test functions"
+  print_endline "Total: 45 test functions"
