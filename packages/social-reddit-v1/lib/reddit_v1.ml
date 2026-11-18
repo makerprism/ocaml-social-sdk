@@ -282,7 +282,8 @@ module OAuth = struct
     | 401 -> Error_types.Auth_error Error_types.Token_invalid
     | 403 ->
         Error_types.Auth_error
-          (Error_types.Insufficient_permissions { required = [ "identity" ]; platform_message = None })
+          (Error_types.Insufficient_permissions { required = [ "identity" ];
+            platform_message = (Social_provider_error_detail.of_response ~status_code body).message })
     | 429 ->
         let retry_after_seconds =
           List.find_map

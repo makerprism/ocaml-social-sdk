@@ -2,6 +2,8 @@
 
 ## 0.1.0 (Unreleased)
 
+- Identity-read 403 permission errors now retain Reddit’s message for callers.
+
 Initial release of the Reddit API v1 client.
 
 ### Added
