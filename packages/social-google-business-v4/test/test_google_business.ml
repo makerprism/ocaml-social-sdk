@@ -743,7 +743,7 @@ let test_coordinated_refresh () =
   let module Provider = Social_google_business_v4.Make_coordinated (Config) in
   Mock_http.set_responses [{
     Social_core.status = 200; headers = [];
-    body = "{\"access_token\":\"new-access\",\"token_type\":\"bearer\",\"refresh_token\":\"rotated-refresh\",\"expires_in\":5184000}";
+    body = "{\"access_token\":\"new-access\",\"token_type\":\"bearer\",\"expires_in\":3600}";
   }];
   let run () = Provider.ensure_valid_token ~account_id:"account"
     (fun token -> assert (token = "new-access"); incr completed)
@@ -756,6 +756,6 @@ let test_coordinated_refresh () =
   (match !persist with Some finish -> finish () | None -> assert false);
   assert (!completed = 2 && not !locked);
   assert (List.length !Mock_http.requests = 1);
-  assert ((List.assoc "account" !Mock_config.credentials_store).Social_core.refresh_token = Some "rotated-refresh")
+  assert ((List.assoc "account" !Mock_config.credentials_store).Social_core.refresh_token = Some "current-refresh")
 
 let () = test_coordinated_refresh ()
