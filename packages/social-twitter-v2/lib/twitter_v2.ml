@@ -332,7 +332,17 @@ module type CONFIG = sig
 end
 
 (** Make functor to create Twitter provider with given configuration *)
-module Make (Config : CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   let twitter_api_base = "https://api.twitter.com/2"
   (* X API v2 media upload - requires OAuth tokens from S256 PKCE flow *)
   let twitter_upload_base = "https://api.x.com/2"
@@ -945,7 +955,7 @@ module Make (Config : CONFIG) = struct
                [("Authorization", Printf.sprintf "Bearer %s" credentials.access_token)] }
 
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
-  let ensure_valid_token ~account_id on_success on_error =
+  let ensure_token ?(force_refresh = false) ~account_id on_success on_error =
     let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
     let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
     let perform_refresh ~credentials on_refresh_success on_refresh_error =
@@ -968,6 +978,8 @@ module Make (Config : CONFIG) = struct
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
+      ~with_refresh_lock:Config.with_refresh_lock ~force_refresh
+      ~reload_credentials:Config.get_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = 1800 }
       ~account_id
       ~load_credentials:Config.get_credentials
@@ -980,6 +992,9 @@ module Make (Config : CONFIG) = struct
         | Error msg -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
       on_error
   
+  let ensure_valid_token ~account_id on_success on_error =
+    ensure_token ~account_id on_success on_error
+
   (** Retry-on-401 wrapper.
 
       Performs [action] with the current access token.  If the HTTP response
@@ -1001,44 +1016,13 @@ module Make (Config : CONFIG) = struct
         action auth_ctx
           (fun response ->
             if response.Social_core.status = 401 then
-              (* Force a token refresh: the server rejected the token even if
-                 it has not expired locally (e.g. revoked, rotated).  We call
-                 refresh_access_token directly instead of ensure_valid_token
-                 so that we always hit the token endpoint. *)
-              Config.get_credentials ~account_id
-                (fun creds ->
-                  let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
-                  let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
-                  match creds.refresh_token with
-                  | None ->
-                      on_result (Error (Error_types.Auth_error Error_types.Missing_credentials))
-                  | Some _ when client_id = "" || client_secret = "" ->
-                      on_result (Error (Error_types.Auth_error
-                        (Error_types.Refresh_failed "TWITTER_CLIENT_ID or TWITTER_CLIENT_SECRET is missing")))
-                  | Some rt ->
-                      refresh_access_token ~client_id ~client_secret ~refresh_token:rt
-                        (fun (new_access, new_refresh, expires_at) ->
-                          let updated_creds = {
-                            access_token = new_access;
-                            refresh_token = Some new_refresh;
-                            expires_at = Some expires_at;
-                            auth_type = creds.auth_type;
-                            scope = creds.scope;
-                          } in
-                          Config.update_credentials ~account_id ~credentials:updated_creds
-                            (fun () ->
-                              match make_auth_context updated_creds with
-                              | Error msg ->
-                                  on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
-                              | Ok new_auth_ctx ->
-                                  action new_auth_ctx
-                                    (fun retry_response ->
-                                      handle_response retry_response on_result)
-                                    (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
-                            (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
-                        (fun err ->
-                          on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
-                (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
+              ensure_token ~force_refresh:true ~account_id
+                (fun refreshed ->
+                  action refreshed
+                    (fun response -> handle_response response on_result)
+                    (fun error -> on_result (Error (Error_types.Network_error
+                      (Error_types.Connection_failed error)))))
+                (fun error -> on_result (Error error))
             else
               handle_response response on_result)
           (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err)))))
@@ -3544,3 +3528,9 @@ module Make (Config : CONFIG) = struct
           on_error (Printf.sprintf "Token exchange failed (%d): %s" response.status (OAuth.redact_sensitive_text response.body)))
       on_error
 end
+
+module Make (Config : CONFIG) = Make_coordinated (struct
+  include Config
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end)

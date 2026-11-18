@@ -6373,3 +6373,64 @@ let () =
   print_endline "  - Video upload (16 tests)";
   print_endline "";
   print_endline "Total: 166 test functions"
+
+let test_coordinated_refresh ~after_401 =
+  refresh_success_refresh_calls := 0;
+  let stored = ref {
+    Social_core.access_token = "old-access";
+    refresh_token = Some "current-refresh";
+    expires_at = Some (if after_401 then "2099-01-01T00:00:00Z" else "2020-01-01T00:00:00Z");
+    auth_type = Social_core.Bearer;
+    scope = None;
+  } in
+  let locked = ref false in
+  let waiting = Queue.create () in
+  let persist = ref None in
+  let completed = ref 0 in
+  let module Config = struct
+    include Mock_config_refresh_success
+    let get_credentials ~account_id:_ on_success _ =
+      assert !locked;
+      on_success !stored
+    let update_credentials ~account_id:_ ~credentials on_success _ =
+      assert !locked;
+      persist := Some (fun () -> stored := credentials; on_success ())
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      let release () =
+        locked := false;
+        if not (Queue.is_empty waiting) then (Queue.take waiting) ()
+      in
+      let start () =
+        assert (not !locked);
+        locked := true;
+        run
+          (fun credentials -> release (); on_success credentials)
+          (fun error -> release (); on_error error)
+      in
+      if !locked then Queue.add start waiting else start ()
+  end in
+  let module Provider = Social_twitter_v2.Make_coordinated (Config) in
+  let fail error = failwith (Error_types.error_to_string error) in
+  let success context =
+    assert (context.Provider.access_token = "refreshed_token"); incr completed
+  in
+  if after_401 then
+    Provider.with_retry_on_401 ~account_id:"account"
+      ~action:(fun context on_response _ ->
+        on_response { Social_core.status =
+          (if context.Provider.access_token = "old-access" then 401 else 200);
+          headers = []; body = "{}" })
+      ~handle_response:(fun response on_result -> on_result (Ok response.Social_core.status))
+      (function Ok status -> assert (status = 200); incr completed | Error error -> fail error)
+  else Provider.ensure_valid_token ~account_id:"account" success fail;
+  Provider.ensure_valid_token ~account_id:"account" success fail;
+  assert (!completed = 0 && !locked);
+  assert (!refresh_success_refresh_calls = 1);
+  (match !persist with Some finish -> finish () | None -> assert false);
+  assert (!completed = 2 && not !locked);
+  assert (!refresh_success_refresh_calls = 1);
+  assert ((!stored).Social_core.refresh_token = Some "refreshed_refresh")
+
+let () =
+  test_coordinated_refresh ~after_401:false;
+  test_coordinated_refresh ~after_401:true
