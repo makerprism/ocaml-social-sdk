@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+- Use application-neutral examples and documentation for this general-purpose SDK.
+
 ### Security
 
 - Reject non-public WebFinger host inputs before HTTP using `Social_public_host.is_public_host`. HTTP adapters remain responsible for DNS and redirect validation.

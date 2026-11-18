@@ -169,6 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Migration notes
+
+- #74: `blob_looks_like_text` moved out of the `Make` functor. Call `Social_bluesky_v1.blob_looks_like_text` instead of `Make(Config).blob_looks_like_text`.
+
 ### Security
 
 - Use the shared public-host filter for remote media and discovered PDS endpoints, blocking decimal/hex IPv4, shared/private IPv4 ranges, IPv6 ULA/link-local and transition addresses before sending credentials.

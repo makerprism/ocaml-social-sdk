@@ -2,6 +2,8 @@
 
 ## 0.1.1 - Unreleased
 
+- Migration (#66): public `reply_action` changed from `~endpoint ?extra_params` to typed `~edge ~params`. Use `~edge:Manage_pending_reply ~params:[("approve", "true")]` or the stable `approve_pending_reply`, `ignore_pending_reply`, `hide_reply`, and `unhide_reply` wrappers.
+
 - Reply, conversation, and pending-reply pages continue on `cursors.after` without `paging.next`. Nonempty cursor-only pages expose a reconstructed `next_url`; empty pages end traversal. Explicit next URLs remain supported.
 
 - **Location search (`Locations`, module `Threads_v1_locations`)**: `search_locations ~access_token ?query ?coordinates` (`GET /location_search`) and `search_locations_for_account ~account_id`, returning `Locations.location list` (`{id; name; address; city; country; postal_code; coordinates}`, all but `id` optional). Takes a text query, a point (`Locations.coordinates = {latitude; longitude}`), or both; neither is `Validation_error [Text_empty]` and sends nothing. Requests every documented field (`Locations.fields`), because the endpoint returns only `id` by default. The `id` is read from a string or a number (the guide shows both) and kept as a string; it is the `location_id` that `post_single` takes. Reads go through the package's retry policy. Additive. Sources: https://developers.facebook.com/docs/threads/reference/location-search, https://developers.facebook.com/docs/threads/create-posts/location-tagging

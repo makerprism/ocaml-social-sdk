@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+- Use application-neutral examples and documentation for this general-purpose SDK.
+
+### Analytics correction
+
+- Facebook `post_total_media_view_unique` now normalizes to `Reach`, preserving it alongside total `post_media_view` (`Views`) instead of losing one series. The deprecated legacy metric keeps its previous mapping.
+
 ### Security
 
 - Add `Social_public_host.is_public_host`, a runtime-independent literal-address and DNS-name filter using `ipaddr`. It rejects private/reserved and alternate numeric addresses; callers must still enforce DNS and redirect policy.

@@ -26,8 +26,8 @@ let test_url_path () =
     ~expected:""
     "";
   t ~context:"presigned B2 URL"
-    ~expected:"https://s3.eu-central-003.backblazeb2.com/feedmansion/media/user/post/img.jpg"
-    "https://s3.eu-central-003.backblazeb2.com/feedmansion/media/user/post/img.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F20260322%2Feu-central-003%2Fs3%2Faws4_request&X-Amz-Date=20260322T001845Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=deadbeef";
+    ~expected:"https://s3.eu-central-003.backblazeb2.com/example-bucket/media/user/post/img.jpg"
+    "https://s3.eu-central-003.backblazeb2.com/example-bucket/media/user/post/img.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F20260322%2Feu-central-003%2Fs3%2Faws4_request&X-Amz-Date=20260322T001845Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=deadbeef";
   Printf.printf "  ✓ url_path tests passed\n"
 
 let test_url_file_extension () =
@@ -58,7 +58,7 @@ let test_url_file_extension () =
   (* Full B2 presigned URL *)
   t ~context:"full B2 presigned URL"
     ~expected:".jpg"
-    "https://s3.eu-central-003.backblazeb2.com/feedmansion/media/6c36dfb3/1146f118/1774138449-e5b735c4.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F20260322%2Feu-central-003%2Fs3%2Faws4_request&X-Amz-Date=20260322T001845Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=75aaaa2efc310230ff4acfeef45fedcb01d27950";
+    "https://s3.eu-central-003.backblazeb2.com/example-bucket/media/6c36dfb3/1146f118/1774138449-e5b735c4.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F20260322%2Feu-central-003%2Fs3%2Faws4_request&X-Amz-Date=20260322T001845Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=75aaaa2efc310230ff4acfeef45fedcb01d27950";
   (* No extension *)
   t ~context:"no extension" ~expected:"" "https://example.com/media/12345";
   t ~context:"no extension with query" ~expected:"" "https://example.com/media?id=1";
