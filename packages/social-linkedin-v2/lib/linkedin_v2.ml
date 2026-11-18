@@ -1697,7 +1697,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
 
   (** PUT every part of [media_data] to its instruction's URL, in order;
       answers the part ids (ETags) in the same order. *)
-  let upload_video_parts ~access_token ~(session : video_upload_session) ~media_data on_success
+  let upload_video_parts ~access_token:_ ~(session : video_upload_session) ~media_data on_success
       on_error =
     let file_size = String.length media_data in
     let rec upload_parts parts part_ids =
@@ -1707,7 +1707,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (match video_part_slice ~file_size part with
            | Error msg -> on_error msg
            | Ok (offset, length) ->
-               Config.Http.put ~headers:(binary_upload_headers ~access_token)
+               Config.Http.put ~headers:[ ("Content-Type", "application/octet-stream") ]
                  ~body:(String.sub media_data offset length) part.upload_url
                  (fun response ->
                    if not (is_success_status response.status) then
