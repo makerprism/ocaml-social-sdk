@@ -913,7 +913,17 @@ end
 
 (** LinkedIn provider with explicit {!OPTIONS} (e.g. a timer, so video
     posts wait until LinkedIn has processed the video). *)
-module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_coordinated_with_options (Config : COORDINATED_CONFIG) (Options : OPTIONS) = struct
   let linkedin_api_base = "https://api.linkedin.com/v2"
   let linkedin_rest_base = "https://api.linkedin.com/rest"
   let linkedin_auth_url = "https://www.linkedin.com/oauth/v2"
@@ -1508,6 +1518,8 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed message)))
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
+      ~with_refresh_lock:Config.with_refresh_lock
+      ~reload_credentials:Config.get_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = 604800 }
       ~account_id
       ~load_credentials:Config.get_credentials
@@ -3465,4 +3477,15 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
 end
 
 (** LinkedIn provider with {!Default_options}. *)
+module Make_with_options (Config : CONFIG) (Options : OPTIONS) =
+  Make_coordinated_with_options (struct
+  include Config
+
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end) (Options)
+
 module Make (Config : CONFIG) = Make_with_options (Config) (Default_options)
+
+module Make_coordinated (Config : COORDINATED_CONFIG) =
+  Make_coordinated_with_options (Config) (Default_options)
