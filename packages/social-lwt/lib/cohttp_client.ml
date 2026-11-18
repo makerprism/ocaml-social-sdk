@@ -1,7 +1,6 @@
 (** Cohttp Client - HTTP_CLIENT implementation using Cohttp *)
 
-open Lwt.Syntax
-open Social_core
+let ( let* ) = Lwt.bind
 
 (** Options for {!Make_with_options}. *)
 module type OPTIONS = sig
@@ -29,7 +28,7 @@ module Make_with_options (Options : OPTIONS) = struct
   let to_response resp body_str =
     let status = Cohttp.Response.status resp |> Cohttp.Code.code_of_status in
     let headers = Cohttp.Header.to_list (Cohttp.Response.headers resp) in
-    { status; headers; body = body_str }
+    { Social_core.status; headers; body = body_str }
 
   (* The deadline covers reading the body, not only the headers: a server
      that sends headers and then stalls must not hang the caller. *)
@@ -57,6 +56,23 @@ module Make_with_options (Options : OPTIONS) = struct
         Lwt.return (on_success (to_response resp body_str)))
       (fun exn -> Lwt.return (on_error (error_message ~deadline exn)))
 
+  (* Protect the uncancellable Cohttp request so cancellation reaches our
+     finalizer, including when the peer stalls before headers or mid-body.
+     [create] gives us ownership even during connection establishment. *)
+  let owned_request ~headers ?(body = `Empty) meth uri () =
+    let module Connection = Cohttp_lwt_unix.Connection in
+    let ctx = Lazy.force Cohttp_lwt_unix.Net.default_ctx in
+    let* endpoint = Cohttp_lwt_unix.Net.resolve ~ctx uri in
+    let connection = Connection.create ~ctx endpoint in
+    Lwt.finalize
+      (fun () ->
+        let* resp, body_str =
+          Lwt.protected (fetch (fun () ->
+            Connection.call connection ~headers ~body meth uri))
+        in
+        Lwt.return (resp, `String body_str))
+      (fun () -> Connection.close connection; Lwt.return_unit)
+
   let header_of_option = function
     | Some h -> Cohttp.Header.of_list h
     | None -> Cohttp.Header.init ()
@@ -69,7 +85,7 @@ module Make_with_options (Options : OPTIONS) = struct
     let headers = header_of_option headers in
     ignore
       (run
-         (fun () -> Cohttp_lwt_unix.Client.get ~headers (Uri.of_string url))
+         (owned_request ~headers `GET (Uri.of_string url))
          on_success on_error)
 
   let post ?headers ?body url on_success on_error =
@@ -77,7 +93,7 @@ module Make_with_options (Options : OPTIONS) = struct
     let body = body_of_option body in
     Lwt.async (fun () ->
       run
-        (fun () -> Cohttp_lwt_unix.Client.post ~headers ~body (Uri.of_string url))
+        (owned_request ~headers ~body `POST (Uri.of_string url))
         on_success on_error)
 
   let post_multipart ?headers ~parts url on_success on_error =
@@ -85,7 +101,7 @@ module Make_with_options (Options : OPTIONS) = struct
     let boundary = Printf.sprintf "----Boundary%d" (Random.int 1000000) in
 
     (* Build multipart body *)
-    let build_part part =
+    let build_part (part : Social_core.multipart_part) =
       let content_disposition =
         match part.filename with
         | Some fname -> Printf.sprintf "Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n" part.name fname
@@ -112,11 +128,7 @@ module Make_with_options (Options : OPTIONS) = struct
 
     Lwt.async (fun () ->
       run
-        (fun () ->
-          Cohttp_lwt_unix.Client.post
-            ~headers
-            ~body:(`String body_str)
-            (Uri.of_string url))
+        (owned_request ~headers ~body:(`String body_str) `POST (Uri.of_string url))
         on_success on_error)
 
   let put ?headers ?body url on_success on_error =
@@ -124,14 +136,14 @@ module Make_with_options (Options : OPTIONS) = struct
     let body = body_of_option body in
     Lwt.async (fun () ->
       run
-        (fun () -> Cohttp_lwt_unix.Client.put ~headers ~body (Uri.of_string url))
+        (owned_request ~headers ~body `PUT (Uri.of_string url))
         on_success on_error)
 
   let delete ?headers url on_success on_error =
     let headers = header_of_option headers in
     Lwt.async (fun () ->
       run
-        (fun () -> Cohttp_lwt_unix.Client.delete ~headers (Uri.of_string url))
+        (owned_request ~headers `DELETE (Uri.of_string url))
         on_success on_error)
 end
 
@@ -139,5 +151,5 @@ end
 module Make = Make_with_options (Default_options)
 
 (* Both clients must keep satisfying the interface providers take. *)
-module _ : HTTP_CLIENT = Make
-module _ (Options : OPTIONS) : HTTP_CLIENT = Make_with_options (Options)
+module _ : Social_core.HTTP_CLIENT = Make
+module _ (Options : OPTIONS) : Social_core.HTTP_CLIENT = Make_with_options (Options)
