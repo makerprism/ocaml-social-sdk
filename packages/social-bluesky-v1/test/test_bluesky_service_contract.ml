@@ -653,19 +653,19 @@ let test_video_token_rejected_falls_back_to_upload_blob () =
   assert (count_requests "com.atproto.repo.uploadBlob" = 1)
 
 let test_unsafe_did_doc_endpoint_is_ignored () =
-  reset ();
-  video_responder ~session:(session_with_did_doc "http://169.254.169.254/latest")
-    ~upload:(json_response (Printf.sprintf {|{"jobStatus":{"jobId":"j","did":"did:plc:alice","state":"JOB_STATE_COMPLETED","blob":%s}}|} video_blob_json))
-    ();
-  ignore (expect_outcome_success "unsafe endpoint" (post_video (module Video_bluesky)));
-  let auth = find_request "com.atproto.server.getServiceAuth" in
-  assert (String.starts_with ~prefix:"https://bsky.social/xrpc/" auth.url);
-  assert (query_param auth "aud" = Some "did:web:bsky.social");
-  List.iter
-    (fun request ->
-      if String.starts_with ~prefix:"http://169.254" request.url then
-        fail "request sent to the DID document endpoint %s" request.url)
-    (sent ())
+  List.iter (fun endpoint ->
+    reset ();
+    video_responder ~session:(session_with_did_doc endpoint)
+      ~upload:(json_response (Printf.sprintf {|{"jobStatus":{"jobId":"j","did":"did:plc:alice","state":"JOB_STATE_COMPLETED","blob":%s}}|} video_blob_json)) ();
+    ignore (expect_outcome_success "unsafe endpoint" (post_video (module Video_bluesky)));
+    let auth = find_request "com.atproto.server.getServiceAuth" in
+    assert (String.starts_with ~prefix:"https://bsky.social/xrpc/" auth.url);
+    assert (query_param auth "aud" = Some "did:web:bsky.social"))
+    [ "http://169.254.169.254/latest"; "https://2130706433/";
+      "https://0x7f000001/"; "https://127.1/"; "https://0177.0.0.1/";
+      "https://0.0.0.0/"; "https://100.64.0.1/"; "https://198.18.0.1/";
+      "https://[fc00::1]/"; "https://[fe80::1]/";
+      "https://[::ffff:127.0.0.1]/"; "https://host.localhost/" ]
 
 let test_pds_endpoint_of_did_doc () =
   let doc json = Yojson.Basic.from_string json in

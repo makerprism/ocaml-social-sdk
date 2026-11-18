@@ -257,3 +257,6 @@ nonempty pages with `cursors.after` expose a followable `next_url`; empty pages 
 
 LinkedIn video part PUT requests send only `Content-Type: application/octet-stream`,
 without forwarding the member bearer token to signed upload URLs.
+
+Mastodon WebFinger rejects non-public hosts before HTTP. Bluesky discovered PDS
+and remote-media hosts use the same literal-address and hostname validation.

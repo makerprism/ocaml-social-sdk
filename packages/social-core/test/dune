@@ -52,3 +52,8 @@
  (name test_social_meta_graph_paging)
  (modules test_social_meta_graph_paging)
  (libraries social-core uri))
+
+(test
+ (name test_social_public_host)
+ (modules test_social_public_host)
+ (libraries social-core))

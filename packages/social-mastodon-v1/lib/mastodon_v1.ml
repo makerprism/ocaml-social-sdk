@@ -738,11 +738,15 @@ module Reads = struct
         Use {!Mastodon_entities.webfinger_actor_url} for the ActivityPub
         actor.
 
-        [domain] usually comes from user input. Check that it is a public
-        host before calling (this function does not), or a handle like
-        [x@169.254.169.254] makes you fetch an internal address.
+        [domain] is checked with {!Social_public_host.is_public_host} before
+        sending a request. The HTTP adapter must also check DNS resolution
+        and redirects to prevent rebinding to internal addresses.
         {{:https://docs.joinmastodon.org/spec/webfinger/}} *)
     let webfinger ~username ~domain on_result =
+      if not (Social_public_host.is_public_host domain) then
+        on_result (Stdlib.Error (Error_types.Validation_error
+          [ Error_types.Invalid_url "WebFinger requires a public host" ]))
+      else
       let url =
         Uri.make ~scheme:"https" ~host:domain ~path:"/.well-known/webfinger"
           ~query:[ ("resource", [ Mastodon_entities.webfinger_resource ~username ~domain ]) ]

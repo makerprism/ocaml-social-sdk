@@ -16,6 +16,7 @@
  (description "Runtime-agnostic, HTTP-client-agnostic core interfaces for building social media API clients. This package provides CPS-style interfaces that can be implemented with any async runtime (Lwt, Eio, synchronous) and any HTTP client library.")
  (depends
   (ocaml (>= 4.14))
+  ipaddr
   yojson
   re
   digestif

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Security
+
+- Add `Social_public_host.is_public_host`, a runtime-independent literal-address and DNS-name filter using `ipaddr`. It rejects private/reserved and alternate numeric addresses; callers must still enforce DNS and redirect policy.
+
 ### Changed
 
 - **Prefixed modules**: `Secure_random`, `Oauth_pkce`, `Meta_graph_error`, `Provider_error_detail` and `Meta_graph_paging` are now `Social_secure_random`, `Social_oauth_pkce`, `Social_meta_graph_error`, `Social_provider_error_detail` and `Social_meta_graph_paging`. Same reason as the token-tooling rename below: `social-core` is `(wrapped false)`, so a generic unprefixed name can clash with any consumer module. The old names stay as deprecated aliases (`include` of the new module, types equal) so existing code keeps compiling; they will be removed in a later release. The deprecation is documented, not an `[@@@deprecated]` alert, because dune's dev profile turns alerts into errors and would break the very consumers the aliases exist for.
