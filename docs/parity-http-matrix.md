@@ -268,3 +268,6 @@ rejected cached JWTs, and preserves XRPC `RateLimit-Reset` retry delays.
 
 Mastodon `reply_to_status_exact`: `POST /api/v1/statuses`, exact status text, `in_reply_to_id`, visibility, Bearer auth and Idempotency-Key; parses the created Status entity. No target-author GET or automatic mention.
 Reddit token-only reads: `GET /subreddits/mine/moderator` (limit/after Listing), `GET /r/{subreddit}/api/link_flair_v2` (template array), and `GET /r/{subreddit}/about` (subreddit wrapper). All send Bearer auth and the configured per-app User-Agent.
+
+
+Token-based post listings: Instagram standalone v25 `GET /{ig-user-id}/media` and Threads `GET /{threads-user-id}/threads` accept selected fields and shared Meta cursor/URL positions. Typed items retain raw JSON. Threads cursor-only pages synthesize a next URL until an empty page; Instagram follows returned next URLs.

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added token-based user post pages with caller-selected fields, checked Meta page URLs/cursors, typed common fields and complete raw JSON per item. Existing readers are unchanged.
+
 ## 0.1.1 - Unreleased
 
 - Analytics migration: legacy `to_canonical_account_insights_series` maps account views to `Views`; typed `Insights.to_canonical_series ~scope:Account` maps them to `Profile_visits`. Consumers migrating to typed readers must update their canonical-series selection.

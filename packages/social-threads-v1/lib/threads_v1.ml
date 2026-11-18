@@ -42,6 +42,9 @@ let token_endpoint = graph_api_host ^ "/oauth/access_token"
     requests are [Make.get_user_insights] and [Make.get_media_insights]. *)
 module Insights = Threads_v1_insights
 
+(** Typed post listings retaining the full JSON item. *)
+module Posts = Threads_v1_posts
+
 (** Typed location search results ({!Threads_v1_locations}); the request is
     [Make.search_locations]. *)
 module Locations = Threads_v1_locations
@@ -1942,7 +1945,7 @@ module Make (Config : CONFIG) = struct
 
   (* Threads documents cursors-only pages. Supply a followable URL so the
      shared Graph paging helpers work without changing Facebook's rules. *)
-  let reply_page_with_cursor ~url (page : thread_post Social_meta_graph_paging.page) =
+  let reply_page_with_cursor ~url (page : 'a Social_meta_graph_paging.page) =
     match page.data with
     | [] -> { page with next_url = None; paging = None }
     | _ :: _ ->
@@ -1980,6 +1983,39 @@ module Make (Config : CONFIG) = struct
                       ~status_code:response.status
                       ~headers:response.headers
                       ~response_body:response.body)))
+          (fun err -> on_result (Error (network_error err)))
+
+  (** Token-based [GET /{threads-user-id}/threads]. [fields] must include [id].
+      See {!Posts} for the documented response and paging contract. *)
+  let get_user_posts_page ~threads_user_id ~access_token ~fields
+      ?(position = Social_meta_graph_paging.First) ?(limit = 20) on_result =
+    match
+      reply_edge_url ~edge:"threads" ~fields ~extra_params:[] ~access_token
+        ~media_id:(Uri.pct_encode (String.trim threads_user_id))
+        ~position ~limit ()
+    with
+    | Error err -> on_result (Error err)
+    | Ok url ->
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              let item json =
+                match Posts.of_json json with
+                | Ok post -> post
+                | Error message -> failwith message
+              in
+              match Social_meta_graph_paging.of_body ~item response.body with
+              | Ok page -> on_result (Ok (reply_page_with_cursor ~url page))
+              | Error message ->
+                  on_result
+                    (Error
+                       (Error_types.Internal_error
+                          ("Failed to parse threads response: " ^ message)))
+            else
+              on_result
+                (Error
+                   (parse_api_error ~status_code:response.status
+                      ~headers:response.headers ~response_body:response.body)))
           (fun err -> on_result (Error (network_error err)))
 
   let pending_replies_extra_params = function

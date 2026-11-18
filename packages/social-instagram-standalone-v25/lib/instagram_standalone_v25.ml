@@ -35,6 +35,9 @@ let api_version = "v25.0"
     {!Instagram_standalone_v25_insights}. *)
 module Insights = Instagram_standalone_v25_insights
 
+(** Typed post listings retaining the full JSON item. *)
+module Posts = Instagram_standalone_v25_posts
+
 (** Unversioned host of the Instagram API with Instagram Login. *)
 let graph_api_host = "https://graph.instagram.com"
 
@@ -2301,13 +2304,14 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
 
   (* GET an absolute URL: the token goes in the Authorization header, the
      app secret proof (if configured) into the query. *)
-  let get_comment_json ~uri ~access_token on_result =
+  let get_comment_json ?(required_permissions = ["instagram_business_manage_comments"])
+      ~uri ~access_token on_result =
     let uri = Uri.add_query_params uri (with_proof ~access_token []) in
     Config.Http.get ~headers:(bearer access_token) (Uri.to_string uri)
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then on_result (Ok response)
-        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_comments"] response)))
+        else on_result (Error (api_error_of_response ~required_permissions response)))
       (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
 
   let post_comment_form ~path ~access_token ~params on_result =
@@ -2384,6 +2388,30 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
               match Social_meta_graph_paging.of_body ~item:Comments.parse_comment response.body with
               | Ok page -> on_result (Ok page)
               | Error msg -> on_result (Error (parse_failure edge msg))))
+
+  (** Token-based [GET /{ig-user-id}/media]. [fields] must include [id]. See
+      {!Posts} for the documented response and paging contract. *)
+  let get_user_media_page ~ig_user_id ~access_token ~fields
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
+    match
+      comment_edge_uri ~edge:"media" ~id_name:"ig_user_id" ~id:ig_user_id ~fields
+        ~limit position
+    with
+    | Error err -> on_result (Error err)
+    | Ok uri ->
+        get_comment_json ~required_permissions:[ "instagram_business_basic" ]
+          ~uri ~access_token (function
+          | Error err -> on_result (Error err)
+          | Ok response -> (
+              let item json =
+                match Posts.of_json json with
+                | Ok post -> post
+                | Error message -> failwith message
+              in
+              match Social_meta_graph_paging.of_body ~item response.body with
+              | Ok page -> on_result (Ok page)
+              | Error message -> on_result (Error (parse_failure "media" message))
+              ))
 
   (** One page of top-level comments on a media object
       ([GET /{media_id}/comments]), newest first, each with the first page of
