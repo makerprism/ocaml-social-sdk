@@ -242,3 +242,6 @@ Known subtle bug traps:
 Instagram Story insights return unavailable data for the documented code-10
 "not enough viewers" response. Insights and comment permission diagnostics use
 Instagram Business Login scopes.
+
+Bluesky createRecord/deleteRecord requests always identify the authenticated
+repository by its session DID, including if credential persistence fails.
