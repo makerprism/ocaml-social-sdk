@@ -2,6 +2,8 @@
 
 ## 0.1.1 - Unreleased
 
+- Analytics migration: legacy `to_canonical_account_insights_series` maps account views to `Views`; typed `Insights.to_canonical_series ~scope:Account` maps them to `Profile_visits`. Consumers migrating to typed readers must update their canonical-series selection.
+
 - Migration (#66): public `reply_action` changed from `~endpoint ?extra_params` to typed `~edge ~params`. Use `~edge:Manage_pending_reply ~params:[("approve", "true")]` or the stable `approve_pending_reply`, `ignore_pending_reply`, `hide_reply`, and `unhide_reply` wrappers.
 
 - Reply, conversation, and pending-reply pages continue on `cursors.after` without `paging.next`. Nonempty cursor-only pages expose a reconstructed `next_url`; empty pages end traversal. Explicit next URLs remain supported.
