@@ -237,7 +237,7 @@ module OAuth = struct
     Social_meta_graph_error.to_error
       ~platform:Platform_types.Instagram
       ~status_code
-      ~required_permissions:["instagram_content_publish"]
+      ~required_permissions:["instagram_business_content_publish"]
       ~retry_after_seconds:300
       response_body
 
@@ -1019,8 +1019,16 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
   let parse_api_error ~status_code ~response_body =
     OAuth.parse_api_error ~status_code ~response_body
 
-  let api_error_of_response response =
-    parse_api_error ~status_code:response.status ~response_body:response.body
+  let api_error_of_response
+      ?(required_permissions = ["instagram_business_content_publish"]) response =
+    Social_meta_graph_error.to_error ~platform:Platform_types.Instagram
+      ~status_code:response.status ~required_permissions ~retry_after_seconds:300 response.body
+
+  let story_below_threshold media_product response =
+    match media_product, Social_meta_graph_error.of_body response.body with
+    | Insights.Story, Some { code = Some 10; message = Some message; _ } ->
+        String.equal message "(#10) Not enough viewers for the media to show insights"
+    | (Insights.Feed | Insights.Reels | Insights.Story), (Some _ | None) -> false
 
   let network_error_of_string err =
     OAuth.network_error_of_string err
@@ -1348,7 +1356,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
           on_result
             (parse_account_audience_insights_response ~account_id:id ~since ~until
                response.body)
-        else on_result (Error (api_error_of_response response)))
+        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_insights"] response)))
       (fun err -> on_result (Error (network_error_of_string err)))
 
   let get_account_audience_insights_canonical ~id ~access_token ~since ~until on_result =
@@ -1378,7 +1386,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
           on_result
             (parse_account_engagement_insights_response ~account_id:id ~since ~until
                response.body)
-        else on_result (Error (api_error_of_response response)))
+        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_insights"] response)))
       (fun err -> on_result (Error (network_error_of_string err)))
 
   let get_account_engagement_insights_canonical ~id ~access_token ~since ~until on_result =
@@ -1417,7 +1425,9 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then
           on_result (parse_media_insights_response ~post_id response.body)
-        else on_result (Error (api_error_of_response response)))
+        else if Option.fold ~none:false ~some:(fun product -> story_below_threshold product response) media_product then
+          on_result (parse_media_insights_response ~post_id "{\"data\":[]}")
+        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_insights"] response)))
       (fun err -> on_result (Error (network_error_of_string err)))
 
   let get_media_insights_canonical ?media_product ~post_id ~access_token on_result =
@@ -1458,18 +1468,19 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
       Requests for {!Insights}. Token in the query, as the other insights
       reads of this package. *)
 
-  let get_parsed ~what url parse on_result =
+  let get_parsed ?(is_empty_response = fun _ -> false)
+      ?(required_permissions = ["instagram_business_manage_insights"]) ~what url parse on_result =
     Config.Http.get url
       (fun response ->
         update_rate_limits response;
-        if response.status >= 200 && response.status < 300 then
-          match parse response.body with
+        if (response.status >= 200 && response.status < 300) || is_empty_response response then
+          match parse (if is_empty_response response then "{\"data\":[]}" else response.body) with
           | Stdlib.Ok value -> on_result (Stdlib.Ok value)
           | Stdlib.Error msg ->
               on_result
                 (Stdlib.Error
                    (Error_types.Internal_error (Printf.sprintf "Failed to parse %s: %s" what msg)))
-        else on_result (Stdlib.Error (api_error_of_response response)))
+        else on_result (Stdlib.Error (api_error_of_response ~required_permissions response)))
       (fun err -> on_result (Stdlib.Error (network_error_of_string err)))
 
   let insights_url ~id params =
@@ -1496,7 +1507,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
                           (Insights.media_product_to_string media_product)))
                    unsupported)))
     | [] ->
-        get_parsed ~what:"media insights"
+        get_parsed ~is_empty_response:(story_below_threshold media_product) ~what:"media insights"
           (insights_url ~id:post_id
              [ ("metric", [ String.concat "," (List.map Insights.media_metric_to_string metrics) ]);
                ("access_token", [ access_token ]) ])
@@ -1564,7 +1575,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
       [id] may be ["me"].
       {{:https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user}} *)
   let get_account_counts ~id ~access_token on_result =
-    get_parsed ~what:"account counts"
+    get_parsed ~required_permissions:["instagram_business_basic"] ~what:"account counts"
       (Printf.sprintf "%s/%s?%s" graph_api_base (Uri.pct_encode id)
          (Uri.encoded_of_query
             [ ("fields", [ String.concat "," Insights.account_count_fields ]);
@@ -2077,7 +2088,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
           with e ->
             on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse comment response: %s" (Printexc.to_string e))))
         else
-          on_result (Error (api_error_of_response response)))
+          on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_comments"] response)))
       (fun err -> on_result (Error (network_error_of_string err)))
 
   (** Post a comment using account credentials (auto-refreshes token)
@@ -2296,7 +2307,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then on_result (Ok response)
-        else on_result (Error (api_error_of_response response)))
+        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_comments"] response)))
       (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
 
   let post_comment_form ~path ~access_token ~params on_result =
@@ -2313,7 +2324,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then on_result (Ok response)
-        else on_result (Error (api_error_of_response response)))
+        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_comments"] response)))
       (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
 
   (* Instagram answers hide and delete with {"success": true|false}. *)
@@ -2458,7 +2469,7 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
             update_rate_limits response;
             if response.status >= 200 && response.status < 300 then
               on_result (expect_success ~what:"delete the comment" response)
-            else on_result (Error (api_error_of_response response)))
+            else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_comments"] response)))
           (fun err -> on_result (Error (network_error_of_string (redact_transport_error err)))))
 
   let with_account_token ~account_id on_result k =

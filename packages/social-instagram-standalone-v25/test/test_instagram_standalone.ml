@@ -2157,6 +2157,32 @@ let test_insights_skip_missing_values () =
   assert (Result.is_error (I.parse_media_insights {|{"error":{"message":"x"}}|}));
   print_endline "✓ Insights parsers skip values Meta left empty"
 
+let test_insights_error_context () =
+  let below = {|{"error":{"code":10,"message":"(#10) Not enough viewers for the media to show insights"}}|} in
+  List.iter (fun (product, body, empty) ->
+    Mock_config.reset ();
+    Mock_http.set_response { status = 400; headers = []; body };
+    Instagram.get_media_metrics ~post_id:"m" ~access_token:"t" ~media_product:product
+      (function
+       | Ok values -> assert (empty && values = [])
+       | Error err ->
+           assert (not empty);
+           match err with
+           | Error_types.Auth_error (Error_types.Insufficient_permissions { required; _ }) ->
+               assert (required = ["instagram_business_manage_insights"])
+           | err -> failwith (Error_types.error_to_string err)))
+    [ Insights.Story, below, true;
+      Insights.Feed, below, false;
+      Insights.Story, {|{"error":{"code":10,"message":"Permission denied"}}|}, false ];
+  Mock_config.reset ();
+  Mock_http.set_response { status = 403; headers = [];
+    body = {|{"error":{"code":200,"message":"Permission denied"}}|} };
+  Instagram.get_comments_page ~media_id:"m" ~access_token:"t" (function
+    | Error (Error_types.Auth_error (Error_types.Insufficient_permissions { required; _ })) ->
+        assert (required = ["instagram_business_manage_comments"])
+    | Error err -> failwith (Error_types.error_to_string err)
+    | Ok _ -> failwith "expected permission error")
+
 let () =
   print_endline "\n=== Instagram Standalone Provider Tests ===\n";
 
@@ -2166,6 +2192,7 @@ let () =
   test_standalone_authorize_url ();
   test_exchange_code_full_shapes ();
   test_get_me_profile ();
+  test_insights_error_context ();
   test_media_metrics_per_product ();
   test_media_insights_story_subset ();
   test_account_totals_total_value ();
