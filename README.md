@@ -260,3 +260,12 @@ commit. Use `ensure_account_credentials ~allow_refresh:true
 ~refresh_window_seconds:604800 ~account_id` in a proactive worker; it reloads and
 rechecks expiry under the same lock. Do not wrap the worker in a second lock.
 The existing `Make (Config)` remains compatible and does not provide coordination.
+
+### Coordinated Instagram refresh
+
+Use `Social_instagram_standalone_v25.Make_coordinated` with a
+`COORDINATED_CONFIG` to share an account lock across workers, readers and
+publishers. `with_refresh_lock` must hold the lock until persistence completes
+and release it before delivering success or failure. Credential loading and
+expiry checks run inside the lock. Existing `Make_nonblocking` and `Make`
+remain available for consumers managing coordination themselves.

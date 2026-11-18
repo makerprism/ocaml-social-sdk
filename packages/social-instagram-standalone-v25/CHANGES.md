@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `COORDINATED_CONFIG` and `Make_coordinated` to serialize account refreshes through persistence, reload credentials under the lock, and avoid duplicate refreshes from overlapping callers. Existing functors remain compatible.
+
 - Added token-based user post pages with caller-selected fields, checked Meta page URLs/cursors, typed common fields and complete raw JSON per item. Existing readers are unchanged.
 
 All notable changes to this project will be documented in this file.
