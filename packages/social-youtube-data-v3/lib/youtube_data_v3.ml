@@ -1176,18 +1176,29 @@ module Make (Config : CONFIG) = struct
     recording_location : recording_location option;
   }
 
+  (* YouTube caps the title at 100 characters and the description at 5000
+     bytes (https://developers.google.com/youtube/v3/docs/videos), so the
+     two limits are counted in different units. *)
+  let utf8_length s =
+    let n = ref 0 in
+    String.iter
+      (fun c ->
+         (* count UTF-8 leading bytes only: 0xxxxxxx and 11xxxxxx *)
+         if Char.code c land 0xC0 <> 0x80 then incr n)
+      s;
+    !n
+
   (** Endpoint-encoded requirements of [videos.insert]: [snippet.title] is
-      required, the title is capped at 100 bytes and the description at
-      5000 bytes
-      ({{:https://developers.google.com/youtube/v3/docs/videos#snippet}}).
-      Lengths are measured in bytes, like every other limit in this module. *)
+      required and capped at 100 characters (UTF-8 codepoints), and
+      [snippet.description] at 5000 bytes
+      ({{:https://developers.google.com/youtube/v3/docs/videos}}). *)
   let validate_video_metadata (metadata : video_metadata) :
       (unit, Error_types.validation_error list) result =
     let title_errors =
       if metadata.title = "" then [ Error_types.Text_empty ]
-      else if String.length metadata.title > max_title_length then
+      else if utf8_length metadata.title > max_title_length then
         [ Error_types.Text_too_long
-            { length = String.length metadata.title; max = max_title_length } ]
+            { length = utf8_length metadata.title; max = max_title_length } ]
       else []
     in
     let description_errors =
@@ -1386,7 +1397,7 @@ module Make (Config : CONFIG) = struct
       @param validate_media_before_upload When true, validates the video
              file size after download but before upload. Practical limit:
              2GB. Default: false *)
-  let upload_video ~account_id ~media_urls (metadata : video_metadata)
+  let upload_video ~account_id ~media_urls ~(metadata : video_metadata)
       ?(validate_media_before_upload = false) on_result =
     match (validate_video_metadata metadata, media_urls) with
     | Error errors, _ ->

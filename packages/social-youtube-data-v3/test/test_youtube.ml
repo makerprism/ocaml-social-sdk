@@ -1413,7 +1413,8 @@ let test_upload_video_sends_explicit_metadata () =
   YouTube.upload_video
     ~account_id:"test_account"
     ~media_urls:["https://example.com/v.mp4"]
-    { YouTube.title = "My explicit title";
+    ~metadata:{
+      YouTube.title = "My explicit title";
       description = "Exactly what the caller wrote";
       tags = ["news"];
       category_id = "25";
@@ -1454,7 +1455,8 @@ let test_upload_video_empty_tags_and_category_omitted () =
   YouTube.upload_video
     ~account_id:"test_account"
     ~media_urls:["https://example.com/v.mp4"]
-    { YouTube.title = "Plain video";
+    ~metadata:{
+      YouTube.title = "Plain video";
       description = "d";
       tags = [];
       category_id = "";
@@ -1483,7 +1485,8 @@ let test_upload_video_publish_at_forces_private () =
   YouTube.upload_video
     ~account_id:"test_account"
     ~media_urls:["https://example.com/v.mp4"]
-    { YouTube.title = "Scheduled";
+    ~metadata:{
+      YouTube.title = "Scheduled";
       description = "d";
       tags = [];
       category_id = "22";
@@ -1512,7 +1515,8 @@ let test_upload_video_recording_location () =
   YouTube.upload_video
     ~account_id:"test_account"
     ~media_urls:["https://example.com/v.mp4"]
-    { YouTube.title = "Located";
+    ~metadata:{
+      YouTube.title = "Located";
       description = "d";
       tags = [];
       category_id = "22";
@@ -1537,14 +1541,14 @@ let test_upload_video_recording_location () =
   print_endline "PASS upload_video recording_location adds recordingDetails"
 
 (** Test: endpoint-encoded validation runs on the payload actually sent:
-    the title is required and capped at 100 bytes, the description at 5000,
-    and a video URL is required. None of these reach HTTP. *)
+    the title is required and capped at 100 characters, the description at
+    5000 bytes, and a video URL is required. None of these reach HTTP. *)
 let test_upload_video_validation () =
   let base = YouTube.{ title = "t"; description = "d"; tags = []; category_id = "22";
                        privacy_status = Public; made_for_kids = false; publish_at = None;
                        notify_subscribers = true; recording_location = None } in
   let expect_validation ~label metadata ~media_urls error =
-    YouTube.upload_video ~account_id:"test_account" ~media_urls metadata
+    YouTube.upload_video ~account_id:"test_account" ~media_urls ~metadata
       (fun outcome ->
          match outcome with
          | Error_types.Failure (Error_types.Validation_error errors) ->
@@ -1561,8 +1565,14 @@ let test_upload_video_validation () =
   expect_validation ~label:"empty title"
     { base with YouTube.title = "" } ~media_urls:["https://e.com/v.mp4"]
     Error_types.Text_empty;
-  expect_validation ~label:"101-byte title"
+  expect_validation ~label:"101-character title"
     { base with YouTube.title = String.make 101 'x' } ~media_urls:["https://e.com/v.mp4"]
+    (Error_types.Text_too_long { length = 101; max = 100 });
+  (* The title limit counts characters, not bytes: 101 two-byte characters
+     are rejected for their count, not their 202 bytes. *)
+  expect_validation ~label:"101-character multibyte title"
+    { base with YouTube.title = String.concat "" (List.init 101 (fun _ -> "é")) }
+    ~media_urls:["https://e.com/v.mp4"]
     (Error_types.Text_too_long { length = 101; max = 100 });
   expect_validation ~label:"5001-byte description"
     { base with YouTube.description = String.make 5001 'x' }
@@ -1573,18 +1583,18 @@ let test_upload_video_validation () =
   print_endline "PASS upload_video validates title, description and media"
 
 (** Test: maximum-length and multibyte payloads pass verbatim. A title of
-    exactly 100 multibyte bytes is sent untouched, and so is a 5000-byte
-    description (unlike post_single, which appends [" #Shorts"] after
-    validating the shorter text). *)
+    exactly 100 multibyte characters (200 bytes, accepted by YouTube) is
+    sent untouched, and so is a 5000-byte description (unlike post_single,
+    which appends [" #Shorts"] after validating the shorter text). *)
 let test_upload_video_max_length_and_multibyte () =
   setup_explicit_upload ();
-  (* 50 two-byte characters = exactly 100 bytes *)
-  let accented_title = String.concat "" (List.init 50 (fun _ -> "é")) in
-  assert (String.length accented_title = 100);
+  let accented_title = String.concat "" (List.init 100 (fun _ -> "é")) in
+  assert (String.length accented_title = 200);
   YouTube.upload_video
     ~account_id:"test_account"
     ~media_urls:["https://example.com/v.mp4"]
-    { YouTube.title = accented_title;
+    ~metadata:{
+      YouTube.title = accented_title;
       description = String.make 5000 'd';
       tags = [];
       category_id = "";
@@ -1604,7 +1614,7 @@ let test_upload_video_max_length_and_multibyte () =
   let snippet = Yojson.Basic.from_string body |> member "snippet" in
   assert (snippet |> member "title" |> to_string = accented_title);
   assert (String.length (snippet |> member "description" |> to_string) = 5000);
-  print_endline "PASS upload_video keeps 100-byte multibyte titles and 5000-byte descriptions verbatim"
+  print_endline "PASS upload_video keeps 100-character multibyte titles and 5000-byte descriptions verbatim"
 
 (** Test: the deprecated post_single keeps deriving the Shorts payload.
     This pins the compatibility surface until the derivation is removed. *)
