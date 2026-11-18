@@ -20,6 +20,13 @@ let is_blank value = String.trim value = ""
 
 (** Load, decide, refresh, persist, and record account health for one account.
 
+    [with_refresh_lock] wraps the asynchronous operation with completion
+    callbacks. Its implementation must hold the account lock until persistence
+    completes, release it on success or failure, and deliver success only after
+    durable commit. Unlike the legacy [with_account_lock] entry hook, it can
+    observe completion without ambient runtime state. [force_refresh] bypasses
+    expiry decisions for explicit refresh requests; reload still happens.
+
     [map_refresh_error_to_health] decides what a failed refresh says about the
     stored credentials. It returns [None] to mean "write nothing": the refresh
     failed for a reason that is not evidence about the credentials, so the last
@@ -38,6 +45,8 @@ let ensure_valid_access_token
     ?(map_load_error = fun err -> Error_types.Network_error (Error_types.Connection_failed err))
     ?(map_persist_error = fun err -> Error_types.Network_error (Error_types.Connection_failed err))
     ?(map_health_error = fun err -> Error_types.Network_error (Error_types.Connection_failed err))
+    ?(with_refresh_lock = fun ~account_id:_ run on_success on_error -> run on_success on_error)
+    ?(force_refresh = false)
     ?reload_credentials
     ?(with_account_lock = fun ~account_id:_ run -> run ())
     ?(max_refresh_attempts = 1)
@@ -70,6 +79,7 @@ let ensure_valid_access_token
     ~update_health
     on_success
     on_error =
+  with_refresh_lock ~account_id (fun on_success on_error ->
   let fail_health status error_message mapped_error =
     update_health ~account_id ~status ~error_message:(Some error_message)
       (fun () -> on_error mapped_error)
@@ -106,8 +116,12 @@ let ensure_valid_access_token
     in
     loop 1 current_credentials
   in
+  let decide credentials =
+    if force_refresh then Refresh_types.Refresh_required
+    else Refresh_decision.decide ~policy credentials
+  in
   let run_with_loaded_credentials credentials =
-    match Refresh_decision.decide ~policy credentials with
+    match decide credentials with
     | Refresh_types.Skip ->
         update_health ~account_id ~status:Health_status.(to_string Healthy) ~error_message:None
           (fun () -> on_success credentials)
@@ -118,7 +132,7 @@ let ensure_valid_access_token
          | Some reload ->
              reload ~account_id
                (fun latest_credentials ->
-                  match Refresh_decision.decide ~policy latest_credentials with
+                  match decide latest_credentials with
                   | Refresh_types.Skip ->
                       update_health ~account_id ~status:Health_status.(to_string Healthy) ~error_message:None
                         (fun () -> on_success latest_credentials)
@@ -131,4 +145,4 @@ let ensure_valid_access_token
     load_credentials ~account_id
       run_with_loaded_credentials
       (fun err ->
-         on_error (map_load_error err)))
+         on_error (map_load_error err)))) on_success on_error

@@ -910,7 +910,16 @@ module type CONFIG = sig
   include Social_core.SLEEP
 end
 
-module Make (Config : CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit
+end
+
+module Make_internal (Config : COORDINATED_CONFIG) = struct
   module OAuth_http = OAuth.Make (Config.Http)
 
   let max_text_length = 500
@@ -1049,7 +1058,9 @@ module Make (Config : CONFIG) = struct
          | Ok refresh_needed -> refresh_needed
          | Error _ -> true)
 
-  let with_valid_credentials ~account_id on_success on_error =
+  let ensure_account_credentials ?refresh_window_seconds ?(force_refresh = false)
+      ?(allow_refresh = auto_refresh_token_enabled ())
+      ~account_id on_success on_error =
     let map_credentials_error err =
       if classify_credentials_error err = `Missing then
         Error_types.Auth_error Error_types.Missing_credentials
@@ -1067,7 +1078,7 @@ module Make (Config : CONFIG) = struct
         on_load_error
     in
     let perform_refresh ~credentials on_refresh_success on_refresh_error =
-      if auto_refresh_token_enabled () then
+      if force_refresh || allow_refresh then
         OAuth_http.refresh_token_typed ~long_lived_token:credentials.Social_core.access_token
           on_refresh_success on_refresh_error
       else
@@ -1082,7 +1093,11 @@ module Make (Config : CONFIG) = struct
       Config.update_health_status ~account_id ~status ~error_message on_health_ok on_health_error
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
-      ~policy:{ Social_refresh.refresh_window_seconds = token_expiry_skew_seconds () }
+      ~with_refresh_lock:Config.with_refresh_lock
+      ~force_refresh
+      ~reload_credentials:load_credentials
+      ~policy:{ Social_refresh.refresh_window_seconds =
+        Option.value ~default:(token_expiry_skew_seconds ()) refresh_window_seconds }
       ~map_load_error:map_credentials_error
       ~account_id
       ~load_credentials
@@ -1091,6 +1106,9 @@ module Make (Config : CONFIG) = struct
       ~update_health
       on_success
       on_error
+
+  let with_valid_credentials ~account_id on_success on_error =
+    ensure_account_credentials ~account_id on_success on_error
 
   let validate_text_length text =
     let length = String.length (String.trim text) in
@@ -3053,4 +3071,19 @@ module Make (Config : CONFIG) = struct
             in
             get_user_id ~access_token:creds.access_token on_user_id)
           (fun err -> on_result (Error_types.Failure err))
+end
+
+
+module Make (Config : CONFIG) = Make_internal (struct
+  include Config
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end)
+
+module Make_coordinated (Config : COORDINATED_CONFIG) = struct
+  include Make_internal (Config)
+
+  let refresh_account_credentials ~account_id on_success on_error =
+    ensure_account_credentials ~force_refresh:true ~account_id on_success
+      (fun error -> on_error (Error_types.error_to_string error))
 end
