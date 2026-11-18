@@ -45,7 +45,7 @@ let tiktok_oauth_error_of_json json =
     - Uses "client_key" instead of "client_id" in API parameters
     - Access tokens expire after 24 hours (very short compared to others)
     - Refresh tokens are valid for 365 days
-    - No PKCE support
+    - Desktop PKCE with hex-encoded S256 challenges
     - Uses TikTok-specific scopes like "video.publish"
     
     Token lifetimes:
@@ -104,8 +104,8 @@ module OAuth = struct
   
   (** Platform metadata for TikTok OAuth *)
   module Metadata = struct
-    (** TikTok does NOT support PKCE *)
-    let supports_pkce = false
+    (** Desktop login requires PKCE with a hex-encoded S256 challenge. *)
+    let supports_pkce = true
     
     (** TikTok supports token refresh *)
     let supports_refresh = true
