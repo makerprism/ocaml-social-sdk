@@ -271,3 +271,5 @@ Reddit token-only reads: `GET /subreddits/mine/moderator` (limit/after Listing),
 
 
 Token-based post listings: Instagram standalone v25 `GET /{ig-user-id}/media` and Threads `GET /{threads-user-id}/threads` accept selected fields and shared Meta cursor/URL positions. Typed items retain raw JSON. Threads cursor-only pages synthesize a next URL until an empty page; Instagram follows returned next URLs.
+
+Threads enabled auto-refresh uses `OAuth.Make.refresh_token_typed` on the same `GET /refresh_access_token?grant_type=th_refresh_token&access_token=...` contract. `test_get_me_auto_refresh_preserves_failures` covers transport, HTTP 429 with Retry-After, 503, invalid-token and expired-token errors without a subsequent profile request. The legacy string-error refresh helper is unchanged.
