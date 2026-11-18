@@ -1783,7 +1783,7 @@ let test_coordinated_refresh () =
   let module Provider = Social_pinterest_v5.Make_coordinated (Config) in
   Mock_http.set_responses [{
     Social_core.status = 200; headers = [];
-    body = "{\"access_token\":\"new-access\",\"token_type\":\"bearer\",\"refresh_token\":\"rotated-refresh\",\"expires_in\":5184000}";
+    body = "{\"access_token\":\"new-access\",\"token_type\":\"bearer\",\"refresh_token\":\"rotated-refresh\",\"expires_in\":2592000}";
   }];
   let run () = Provider.ensure_valid_token ~account_id:"account"
     (fun token -> assert (token = "new-access"); incr completed)
