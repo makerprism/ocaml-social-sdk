@@ -42,7 +42,9 @@ let parse_location = function
           city = string_opt (member "city" json);
           state = string_opt (member "state" json);
           country = string_opt (member "country" json);
-          zip = string_opt (member "zip" json);
+          zip = (match member "zip" json with
+            | `Int zip -> Some (string_of_int zip)
+            | (`String _ | `Null | `Bool _ | `Float _ | `List _ | `Assoc _) as value -> string_opt value);
           latitude = float_opt (member "latitude" json);
           longitude = float_opt (member "longitude" json);
         }

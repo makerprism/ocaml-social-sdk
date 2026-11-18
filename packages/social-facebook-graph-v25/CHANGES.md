@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Place locations accept numeric postal codes as well as strings, matching Meta’s field reference while retaining string formatting when supplied.
+
 - Encode permalink lookup identifiers as one path segment, preventing slashes and query delimiters from selecting another Graph edge.
 
 - Video insight permission errors name `read_insights` and `pages_manage_engagement`. Page search no longer presents an unrelated OAuth scope as required; token/app-feature requirements remain documented.

@@ -2123,6 +2123,14 @@ let test_follower_change_vs_followers_count () =
 (* A metric or day Meta left without a value carries no figure. It is left
    out and the rest of the read still arrives (it used to fail as a whole). *)
 let test_insights_skip_missing_values () =
+  Mock_config.reset ();
+  Mock_http.set_response { status = 200; headers = [];
+    body = {|{"data":[{"name":"views","values":[{"value":2.5}]},{"name":"reach","values":[{"value":3.0}]}]}|} };
+  Instagram.get_media_metrics ~post_id:"m" ~access_token:"t" ~media_product:Insights.Feed
+    (function
+      | Ok values -> assert (values = [{ Insights.metric = Insights.Reach; value = 3 }])
+      | Error err -> failwith (Error_types.error_to_string err));
+
   let module I = Insights in
   (match
      I.parse_media_insights
