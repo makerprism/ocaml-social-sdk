@@ -1,5 +1,7 @@
 # Changelog
 
+- Add `COORDINATED_CONFIG` and `Make_coordinated` for account refresh locks held through persistence, with credential reload under the lock. Existing functors remain compatible.
+
 ## Unreleased
 
 - Added token-only moderated subreddit pages, flair templates and subreddit details (`get_moderated_subreddits_with_token`, `get_subreddit_flairs_with_token`, `get_subreddit_about_with_token`). Typed results preserve optional fields and raw JSON; requests use the configured per-app User-Agent. Existing account readers are unchanged.

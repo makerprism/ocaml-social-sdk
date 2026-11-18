@@ -536,7 +536,17 @@ end
 
 (** {1 Main Provider Functor} *)
 
-module Make (Config : CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   let api_base = "https://oauth.reddit.com"
   
   (** The library default, kept for compatibility. Requests send
@@ -878,6 +888,8 @@ module Make (Config : CONFIG) = struct
         (fun _ -> on_health_ok ())
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
+      ~with_refresh_lock:Config.with_refresh_lock
+      ~reload_credentials:load_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = OAuth.Metadata.refresh_buffer_seconds }
       ~map_load_error:(fun err -> Error_types.Auth_error (Error_types.Refresh_failed err))
       ~map_persist_error:(fun err -> Error_types.Auth_error (Error_types.Refresh_failed err))
@@ -2087,3 +2099,10 @@ module Make (Config : CONFIG) = struct
     | Ok () -> Ok ()
     | Error errs -> Error (String.concat "; " (List.map Error_types.validation_error_to_string errs))
 end
+
+module Make (Config : CONFIG) = Make_coordinated (struct
+  include Config
+
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end)
