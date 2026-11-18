@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Reject non-public WebFinger host inputs before HTTP using `Social_public_host.is_public_host`. HTTP adapters remain responsible for DNS and redirect validation.
+
+### Security
+
 - PKCE verifiers came from an unseeded `Stdlib.Random`, so every process
   produced the same verifier sequence. They now come from the OS CSPRNG via
   `Oauth_pkce` (still 128 characters, now base64url).

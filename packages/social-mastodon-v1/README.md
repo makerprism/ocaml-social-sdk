@@ -444,3 +444,7 @@ This is used by media processing polling to avoid hardcoded runtime assumptions.
 ## License
 
 MIT
+
+WebFinger validates host inputs with `Social_public_host.is_public_host`. The
+HTTP adapter must also reject private resolved addresses and unsafe redirects
+to prevent DNS rebinding. The helper performs no DNS or runtime-specific I/O.

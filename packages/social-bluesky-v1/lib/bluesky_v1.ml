@@ -717,27 +717,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     | _ -> None
 
   let is_safe_remote_media_url url =
-    try
-      let uri = Uri.of_string (String.trim url) in
-      match Uri.scheme uri, Uri.host uri with
-      | (Some ("http" | "https"), Some host) ->
-          let lower_host = String.lowercase_ascii host in
-          if lower_host = "localhost" || lower_host = "::1" || String.ends_with ~suffix:".local" lower_host then
-            false
-          else
-            (match parse_ipv4_host lower_host with
-             | Some (a, b, _, _) ->
-                 not (
-                   a = 10
-                   || a = 127
-                   || (a = 169 && b = 254)
-                   || (a = 172 && b >= 16 && b <= 31)
-                   || (a = 192 && b = 168)
-                 )
-             | None -> true)
-      | _ -> false
-    with _ -> false
-  
+    let uri = Uri.of_string (String.trim url) in
+    match Uri.scheme uri, Uri.host uri with
+    | Some ("http" | "https"), Some host ->
+        Uri.userinfo uri = None && Social_public_host.is_public_host host
+    | (Some _ | None), (Some _ | None) -> false
+
   let atproto_error_name = atproto_error_name
 
   (** {!parse_xrpc_error}, kept under its original name. *)

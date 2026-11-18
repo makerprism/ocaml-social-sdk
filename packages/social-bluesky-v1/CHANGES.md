@@ -169,6 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Security
+
+- Use the shared public-host filter for remote media and discovered PDS endpoints, blocking decimal/hex IPv4, shared/private IPv4 ranges, IPv6 ULA/link-local and transition addresses before sending credentials.
+
 ### Fixed
 
 - Use the authenticated session DID for all like, repost, follow, block, and delete record requests, including when persisting refreshed credentials fails.

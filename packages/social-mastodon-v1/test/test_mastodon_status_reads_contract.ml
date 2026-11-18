@@ -470,6 +470,18 @@ let test_lookup_account () =
 let gargron_jrd =
   {|{"subject":"acct:Gargron@mastodon.social","aliases":["https://mastodon.social/@Gargron","https://mastodon.social/users/Gargron"],"links":[{"rel":"http://webfinger.net/rel/profile-page","type":"text/html","href":"https://mastodon.social/@Gargron"},{"rel":"self","type":"application/activity+json","href":"https://mastodon.social/users/Gargron"},{"rel":"http://ostatus.org/schema/1.0/subscribe","template":"https://mastodon.social/authorize_interaction?uri={uri}"}]}|}
 
+let test_webfinger_rejects_private_hosts () =
+  List.iter (fun domain ->
+    Mock_http.reset [ ("/.well-known/webfinger", respond 200 gargron_jrd) ];
+    (match capture (Reads.webfinger ~username:"alice" ~domain) with
+     | Error (Error_types.Validation_error _) -> ()
+     | Error err -> failwith (Error_types.error_to_string err)
+     | Ok _ -> failwith "private host was fetched");
+    assert (!Mock_http.requests = []))
+    [ "169.254.169.254"; "2130706433"; "0x7f000001"; "127.1";
+      "0.0.0.0"; "100.64.0.1"; "[fc00::1]"; "[fe80::1]";
+      "[::ffff:127.0.0.1]"; "host.localhost"; "localhost." ]
+
 let test_webfinger () =
   Printf.printf "Test: webfinger request, actor and profile links, 404/410... ";
   Mock_http.reset
@@ -660,6 +672,7 @@ let () =
   test_account_statuses ();
   test_get_account_counts ();
   test_lookup_account ();
+  test_webfinger_rejects_private_hosts ();
   test_webfinger ();
   test_webfinger_pure ();
   test_html_to_plain_text ();
