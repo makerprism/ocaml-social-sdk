@@ -824,7 +824,17 @@ end
 
 (** Make functor to create Instagram Standalone provider with given configuration.
     Container polling waits through [Config.sleep] without blocking. *)
-module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include NONBLOCKING_CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   (* Alias of the top-level constant, kept for code that referenced it
      through the functor. *)
   let graph_api_base = graph_api_base
@@ -1083,6 +1093,8 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
         (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
+      ~with_refresh_lock:Config.with_refresh_lock
+      ~reload_credentials:Config.get_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = (7 * 86400) }
       ~map_persist_error:(fun err ->
         Error_types.Network_error
@@ -2863,6 +2875,13 @@ module Make_nonblocking (Config : NONBLOCKING_CONFIG) = struct
     else
       Ok ()
 end
+
+module Make_nonblocking (Config : NONBLOCKING_CONFIG) = Make_coordinated (struct
+  include Config
+
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end)
 
 (** {!Make_nonblocking} over a {!CONFIG} whose [sleep] blocks. Kept so
     existing implementers keep compiling; prefer {!Make_nonblocking}. *)
