@@ -2913,7 +2913,13 @@ let test_get_me_auto_refresh_preserves_failures () =
            failwith (Error_types.error_to_string actual ^ " != " ^ Error_types.error_to_string expected)
        | Error _ -> ()
        | Ok _ -> failwith "Expected refresh failure");
-      assert (List.length !Mock_http.requests = 1);
+      (match !Mock_http.requests with
+       | [(method_name, url, _, _)] ->
+           assert (String.equal method_name "GET");
+           assert (String.equal (Uri.path (Uri.of_string url)) "/refresh_access_token");
+           assert (query_param url "grant_type" = Some "th_refresh_token");
+           assert (query_param url "access_token" = Some credentials.access_token)
+       | [] | _ :: _ -> failwith "Expected exactly one refresh request");
       assert (!Mock_config.credentials_store = [("acct-1", credentials)]);
       if Error_types.is_retryable expected then
         assert (!Mock_config.health_status_updates = []))) cases
