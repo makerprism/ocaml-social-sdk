@@ -228,6 +228,18 @@ dune pkg lock
 dune build
 ```
 
+## Token-based Instagram and Threads post pages
+
+`Social_instagram_standalone_v25.Make_nonblocking(Config).get_user_media_page
+~ig_user_id ~access_token ~fields ?position ?limit callback` and
+`Social_threads_v1.Make(Config).get_user_posts_page ~threads_user_id
+~access_token ~fields ?position ?limit callback` return a provider-specific
+`Posts.post Social_meta_graph_paging.page` result. Include `id` in `fields`;
+use `post.raw` for additional fields and expansions. `position` accepts
+`First`, `After`, `Before`, or a checked `Page_url`. No stored account is
+required. Threads synthesizes next URLs for cursor-only pages until an
+empty page; Instagram retains Meta's returned next URL.
+
 ## License
 
 MIT

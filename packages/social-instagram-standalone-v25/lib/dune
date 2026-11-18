@@ -1,7 +1,7 @@
 (library
  (name social_instagram_standalone_v25)
  (public_name social-instagram-standalone-v25)
- (modules social_instagram_standalone_v25 instagram_standalone_v25_comments
+ (modules instagram_standalone_v25_posts social_instagram_standalone_v25 instagram_standalone_v25_comments
   instagram_standalone_v25_insights instagram_standalone_v25)
  (libraries
   social-core

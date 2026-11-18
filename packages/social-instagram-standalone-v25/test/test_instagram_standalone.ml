@@ -2284,3 +2284,58 @@ let () =
   test_comments_page_for_account ();
 
   print_endline "\n=== All standalone tests passed! ===\n"
+
+let () =
+  let read = Instagram.get_user_media_page ~ig_user_id:"user/name" ~access_token:"new+token" ~fields:"id,username,owner" in
+  let response body = { Social_core.status = 200; headers = []; body } in
+  let page_body = {|{"data":[{"id":"123","username":"example","owner":{"id":"456"}}],"paging":{"cursors":{"after":"cursor+1"}}}|} in
+  Mock_config.reset ();
+  Mock_http.reset ();
+  Mock_http.set_responses [ response page_body ];
+  read (function
+    | Error err -> failwith (Error_types.error_to_string err)
+    | Ok page ->
+        (match page.data with
+        | [ post ] ->
+            assert (post.id = "123");
+            assert (post.username = Some "example");
+            assert (Yojson.Basic.Util.member "owner" post.raw = `Assoc ["id", `String "456"])
+        | [] | _ :: _ -> failwith "expected one post");
+        assert (page.next_url = None));
+  (match !Mock_http.requests with
+  | [ ("GET", url, _, _) ] ->
+      assert (Uri.path (Uri.of_string url) = "/v25.0/user%2Fname/media");
+      assert (Uri.get_query_param (Uri.of_string url) "fields" = Some "id,username,owner")
+  | [] | _ :: _ -> failwith "expected one GET");
+  List.iter (fun position ->
+    Mock_http.reset ();
+    Mock_http.set_responses [ response {|{"data":[]}|} ];
+    read ~position (function
+      | Ok page -> assert (page.data = []); assert (page.next_url = None)
+      | Error err -> failwith (Error_types.error_to_string err));
+    match !Mock_http.requests with
+    | [ ("GET", url, headers, _) ] ->
+        assert (Uri.get_query_param (Uri.of_string url) "after" = Some "cursor+1");
+        assert (Uri.get_query_param (Uri.of_string url) "access_token" = None); assert (List.assoc_opt "Authorization" headers = Some "Bearer new+token")
+    | [] | _ :: _ -> failwith "expected follow-up GET")
+    [ Social_meta_graph_paging.After "cursor+1";
+      Social_meta_graph_paging.Page_url "https://graph.instagram.com/v25.0/user/media?fields=id&after=cursor%2B1&access_token=old&appsecret_proof=old" ];
+  List.iter (fun url ->
+    Mock_http.reset ();
+    read ~position:(Social_meta_graph_paging.Page_url url) (function
+      | Error (Error_types.Validation_error _) -> ()
+      | Error err -> failwith (Error_types.error_to_string err)
+      | Ok _ -> failwith "unsafe URL accepted");
+    assert (!Mock_http.requests = []))
+    [ "https://evil.example/user/media"; "https://graph.instagram.com/user/comments"; "http://graph.instagram.com/user/media" ];
+  Mock_http.reset ();
+  Mock_http.set_responses [ response {|{"data":[{"username":"missing-id"}]}|} ];
+  read (function | Error _ -> () | Ok _ -> failwith "malformed item accepted");
+  Mock_http.reset ();
+  Mock_http.set_responses [ { Social_core.status = 400; headers = [];
+    body = {|{"error":{"message":"bad token","type":"OAuthException","code":190}}|} } ];
+  read (function | Error _ -> () | Ok _ -> failwith "API error accepted");
+  Mock_http.reset ();
+  read (function | Error (Error_types.Network_error _) -> ()
+    | Error err -> failwith (Error_types.error_to_string err)
+    | Ok _ -> failwith "transport error accepted")
