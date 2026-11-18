@@ -388,6 +388,14 @@ let test_get_organization_access () =
     with ids LinkedIn could not resolve left out *)
 let test_get_organizations () =
   Mock_config.reset ();
+  Mock_http.set_response { status = 403; headers = []; body = {|{"message":"Denied","status":403}|} };
+  LinkedIn.get_organizations ~access_token:"tok" ~ids:["1"] (function
+    | Error (Error_types.Auth_error (Error_types.Insufficient_permissions {required; _})) ->
+        assert (required = ["rw_organization_admin"])
+    | Error err -> failwith (Error_types.error_to_string err)
+    | Ok _ -> failwith "expected permission error");
+
+  Mock_config.reset ();
   Mock_http.set_response {
     status = 200;
     body =

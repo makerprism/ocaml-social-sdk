@@ -3935,6 +3935,20 @@ let test_post_insights_by_type () =
         assert (Insights.by_type "post_clicks_by_type" metrics = Some [ ("link clicks", 4) ]));
   print_endline "✓ Post insights by-type values"
 
+let test_contextual_permission_errors () =
+  let check required = function
+    | Error (Error_types.Auth_error (Error_types.Insufficient_permissions permissions)) ->
+        assert (permissions.required = required)
+    | Error err -> failwith (Error_types.error_to_string err)
+    | Ok _ -> failwith "expected permission error"
+  in
+  Mock_config.reset ();
+  Mock_http.set_responses (List.init 2 (fun _ ->
+    { status = 403; headers = []; body = {|{"error":{"code":200,"message":"Denied"}}|} }));
+  Facebook.get_video_insights ~video_id:"v" ~access_token:"t"
+    (check ["read_insights"; "pages_manage_engagement"]);
+  Facebook.search_places ~access_token:"t" ~query:"cafe" (check [])
+
 let test_video_insights_reels () =
   Mock_config.reset ();
   Mock_http.set_response
@@ -4043,6 +4057,7 @@ let () =
   test_page_insights_v25_contract ();
   test_insights_default_metrics_not_deprecated ();
   test_post_insights_by_type ();
+  test_contextual_permission_errors ();
   test_video_insights_reels ();
   test_page_insights_for_account ();
   test_legacy_analytics_send_appsecret_proof ();

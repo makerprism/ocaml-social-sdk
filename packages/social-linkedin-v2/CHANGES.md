@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Organization lookup permission errors now name `rw_organization_admin`, matching the provider reference.
+
 - Video part uploads use only `Content-Type`, as documented for signed upload URLs. Member bearer tokens are no longer forwarded to upload hosts.
 
 ### Fixed

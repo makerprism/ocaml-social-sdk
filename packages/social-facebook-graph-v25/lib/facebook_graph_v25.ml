@@ -2756,7 +2756,7 @@ module Make (Config : CONFIG) = struct
 
   let insights_read_permissions = [ "read_insights"; "pages_read_engagement" ]
 
-  let get_insights_edge ~path ~access_token ~metrics ?period ?since ?until on_result =
+  let get_insights_edge ?(required_permissions = insights_read_permissions) ~path ~access_token ~metrics ?period ?since ?until on_result =
     let optional key = function Some value -> [ (key, [ value ]) ] | None -> [] in
     let query =
       Uri.encoded_of_query
@@ -2766,7 +2766,7 @@ module Make (Config : CONFIG) = struct
         @ [ ("access_token", [ access_token ]) ])
     in
     let url = Printf.sprintf "%s/%s?%s" graph_api_base path query in
-    get_url ~url ~access_token ~required_permissions:insights_read_permissions (function
+    get_url ~url ~access_token ~required_permissions (function
       | Error err -> on_result (Error err)
       | Ok response -> (
           match Insights.parse response.body with
@@ -2817,7 +2817,7 @@ module Make (Config : CONFIG) = struct
       {{:https://developers.facebook.com/docs/graph-api/reference/video/video_insights}} *)
   let get_video_insights ~video_id ~access_token ?(metrics = Insights.reels_metrics)
       ?(period = Insights.Lifetime) on_result =
-    get_insights_edge
+    get_insights_edge ~required_permissions:[ "read_insights"; "pages_manage_engagement" ]
       ~path:(Uri.pct_encode video_id ^ "/video_insights")
       ~access_token ~metrics ~period on_result
 
@@ -3230,7 +3230,7 @@ module Make (Config : CONFIG) = struct
         Printf.sprintf "%s/pages/search?%s" graph_api_base
           (Uri.encoded_of_query [ ("q", [ query ]); ("fields", [ Places.fields ]) ])
       in
-      get_url ~url ~access_token ~required_permissions:[ "pages_read_engagement" ]
+      get_url ~url ~access_token ~required_permissions:[]
         (function
           | Error err -> on_result (Error err)
           | Ok response -> (
