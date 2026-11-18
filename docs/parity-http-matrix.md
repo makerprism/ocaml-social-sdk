@@ -238,3 +238,7 @@ Known subtle bug traps:
 - XRPC array parameters repeat the key (`uris=a&uris=b`); `Uri.with_query` with a value list would send `uris=a,b`.
 - `getPostThread` defaults to `depth=6`, which cuts long conversations off; a thread node at the cut has no `replies` even when `replyCount` is positive.
 - A deleted thread root is HTTP 400 `NotFound` (`Resource_not_found`), not 404.
+
+Instagram Story insights return unavailable data for the documented code-10
+"not enough viewers" response. Insights and comment permission diagnostics use
+Instagram Business Login scopes.

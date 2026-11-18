@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Treat the documented Story code-10 "not enough viewers" insights response as unavailable data (empty metrics), while preserving actual permission errors. Report Instagram Business Login permissions for publishing, insights, profile counts, and comments.
+
+### Fixed
+
 - **The `Insights` parsers no longer fail a whole response over one empty value.** `parse_media_insights` skips an entry with neither `values[0].value` nor `total_value.value`, `parse_account_totals` skips an entry without an integer `total_value.value`, and `parse_follower_changes` skips a day without an integer `value`. Before, each of these made the read an `Internal_error`, so one metric or day without a figure cost the caller all the others. `Error` remains for a body that is not JSON or has no `data` array.
 
 ### Added
