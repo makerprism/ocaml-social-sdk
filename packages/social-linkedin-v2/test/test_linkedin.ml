@@ -5416,6 +5416,23 @@ let part_url n = Printf.sprintf "https://www.linkedin.com/dms-uploads/C5505AQH-o
 (** A member video given as a presigned S3 URL, no declared kind: the
     query string must not hide the [.mp4] suffix, and the single part goes
     through initialize / PUT / finalize before the post. *)
+let test_video_upload_does_not_forward_bearer () =
+  List.iter (fun upload_url ->
+    Mock_config.reset ();
+    Mock_http.set_responses [ part_upload_response "part" ];
+    let session : video_upload_session = {
+      video_urn = "urn:li:video:v"; upload_token = "";
+      parts = [ { upload_url; first_byte = 0; last_byte = 0 } ];
+    } in
+    LinkedIn.upload_video_parts ~access_token:"member-secret" ~session ~media_data:"x"
+      (fun parts -> assert (parts = ["part"])) failwith;
+    match !Mock_http.requests with
+    | [ ("PUT", _, headers, _) ] ->
+        assert (find_header headers "Authorization" = None);
+        assert (find_header headers "Content-Type" = Some "application/octet-stream")
+    | [] | _ :: _ -> failwith "expected one upload")
+    [ "https://uploads.example.org/part"; part_url 0 ]
+
 let test_post_with_video_single_part () =
   Mock_config.reset ();
   set_valid_linkedin_credentials ();
@@ -6624,6 +6641,7 @@ let () =
   test_comments_count_cap ();
   
   print_endline "\n--- Video Upload Tests ---";
+  test_video_upload_does_not_forward_bearer ();
   test_post_with_video_single_part ();
   test_post_with_video_multi_part_organization ();
   test_video_waits_until_available ();

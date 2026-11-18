@@ -254,3 +254,6 @@ Facebook Page post analytics expansion excludes deprecated
 
 Threads replies, conversation, and pending replies accept cursor-only paging:
 nonempty pages with `cursors.after` expose a followable `next_url`; empty pages stop.
+
+LinkedIn video part PUT requests send only `Content-Type: application/octet-stream`,
+without forwarding the member bearer token to signed upload URLs.

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Video part uploads use only `Content-Type`, as documented for signed upload URLs. Member bearer tokens are no longer forwarded to upload hosts.
+
+### Fixed
+
 - Video upload follows the Videos API. `initializeUpload` now declares
   `fileSizeBytes`. Each part in `value.uploadInstructions` is PUT with its own
   `firstByte..lastByte` slice, so multi-part uploads over 4 MiB work. The
