@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enabled auto-refresh now preserves transport, rate-limit, server and Graph authentication failures instead of replacing every failure with `Token_expired`. Malformed successful refresh responses are parse errors, not credential-expiry evidence. Added `OAuth.Make.refresh_token_typed`; the legacy string-error refresh API and default-disabled auto-refresh setting are unchanged.
+
 - Added token-based user post pages with caller-selected fields, checked Meta page URLs/cursors, typed common fields and complete raw JSON per item. Existing readers are unchanged.
 
 ## 0.1.1 - Unreleased

@@ -507,6 +507,36 @@ module OAuth = struct
                   response_body))
         on_error
 
+    (** Typed refresh failures for callers deciding whether to retry or reconnect.
+        The legacy [refresh_token] keeps its string-error contract.
+        {{:https://developers.facebook.com/docs/threads/get-started/long-lived-tokens/}Token refresh}
+        uses [GET /refresh_access_token] with [th_refresh_token]. *)
+    let refresh_token_typed ~long_lived_token on_success on_error =
+      let query =
+        Uri.encoded_of_query
+          [ ("grant_type", ["th_refresh_token"]);
+            ("access_token", [long_lived_token]) ]
+      in
+      let url = Printf.sprintf "%s?%s" threads_token_refresh_endpoint query in
+      Http.get url
+        (fun response ->
+          if response.status >= 200 && response.status < 300 then
+            let parsed =
+              try parse_credentials_from_json (Yojson.Basic.from_string response.body)
+              with Yojson.Json_error _ -> Error "Invalid JSON"
+            in
+            match parsed with
+            | Ok credentials -> on_success credentials
+            | Error message ->
+                on_error (Error_types.Internal_error
+                  ("Failed to parse refresh response: " ^ sanitize_text_if_sensitive message))
+          else
+            on_error (parse_api_error ~status_code:response.status
+              ~headers:response.headers ~response_body:response.body))
+        (fun message ->
+          on_error (Social_meta_graph_error.transport_error
+            (sanitize_text_if_sensitive message)))
+
     (** The profile of the token's user, [GET /me?fields=...]
         ({{:https://developers.facebook.com/docs/threads/threads-profiles}}),
         token-based so it works in an OAuth callback before an account is
@@ -1038,14 +1068,8 @@ module Make (Config : CONFIG) = struct
     in
     let perform_refresh ~credentials on_refresh_success on_refresh_error =
       if auto_refresh_token_enabled () then
-        OAuth_http.refresh_token ~long_lived_token:credentials.Social_core.access_token
-          (fun refreshed_creds ->
-             let refreshed_token = String.trim refreshed_creds.access_token in
-             if refreshed_token = "" then
-               on_refresh_error (Error_types.Auth_error Error_types.Token_expired)
-             else
-               on_refresh_success { refreshed_creds with access_token = refreshed_token })
-          (fun _ -> on_refresh_error (Error_types.Auth_error Error_types.Token_expired))
+        OAuth_http.refresh_token_typed ~long_lived_token:credentials.Social_core.access_token
+          on_refresh_success on_refresh_error
       else
         on_refresh_error (Error_types.Auth_error Error_types.Token_expired)
     in

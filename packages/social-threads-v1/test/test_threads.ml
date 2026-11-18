@@ -2878,39 +2878,51 @@ let test_get_me_auto_refresh_empty_token_from_refresh_fails () =
     ];
   Threads.get_me ~account_id:"acct-1"
     (function
-      | Error (Error_types.Auth_error Error_types.Token_expired) ->
+      | Error (Error_types.Internal_error _) ->
           print_endline "ok: auto refresh empty token fails"
-      | _ -> failwith "expected token_expired when refresh returns empty token")
+      | _ -> failwith "expected parse failure when refresh returns empty token")
 
-let test_get_me_auto_refresh_enabled_refresh_failure_returns_expired () =
-  Mock_config.reset ();
-  Mock_config.env_vars := [ ("THREADS_AUTO_REFRESH_TOKEN", "true") ];
-  Mock_config.credentials_store :=
-    [
-      ( "acct-1",
-        {
-          access_token = "expired-token";
-          refresh_token = None;
-          expires_at = Some (rfc3339_after_seconds 10);
-          auth_type = Bearer;
-          scope = None;
-        } );
-    ];
-  Mock_http.set_responses
-    [
-      {
-        status = 500;
-        headers = [];
-        body = "{\"error\":{\"message\":\"refresh fail\",\"code\":1}}";
-      };
-    ];
-  Threads.get_me ~account_id:"acct-1"
-    (function
-       | Error (Error_types.Auth_error Error_types.Token_expired) ->
-           let requests = List.rev !Mock_http.requests in
-           assert (List.length requests = 1);
-           print_endline "ok: auto refresh fail"
-       | _ -> failwith "expected token_expired when auto refresh fails")
+let test_get_me_auto_refresh_preserves_failures () =
+  let cases =
+    [ (None, Error_types.Network_error (Error_types.Connection_failed "offline"));
+      (Some (429, "{\"error\":{\"message\":\"Too many requests\",\"code\":4}}"),
+       Error_types.Rate_limited { retry_after_seconds = Some 42; limit = None; remaining = Some 0; reset_at = None });
+      (Some (503, "{\"error\":{\"message\":\"Unavailable\",\"code\":2}}"),
+       Social_threads_v1.parse_api_error ~status_code:503 ~headers:[]
+         ~response_body:"{\"error\":{\"message\":\"Unavailable\",\"code\":2}}");
+      (Some (400, "{\"error\":{\"message\":\"Invalid token\",\"code\":190}}"),
+       Error_types.Auth_error Error_types.Token_invalid);
+      (Some (400, "{\"error\":{\"message\":\"Expired token\",\"code\":190,\"error_subcode\":463}}"),
+       Error_types.Auth_error Error_types.Token_expired) ]
+  in
+  List.iter (fun (response, expected) ->
+    Mock_config.reset ();
+    Mock_config.env_vars := [ ("THREADS_AUTO_REFRESH_TOKEN", "true") ];
+    let credentials =
+      { access_token = "expired-token"; refresh_token = None;
+        expires_at = Some (rfc3339_after_seconds 10); auth_type = Bearer; scope = None }
+    in
+    Mock_config.credentials_store := [ ("acct-1", credentials) ];
+    (match response with
+     | None -> Mock_http.set_errors ["offline"]
+     | Some (status, body) ->
+         Mock_http.set_responses [{ status; headers = [("Retry-After", "42")]; body }]);
+    Threads.get_me ~account_id:"acct-1" (fun result ->
+      (match result with
+       | Error actual when actual <> expected ->
+           failwith (Error_types.error_to_string actual ^ " != " ^ Error_types.error_to_string expected)
+       | Error _ -> ()
+       | Ok _ -> failwith "Expected refresh failure");
+      (match !Mock_http.requests with
+       | [(method_name, url, _, _)] ->
+           assert (String.equal method_name "GET");
+           assert (String.equal (Uri.path (Uri.of_string url)) "/refresh_access_token");
+           assert (query_param url "grant_type" = Some "th_refresh_token");
+           assert (query_param url "access_token" = Some credentials.access_token)
+       | [] | _ :: _ -> failwith "Expected exactly one refresh request");
+      assert (!Mock_config.credentials_store = [("acct-1", credentials)]);
+      if Error_types.is_retryable expected then
+        assert (!Mock_config.health_status_updates = []))) cases
 
 let test_get_me_auto_refresh_persist_failure_returns_error () =
   Mock_config.reset ();
@@ -5515,7 +5527,7 @@ let () =
   test_get_me_malformed_expiry_with_auto_refresh ();
   test_get_me_auto_refresh_enabled_refreshes_and_proceeds ();
   test_get_me_auto_refresh_empty_token_from_refresh_fails ();
-  test_get_me_auto_refresh_enabled_refresh_failure_returns_expired ();
+  test_get_me_auto_refresh_preserves_failures ();
   test_get_me_auto_refresh_persist_failure_returns_error ();
   test_get_me_auto_refresh_updates_health_status ();
   test_post_thread_multi_item_success ();
