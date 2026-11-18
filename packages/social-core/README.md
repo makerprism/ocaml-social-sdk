@@ -35,7 +35,7 @@ namespace of each consumer. **Modules in an unwrapped library must carry the
 package prefix (`Social_`)**, e.g. `Social_oauth_pkce`, never `Oauth_pkce`. A
 generic name clashes with an application module of the same name. The
 pre-prefix names `Secure_random`, `Oauth_pkce`, `Meta_graph_error`,
-`Provider_error_detail` and `Meta_graph_paging` remain as deprecated aliases.
+`Provider_error_detail` and `Meta_graph_paging` have been removed; use the corresponding `Social_`-prefixed modules.
 
 ## Usage
 
