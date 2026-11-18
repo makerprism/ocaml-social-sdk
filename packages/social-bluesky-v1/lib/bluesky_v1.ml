@@ -1909,17 +1909,14 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   
   (** Delete a post from Bluesky *)
   let delete_post ~account_id ~post_uri on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let uri_parts = String.split_on_char '/' post_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.feed.post");
               ("rkey", `String rkey);
             ] in
@@ -1938,24 +1935,19 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error_types.Failure err))
   
   (** {1 Public API - Interactions} *)
   
   (** Like a post *)
   let like_post ~account_id ~post_uri ~post_cid on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.feed.like");
               ("record", `Assoc [
                 ("$type", `String "app.bsky.feed.like");
@@ -1989,23 +1981,18 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** Unlike a post *)
   let unlike_post ~account_id ~like_uri on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let uri_parts = String.split_on_char '/' like_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.feed.like");
               ("rkey", `String rkey);
             ] in
@@ -2024,22 +2011,17 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** Repost a post *)
   let repost ~account_id ~post_uri ~post_cid on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.feed.repost");
               ("record", `Assoc [
                 ("$type", `String "app.bsky.feed.repost");
@@ -2073,23 +2055,18 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** Unrepost *)
   let unrepost ~account_id ~repost_uri on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let uri_parts = String.split_on_char '/' repost_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.feed.repost");
               ("rkey", `String rkey);
             ] in
@@ -2108,24 +2085,19 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** {1 Public API - Social Graph} *)
   
   (** Follow a user *)
   let follow ~account_id ~did on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.graph.follow");
               ("record", `Assoc [
                 ("$type", `String "app.bsky.graph.follow");
@@ -2156,23 +2128,18 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** Unfollow a user *)
   let unfollow ~account_id ~follow_uri on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let uri_parts = String.split_on_char '/' follow_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.graph.follow");
               ("rkey", `String rkey);
             ] in
@@ -2191,8 +2158,6 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** {1 Public API - Read Operations} *)
@@ -2719,16 +2684,13 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   
   (** Block an actor *)
   let block_actor ~account_id ~actor on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let now = Ptime.to_rfc3339 ~frac_s:6 ~tz_offset_s:0 (Ptime_clock.now ()) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.createRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.graph.block");
               ("record", `Assoc [
                 ("$type", `String "app.bsky.graph.block");
@@ -2759,23 +2721,18 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** Unblock an actor *)
   let unblock_actor ~account_id ~block_uri on_result =
-    ensure_valid_token ~account_id
-      (fun access_jwt ->
-        Config.get_credentials ~account_id
-          (fun creds ->
-            let identifier = creds.access_token in
+    ensure_valid_token_with_did ~account_id
+      (fun (repo_did, access_jwt) ->
             let uri_parts = String.split_on_char '/' block_uri in
             let rkey = List.nth uri_parts (List.length uri_parts - 1) in
             
             let url = Printf.sprintf "%s/xrpc/com.atproto.repo.deleteRecord" (service_url ()) in
             let body = `Assoc [
-              ("repo", `String identifier);
+              ("repo", `String repo_did);
               ("collection", `String "app.bsky.graph.block");
               ("rkey", `String rkey);
             ] in
@@ -2794,8 +2751,6 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     ~status_code:response.status ~body:response.body)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
-          (fun err -> on_result (Error (Error_types.Network_error 
-            (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
   
   (** {1 Public API - Feed Operations} *)

@@ -169,6 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Fixed
+
+- Use the authenticated session DID for all like, repost, follow, block, and delete record requests, including when persisting refreshed credentials fails.
+
 ### Added
 
 - App password authentication with session management

@@ -677,7 +677,51 @@ let test_pds_endpoint_of_did_doc () =
   assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|{"id":"did:plc:x"}|}) = None);
   assert (Social_bluesky_v1.pds_endpoint_of_did_doc (doc {|"not an object"|}) = None)
 
+let test_record_operations_use_session_did () =
+  let module Config = struct
+    include Mock_config
+    let update_credentials ~account_id:_ ~credentials:_ _on_success on_error =
+      on_error "store unavailable"
+  end in
+  let module B = Social_bluesky_v1.Make (Config) in
+  let result = function
+    | Social_core.Ok _ -> ()
+    | Social_core.Error err -> failwith (Error_types.error_to_string err)
+  in
+  let uri = "at://did:plc:alice/app.bsky.feed.post/r" in
+  List.iter (fun operation ->
+    reset ();
+    stored_credentials := { jwt_credentials with access_token = "alice@example.org";
+      refresh_token = Some "app-password" };
+    B.invalidate_session ~account_id:"acct";
+    responder := (fun request ->
+      if String.ends_with ~suffix:"com.atproto.repo.deleteRecord" request.url then
+        json_response "{}"
+      else default_responder request);
+    operation ();
+    assert ((!stored_credentials).access_token = "alice@example.org");
+    let records = List.filter (fun request ->
+      String.ends_with ~suffix:"com.atproto.repo.createRecord" request.url ||
+      String.ends_with ~suffix:"com.atproto.repo.deleteRecord" request.url) (sent ()) in
+    match records with
+    | [ request ] ->
+        let body = Yojson.Basic.from_string (Option.get request.body) in
+        assert (Yojson.Basic.Util.member "repo" body = `String "did:plc:alice")
+    | [] | _ :: _ -> failwith "expected one record request")
+    [ (fun () -> B.delete_post ~account_id:"acct" ~post_uri:uri (function
+          | Error_types.Success () | Error_types.Partial_success { result = (); _ } -> ()
+          | Error_types.Failure err -> failwith (Error_types.error_to_string err)));
+      (fun () -> B.like_post ~account_id:"acct" ~post_uri:uri ~post_cid:"cid" result);
+      (fun () -> B.unlike_post ~account_id:"acct" ~like_uri:uri result);
+      (fun () -> B.repost ~account_id:"acct" ~post_uri:uri ~post_cid:"cid" result);
+      (fun () -> B.unrepost ~account_id:"acct" ~repost_uri:uri result);
+      (fun () -> B.follow ~account_id:"acct" ~did:"did:plc:other" result);
+      (fun () -> B.unfollow ~account_id:"acct" ~follow_uri:uri result);
+      (fun () -> B.block_actor ~account_id:"acct" ~actor:"did:plc:other" result);
+      (fun () -> B.unblock_actor ~account_id:"acct" ~block_uri:uri result) ]
+
 let () =
+  test_record_operations_use_session_did ();
   test_video_without_sleep_uses_upload_blob ();
   test_video_service_request_shapes ();
   test_video_already_exists_uses_earlier_blob ();
