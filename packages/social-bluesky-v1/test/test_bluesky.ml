@@ -4731,3 +4731,24 @@ let () =
   test_coordinated_sessions ~fail_write:false ();
   test_coordinated_sessions ~fail_write:true ();
   test_coordinated_sessions ~fail_commit:true ~fail_write:false ()
+
+let test_legacy_session_cache_does_not_reload_credentials () =
+  let loads = ref 0 in
+  let completed = ref 0 in
+  let module Config = struct
+    include Mock_config
+    let get_credentials ~account_id success failure =
+      incr loads;
+      assert (!loads = 1);
+      Mock_config.get_credentials ~account_id success failure
+  end in
+  let module Provider = Social_bluesky_v1.Make (Config) in
+  let run () = Provider.ensure_valid_token ~account_id:"legacy-cache"
+    (fun _ -> incr completed)
+    (fun error -> failwith (Error_types.error_to_string error))
+  in
+  run ();
+  run ();
+  assert (!loads = 1 && !completed = 2)
+
+let () = test_legacy_session_cache_does_not_reload_credentials ()

@@ -1497,6 +1497,9 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
   
   let ensure_valid_token ~account_id on_success on_error =
+    if not Persistence.required then
+      ensure_valid_token_unlocked ~account_id on_success on_error
+    else
     Config.with_refresh_lock ~account_id
       (fun on_locked_success on_locked_error ->
         ensure_valid_token_unlocked ~account_id
