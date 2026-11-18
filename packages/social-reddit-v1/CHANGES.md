@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added token-only moderated subreddit pages, flair templates and subreddit details (`get_moderated_subreddits_with_token`, `get_subreddit_flairs_with_token`, `get_subreddit_about_with_token`). Typed results preserve optional fields and raw JSON; requests use the configured per-app User-Agent. Existing account readers are unchanged.
+
 ## 0.1.0 (Unreleased)
 
 - Identity-read 403 permission errors now retain Reddit’s message for callers.
