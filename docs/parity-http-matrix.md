@@ -245,3 +245,6 @@ Instagram Business Login scopes.
 
 Bluesky createRecord/deleteRecord requests always identify the authenticated
 repository by its session DID, including if credential persistence fails.
+Google Business Profile discovery: `list_all_accounts` sends `pageSize=20`;
+`list_all_locations` sends `pageSize=100`. A pending `nextPageToken` at
+`max_pages` returns a validation error rather than a partial success.

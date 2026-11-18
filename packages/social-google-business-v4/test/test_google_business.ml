@@ -586,8 +586,8 @@ let test_token_based_discovery () =
         assert (second.OAuth.account_type = Some OAuth.Location_group && second.role = Some OAuth.Manager);
         (match List.rev !Mock_http.requests with
          | [ ("GET", u1, h, _); ("GET", u2, _, _) ] ->
-             assert (u1 = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts");
-             assert (u2 = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts?pageToken=p2");
+             assert (u1 = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts?pageSize=20");
+             assert (u2 = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts?pageSize=20&pageToken=p2");
              assert (List.assoc_opt "Authorization" h = Some "Bearer tok")
          | _ -> failwith "expected two GETs")
     | Stdlib.Ok _ -> failwith "expected two accounts"
@@ -608,6 +608,7 @@ let test_token_based_discovery () =
          | [ ("GET", url, _, _) ] ->
              let uri = Uri.of_string url in
              assert (Uri.path uri = "/v1/accounts/1/locations");
+             assert (Uri.get_query_param uri "pageSize" = Some "100");
              assert (Uri.get_query_param uri "readMask" = Some OAuth.default_location_read_mask)
          | _ -> failwith "expected one GET")
     | Stdlib.Ok _ -> failwith "expected one location"
@@ -621,8 +622,29 @@ let test_token_based_discovery () =
     | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited");
   print_endline "✓ token-based account and location discovery follows nextPageToken"
 
+let test_discovery_limit_is_an_error () =
+  List.iter (fun locations ->
+    Mock_http.reset ();
+    Mock_http.set_responses [ { status = 200; headers = [];
+      body = {|{"accounts":[{"name":"accounts/1"}],"locations":[{"name":"locations/1"}],"nextPageToken":"more"}|} } ];
+    let check = function
+      | Stdlib.Error (Error_types.Validation_error _) -> ()
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+      | Stdlib.Ok _ -> failwith "truncated discovery must not succeed"
+    in
+    if locations then Gbp_oauth.list_all_locations ~access_token:"tok"
+      ~account_name:"accounts/1" ~max_pages:1 check
+    else Gbp_oauth.list_all_accounts ~access_token:"tok" ~max_pages:1 check;
+    assert (List.length !Mock_http.requests = 1)) [ false; true ];
+  Mock_http.reset ();
+  Mock_http.set_responses [ { status = 200; headers = []; body = {|{"accounts":[]}|} } ];
+  Gbp_oauth.list_all_accounts ~access_token:"tok" ~max_pages:1 (function
+    | Stdlib.Ok [] -> ()
+    | Stdlib.Ok (_ :: _) | Stdlib.Error _ -> failwith "complete final page should succeed")
+
 let () =
   print_endline "\n=== Google Business Profile Provider Tests ===\n";
+  test_discovery_limit_is_an_error ();
   test_token_based_discovery ();
 
   print_endline "--- OAuth Tests ---";

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Discovery sends pageSize 20 for accounts and 100 for locations. `list_all_*` returns `Validation_error` when `max_pages` stops before the final page; use a larger cap or the paged API instead of receiving a silently partial list.
+
 ### Added
 
 - **Token-based, paginated discovery in `OAuth.Make(Http)`**, usable in an OAuth callback before an account is stored: `list_accounts_page` / `list_all_accounts` (`OAuth.business_account` with typed `account_type` and `role`) and `list_locations_page` / `list_all_locations ~account_name ?read_mask` (`OAuth.business_location`), following `nextPageToken` up to `?max_pages` (default 50). Errors through `Social_google_oauth.api_error`; retry/backoff on `Rate_limited` stays with the caller. The account-bound `list_accounts` / `list_locations` (raw JSON, first page only) are unchanged.

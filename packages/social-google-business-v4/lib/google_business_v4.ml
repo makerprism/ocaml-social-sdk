@@ -252,7 +252,8 @@ module OAuth = struct
       | [] -> ""
       | _ :: _ -> "?" ^ Uri.encoded_of_query params
 
-    (** Follows [nextPageToken] up to [max_pages] requests. *)
+    (** Follows [nextPageToken] up to [max_pages] requests. Returns a
+        [Validation_error] if the cap prevents a complete result. *)
     let collect_pages ~max_pages fetch on_result =
       let rec loop ~remaining ~page_token acc =
         fetch ?page_token (function
@@ -261,7 +262,10 @@ module OAuth = struct
               let acc = List.rev_append items acc in
               (match next_page_token with
                | Some token when remaining > 1 -> loop ~remaining:(remaining - 1) ~page_token:(Some token) acc
-               | Some _ | None -> on_result (Stdlib.Ok (List.rev acc))))
+               | Some _ -> on_result (Stdlib.Error (Error_types.Validation_error
+                   [ Error_types.Option_conflict
+                       "Discovery exceeded max_pages; increase max_pages or use the paged API" ]))
+               | None -> on_result (Stdlib.Ok (List.rev acc))))
       in
       loop ~remaining:(max 1 max_pages) ~page_token:None []
 
@@ -274,10 +278,11 @@ module OAuth = struct
         (parse_page ~key:"accounts" business_account_of_json)
         on_result
 
-    (** Every account, following [nextPageToken] (default 50 pages). *)
+    (** Every account, following [nextPageToken] (default 50 pages of 20).
+        Returns [Validation_error] if more pages remain at the cap. *)
     let list_all_accounts ~access_token ?(max_pages = 50) on_result =
       collect_pages ~max_pages
-        (fun ?page_token k -> list_accounts_page ~access_token ?page_token k)
+        (fun ?page_token k -> list_accounts_page ~access_token ~page_size:20 ?page_token k)
         on_result
 
     (** One page of an account's locations,
@@ -297,11 +302,12 @@ module OAuth = struct
         on_result
 
     (** Every location of an account, following [nextPageToken] (default
-        50 pages). Retry and backoff on [Rate_limited] are left to the
+        50 pages of 100). Returns [Validation_error] when more pages remain
+        at the cap. Retry and backoff on [Rate_limited] are left to the
         caller. *)
     let list_all_locations ~access_token ~account_name ?read_mask ?(max_pages = 50) on_result =
       collect_pages ~max_pages
-        (fun ?page_token k -> list_locations_page ~access_token ~account_name ?read_mask ?page_token k)
+        (fun ?page_token k -> list_locations_page ~access_token ~account_name ?read_mask ~page_size:100 ?page_token k)
         on_result
   end
 end
