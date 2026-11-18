@@ -45,13 +45,9 @@ let facebook_metrics =
     ("page_post_engagements", Engagements);
     ("page_daily_follows", Follows);
     ("page_video_views", Views);
-    (* v25 renamed [post_impressions_unique] to
-       [post_total_media_view_unique] to match the metric's true
-       meaning ("unique viewers of the post media"). The legacy name
-       still works on most posts but is scheduled for removal in v26
-       (~June 2026). Both map to Views — the new name is semantically
-       a view count, not an impression count. *)
-    ("post_total_media_view_unique", Views);
+    (* Unique viewers measure reach; total media views retain Views.
+       Keep the deprecated metric's legacy mapping for compatibility. *)
+    ("post_total_media_view_unique", Reach);
     ("post_impressions_unique", Views);
     (* Organic-only unique-reach metric. Used as the canonical Reach
        signal on per-post analytics; v25 keeps it stable. *)

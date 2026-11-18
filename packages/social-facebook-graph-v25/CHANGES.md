@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Analytics correction
+
+- Facebook `post_total_media_view_unique` now normalizes to `Reach`, preserving it alongside total `post_media_view` (`Views`) instead of losing one series. The deprecated legacy metric keeps its previous mapping.
+
 ### Fixed
 
 - Video insight permission errors name `read_insights` and `pages_manage_engagement`. Page search no longer presents an unrelated OAuth scope as required; token/app-feature requirements remain documented.

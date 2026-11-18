@@ -3889,6 +3889,7 @@ let test_post_insights_by_type () =
   Mock_http.set_response
     { status = 200; headers = [];
       body = {|{"data":[
+        {"name":"post_total_media_view_unique","period":"lifetime","values":[{"value":120}]},
         {"name":"post_media_view","period":"lifetime","values":[{"value":300}],
          "title":"Lifetime Media Views","id":"1_2/insights/post_media_view/lifetime"},
         {"name":"post_reactions_by_type_total","period":"lifetime",
@@ -3904,7 +3905,11 @@ let test_post_insights_by_type () =
          | _ -> failwith "post_media_view should be one lifetime count");
         let series = Insights.to_canonical_series ~scope:Analytics_types.Post metrics in
         assert (List.exists (fun (s : Analytics_types.series) ->
-          s.metric = Analytics_types.Reactions && s.points = [ Analytics_types.make_datapoint 7 ]) series));
+          s.metric = Analytics_types.Reactions && s.points = [ Analytics_types.make_datapoint 7 ]) series);
+        assert (List.exists (fun (s : Analytics_types.series) ->
+          s.metric = Analytics_types.Reach && s.points = [ Analytics_types.make_datapoint 120 ]) series);
+        assert (List.exists (fun (s : Analytics_types.series) ->
+          s.metric = Analytics_types.Views && s.points = [ Analytics_types.make_datapoint 300 ]) series));
   (match !Mock_http.requests with
    | [ ("GET", url, _, _) ] ->
        let uri = Uri.of_string url in
