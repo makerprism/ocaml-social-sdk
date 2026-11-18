@@ -268,10 +268,19 @@ let test_get_posts_batches () =
   assert (capture (Reads.get_posts ~service_url:"https://bsky.social" ~post_uris:[]) = Ok []);
   reset (fun request ->
       if List.length !requests = 1 then json_response {|{"posts":[]}|}
-      else (ignore request; json_response ~status:429 {|{"error":"RateLimitExceeded","message":"Rate Limit Exceeded"}|}));
+      else (ignore request; Ok { Social_core.status = 429;
+        headers = [("RateLimit-Reset", "120")];
+        body = {|{"error":"RateLimitExceeded","message":"Rate Limit Exceeded"}|} }));
   (match capture (Reads.get_posts ~service_url:"https://bsky.social" ~post_uris:uris) with
-  | Error (Error_types.Rate_limited _) -> ()
-  | _ -> failwith "second batch failure fails the read");
+  | Error (Error_types.Rate_limited {retry_after_seconds = Some _; _}) -> ()
+  | _ -> failwith "second batch failure must retain the reset delay");
+  List.iter (fun (now, expected) ->
+      match Social_bluesky_v1.parse_xrpc_response_error ~now
+        { Social_core.status = 429; headers = [("RateLimit-Reset", "120")]; body = "{}" } with
+      | Error_types.Rate_limited {retry_after_seconds = Some delay; _} ->
+          assert (delay = expected)
+      | error -> failwith (Error_types.error_to_string error))
+    [ 100., 20; 130., 1 ];
   Printf.printf "✓\n"
 
 (* {1 getProfile} *)

@@ -303,7 +303,10 @@ let video_job_of_json json =
              |> List.filter_map Fun.id |> String.concat ": "
            in
            Video_failed (if reason = "" then "no reason given" else reason)
-       | Some "JOB_STATE_COMPLETED" -> Video_completed_without_blob
+       | Some "JOB_STATE_COMPLETED" ->
+           (match job_id with
+            | Some _ -> Video_pending job_id
+            | None -> Video_completed_without_blob)
        | Some _ | None -> Video_pending job_id)
 
 (** Check if blob data looks like text/XML/HTML rather than binary media.
@@ -380,6 +383,18 @@ let parse_xrpc_error ~status_code ~body =
           ~message:(parse_error_message ())
           ~raw_response:body ()
 
+(** HTTP-aware XRPC error mapping; [now] allows deterministic reset delays. *)
+let parse_xrpc_response_error ?now (response : response) =
+  if response.status = 429 then
+    let reset = List.find_map (fun (name, value) ->
+      if String.equal (String.lowercase_ascii name) "ratelimit-reset" then
+        int_of_string_opt (String.trim value) else None) response.headers in
+    let retry_after_seconds = Option.map (fun reset ->
+      let now = match now with Some now -> now | None -> Unix.time () in
+      max 1 (reset - int_of_float now)) reset in
+    Error_types.make_rate_limited ?retry_after_seconds ()
+  else parse_xrpc_error ~status_code:response.status ~body:response.body
+
 (** A non-blocking wait in the consumer's runtime, e.g. with Lwt:
     [fun ~seconds k _ -> Lwt.async (fun () -> Lwt.map k (Lwt_unix.sleep seconds))]. *)
 type sleep = seconds:float -> (unit -> unit) -> (string -> unit) -> unit
@@ -450,7 +465,7 @@ module Reads = struct
             (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
 
     let xrpc_error (response : response) =
-      parse_xrpc_error ~status_code:response.status ~body:response.body
+      parse_xrpc_response_error response
 
     (** [app.bsky.feed.getPostThread]: the post, up to [parent_height]
         ancestors and [depth] levels of replies (server defaults 80 and 6,
@@ -697,6 +712,32 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   let invalidate_session ~account_id =
     Hashtbl.remove session_cache account_id
 
+  module Http : HTTP_CLIENT = struct
+    let observe headers on_success (response : response) =
+      (match atproto_error_name response.body with
+       | Some ("ExpiredToken" | "InvalidToken") ->
+           let authorization = List.find_map (fun (name, value) ->
+             if String.equal (String.lowercase_ascii name) "authorization" then Some value
+             else None) headers in
+           let accounts = Hashtbl.fold (fun account_id (_, token, _) accounts ->
+             if authorization = Some ("Bearer " ^ token) then account_id :: accounts
+             else accounts) session_cache [] in
+           List.iter (fun account_id -> invalidate_session ~account_id) accounts
+       | Some _ | None -> ());
+      on_success response
+
+    let get ?(headers = []) url on_success on_error =
+      Config.Http.get ~headers url (observe headers on_success) on_error
+    let post ?(headers = []) ?body url on_success on_error =
+      Config.Http.post ~headers ?body url (observe headers on_success) on_error
+    let put ?(headers = []) ?body url on_success on_error =
+      Config.Http.put ~headers ?body url (observe headers on_success) on_error
+    let delete ?(headers = []) url on_success on_error =
+      Config.Http.delete ~headers url (observe headers on_success) on_error
+    let post_multipart ?(headers = []) ~parts url on_success on_error =
+      Config.Http.post_multipart ~headers ~parts url (observe headers on_success) on_error
+  end
+
   (** {1 Internal Helpers} *)
 
   let parse_ipv4_host host =
@@ -750,7 +791,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   let resolve_handle ~handle on_result =
     let url = Printf.sprintf "%s/xrpc/com.atproto.identity.resolveHandle?handle=%s" 
       (service_url ()) (Uri.pct_encode handle) in
-    Config.Http.get url
+    Http.get url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
           try
@@ -761,7 +802,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
             on_result (Error (Error_types.Internal_error 
               (Printf.sprintf "Failed to parse DID: %s" (Printexc.to_string e))))
         else
-          on_result (Error (parse_api_error ~status_code:response.status ~body:response.body)))
+          on_result (Error (parse_xrpc_response_error response)))
       (fun err -> on_result (Error (Error_types.Network_error 
         (Error_types.Connection_failed err))))
   
@@ -870,7 +911,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     let body_str = Yojson.Basic.to_string body in
     let headers = [("Content-Type", "application/json")] in
     
-    Config.Http.post ~headers ~body:body_str url
+    Http.post ~headers ~body:body_str url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
           try
@@ -906,7 +947,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
   let resolve_pds_endpoint ~access_jwt on_done =
     let fallback () = on_done (service_url ()) in
     let url = Printf.sprintf "%s/xrpc/com.atproto.server.getSession" (service_url ()) in
-    Config.Http.get ~headers:[("Authorization", Printf.sprintf "Bearer %s" access_jwt)] url
+    Http.get ~headers:[("Authorization", Printf.sprintf "Bearer %s" access_jwt)] url
       (fun response ->
         let did_doc =
           if response.status >= 200 && response.status < 300 then
@@ -960,7 +1001,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     let headers = [
       ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
     ] in
-    Config.Http.get ~headers url
+    Http.get ~headers url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
           try
@@ -1014,7 +1055,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
         ("Content-Type", mime_type);
       ] in
-      Config.Http.post ~headers ~body:blob_data url
+      Http.post ~headers ~body:blob_data url
         (fun response ->
           if response.status >= 200 && response.status < 300 then
             match Option.map video_job_of_json (parse_json response.body) with
@@ -1036,7 +1077,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (fun () ->
             let status_url = Printf.sprintf "%s/xrpc/app.bsky.video.getJobStatus?jobId=%s"
               video_upload_host (Uri.pct_encode job_id) in
-            Config.Http.get status_url
+            Http.get status_url
               (fun response ->
                 let ok = response.status >= 200 && response.status < 300 in
                 match Option.map video_job_of_json (parse_json response.body) with
@@ -1080,7 +1121,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         ("Authorization", Printf.sprintf "Bearer %s" service_token);
         ("Content-Type", mime_type);
       ] in
-      Config.Http.post ~headers:video_headers ~body:blob_data video_url
+      Http.post ~headers:video_headers ~body:blob_data video_url
         (fun response ->
           let ok = response.status >= 200 && response.status < 300 in
           match Option.map video_job_of_json (parse_json response.body) with
@@ -1149,7 +1190,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
     let warnings = ref [] in
     
     (* Fetch the HTML content of the URL *)
-    Config.Http.get url
+    Http.get url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
           try
@@ -1218,7 +1259,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                       warnings := Error_types.Thumbnail_skipped "Unsafe thumbnail URL" :: !warnings;
                       create_card None
                     end else
-                    Config.Http.get full_img_url
+                    Http.get full_img_url
                       (fun img_response ->
                         if img_response.status >= 200 && img_response.status < 300 then
                           (* Get mime type from response headers *)
@@ -1330,7 +1371,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         [Auth.refresh_session]; an attacker who exfiltrated a refresh_jwt
         becomes useless after our next refresh. *)
   let ensure_valid_token ~account_id on_success on_error =
-    let module AuthMake = Auth.Make (Config.Http) in
+    let module AuthMake = Auth.Make (Http) in
     let cache_and_succeed ~did ~access_jwt =
       Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
       Config.update_health_status ~account_id
@@ -1494,7 +1535,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                       if not (is_safe_remote_media_url url) then
                         on_err (Error_types.Validation_error [Error_types.Invalid_url "Unsafe media URL"])
                       else
-                        Config.Http.get url
+                        Http.get url
                         (fun media_resp ->
                           if media_resp.status >= 200 && media_resp.status < 300 then
                             let raw_mime_type =
@@ -1705,7 +1746,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                           ("Content-Type", "application/json");
                         ] in
                         
-                        Config.Http.post ~headers ~body:body_str url
+                        Http.post ~headers ~body:body_str url
                           (fun response ->
                             if response.status >= 200 && response.status < 300 then
                               try
@@ -1726,8 +1767,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                                 on_result (Error_types.Failure (Error_types.Internal_error 
                                   (Printf.sprintf "Failed to parse response: %s" (Printexc.to_string e))))
                             else
-                              on_result (Error_types.Failure (parse_api_error 
-                                ~status_code:response.status ~body:response.body)))
+                              on_result (Error_types.Failure (parse_xrpc_response_error response)))
                           (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
                             (Error_types.Connection_failed err))))))
                       (fun _ -> on_result (Error_types.Failure (Error_types.Internal_error 
@@ -1911,13 +1951,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   on_result (Error_types.Success ())
                 else
-                  on_result (Error_types.Failure (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error_types.Failure (parse_xrpc_response_error response)))
               (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error_types.Failure err))
@@ -1949,7 +1988,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   try
@@ -1962,8 +2001,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     on_result (Error (Error_types.Internal_error 
                       (Printf.sprintf "Failed to parse like response: %s" (Printexc.to_string e))))
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -1987,13 +2025,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   on_result (Ok ())
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2023,7 +2060,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   try
@@ -2036,8 +2073,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     on_result (Error (Error_types.Internal_error 
                       (Printf.sprintf "Failed to parse repost response: %s" (Printexc.to_string e))))
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2061,13 +2097,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   on_result (Ok ())
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2096,7 +2131,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   try
@@ -2109,8 +2144,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     on_result (Error (Error_types.Internal_error 
                       (Printf.sprintf "Failed to parse follow response: %s" (Printexc.to_string e))))
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2134,13 +2168,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   on_result (Ok ())
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2155,7 +2188,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) (Uri.pct_encode actor) in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse profile" ~body:response.body with
@@ -2169,8 +2202,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                        (Printf.sprintf "Failed to parse profile: %s" (Printexc.to_string e)))))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2183,7 +2215,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) (Uri.pct_encode post_uri) in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse thread" ~body:response.body with
@@ -2201,8 +2233,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                        (Printf.sprintf "Failed to parse thread: %s" (Printexc.to_string e)))))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2229,7 +2260,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getTimeline%s" (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse timeline" ~body:response.body with
@@ -2239,8 +2270,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2273,7 +2303,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                       if not (is_safe_remote_media_url url) then
                         on_err (Error_types.Validation_error [Error_types.Invalid_url "Unsafe media URL"])
                       else
-                        Config.Http.get url
+                        Http.get url
                         (fun media_resp ->
                           if media_resp.status >= 200 && media_resp.status < 300 then
                             let raw_mime_type =
@@ -2435,7 +2465,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                           ("Content-Type", "application/json");
                         ] in
                         
-                        Config.Http.post ~headers ~body:body_str url
+                        Http.post ~headers ~body:body_str url
                           (fun response ->
                             if response.status >= 200 && response.status < 300 then
                               try
@@ -2448,8 +2478,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                                 on_result (Error_types.Failure (Error_types.Internal_error 
                                   (Printf.sprintf "Failed to parse response: %s" (Printexc.to_string e))))
                             else
-                              on_result (Error_types.Failure (parse_api_error 
-                                ~status_code:response.status ~body:response.body)))
+                              on_result (Error_types.Failure (parse_xrpc_response_error response)))
                           (fun err -> on_result (Error_types.Failure (Error_types.Network_error 
                             (Error_types.Connection_failed err)))))
                       (fun _ -> on_result (Error_types.Failure (Error_types.Internal_error 
@@ -2481,7 +2510,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse notifications" ~body:response.body with
@@ -2491,8 +2520,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2504,7 +2532,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
         let url = Printf.sprintf "%s/xrpc/app.bsky.notification.getUnreadCount" (service_url ()) in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               try
@@ -2517,8 +2545,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                 on_result (Error (Error_types.Internal_error 
                   (Printf.sprintf "Failed to parse unread count: %s" (Printexc.to_string e))))
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2536,13 +2563,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           ("Content-Type", "application/json");
         ] in
         
-        Config.Http.post ~headers ~body:body_str url
+        Http.post ~headers ~body:body_str url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               on_result (Ok ())
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2568,7 +2594,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse search results" ~body:response.body with
@@ -2578,8 +2604,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2603,7 +2628,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse search results" ~body:response.body with
@@ -2613,8 +2638,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2633,13 +2657,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           ("Content-Type", "application/json");
         ] in
         
-        Config.Http.post ~headers ~body:body_str url
+        Http.post ~headers ~body:body_str url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               on_result (Ok ())
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2656,13 +2679,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           ("Content-Type", "application/json");
         ] in
         
-        Config.Http.post ~headers ~body:body_str url
+        Http.post ~headers ~body:body_str url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               on_result (Ok ())
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2689,7 +2711,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   try
@@ -2702,8 +2724,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                     on_result (Error (Error_types.Internal_error 
                       (Printf.sprintf "Failed to parse block response: %s" (Printexc.to_string e))))
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2727,13 +2748,12 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
               ("Content-Type", "application/json");
             ] in
             
-            Config.Http.post ~headers ~body:body_str url
+            Http.post ~headers ~body:body_str url
               (fun response ->
                 if response.status >= 200 && response.status < 300 then
                   on_result (Ok ())
                 else
-                  on_result (Error (parse_api_error 
-                    ~status_code:response.status ~body:response.body)))
+                  on_result (Error (parse_xrpc_response_error response)))
               (fun err -> on_result (Error (Error_types.Network_error 
                 (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2759,7 +2779,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse author feed" ~body:response.body with
@@ -2769,8 +2789,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2794,7 +2813,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse likes" ~body:response.body with
@@ -2804,8 +2823,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2829,7 +2847,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse reposts" ~body:response.body with
@@ -2839,8 +2857,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2864,7 +2881,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse followers" ~body:response.body with
@@ -2874,8 +2891,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2899,7 +2915,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
           (service_url ()) query_string in
         let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
         
-        Config.Http.get ~headers url
+        Http.get ~headers url
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match parse_json_object_or_error ~context:"Failed to parse follows" ~body:response.body with
@@ -2909,8 +2925,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                    | Error err -> on_result (Error err))
               | Error err -> on_result (Error err)
             else
-              on_result (Error (parse_api_error 
-                ~status_code:response.status ~body:response.body)))
+              on_result (Error (parse_xrpc_response_error response)))
           (fun err -> on_result (Error (Error_types.Network_error 
             (Error_types.Connection_failed err)))))
       (fun err -> on_result (Error err))
@@ -2922,7 +2937,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
       minutes). The older JSON-returning readers ([get_post_thread],
       [get_author_feed], [list_notifications]) are unchanged. *)
 
-  module Reads_http = Reads.Make (Config.Http)
+  module Reads_http = Reads.Make (Http)
 
   let with_session ~account_id on_result read =
     ensure_valid_token ~account_id read (fun err -> on_result (Stdlib.Error err))

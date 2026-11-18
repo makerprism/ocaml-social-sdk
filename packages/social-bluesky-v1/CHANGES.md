@@ -169,6 +169,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Robustness
+
+- Poll video job IDs even when an `already_exists` response says completed but omits the blob.
+- Evict matching cached sessions when an authenticated response reports `ExpiredToken` or `InvalidToken`; the next operation refreshes instead of reusing the rejected JWT.
+- Preserve `RateLimit-Reset` as a retry delay in HTTP-aware XRPC error mapping, including typed reads.
+
 ### Migration notes
 
 - #74: `blob_looks_like_text` moved out of the `Make` functor. Call `Social_bluesky_v1.blob_looks_like_text` instead of `Make(Config).blob_looks_like_text`.
