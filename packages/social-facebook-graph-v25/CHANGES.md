@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remove `post_impressions_unique` from `Page_posts.analytics_fields` and the legacy page-post request, following Meta’s metric deprecation. This avoids invalidating the entire inline insights expansion; reaction and click metrics remain. Correct the general-purpose page-post documentation.
+
+### Fixed
+
 - **`Insights.parse` / `metrics_of_json` no longer fail a whole response over one empty value.** A point whose `value` is missing, `null`, or neither a number nor an object of numbers is left out of that metric's `points` (`latest_count` / `by_type` then answer `None` for it); the other metrics still arrive. Before, such a point turned the read into `Internal_error`, so one metric Meta had no figure for cost the caller every other one. `Error` remains for a root without a `data` array or an entry without a `name`.
 
 ### Added

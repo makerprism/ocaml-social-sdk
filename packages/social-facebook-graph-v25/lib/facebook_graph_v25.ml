@@ -1505,11 +1505,9 @@ module Make (Config : CONFIG) = struct
       analytics for status posts and drops API quota usage from
       [N posts × per-post calls] to [1 call per pagination page].
 
-      Insights metric set covers what FeedMansion's analytics surface
-      consumes: [post_total_media_view_unique] for unique viewers,
-      [post_impressions_organic_unique] for organic reach,
-      [post_reactions_by_type_total] for the like/love/haha breakdown,
-      [post_clicks] / [post_clicks_by_type] for clicks. Status posts
+      The insights metric set includes [post_reactions_by_type_total]
+      for reaction breakdowns and [post_clicks] / [post_clicks_by_type]
+      for clicks. Deprecated impression metrics are excluded. Status posts
       get [reactions_summary.summary.total_count] /
       [comments_summary.summary.total_count] / [shares.count] even
       when their insights array is empty.

@@ -36,7 +36,7 @@ let basic_fields =
 
 let analytics_fields =
   basic_fields
-  ^ ",insights.metric(post_impressions_unique,post_reactions_by_type_total,\
+  ^ ",insights.metric(post_reactions_by_type_total,\
      post_clicks,post_clicks_by_type).as(insights),\
      comments.summary(true).limit(0).as(comments_summary),\
      reactions.summary(true).limit(0).as(reactions_summary),shares"

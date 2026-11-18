@@ -69,14 +69,11 @@ val basic_fields : string
     ["id,message,created_time,full_picture,permalink_url,attachments{type,media_type,url,media,subattachments,target{id}}"]. *)
 
 val analytics_fields : string
-(** {!basic_fields} plus inline insights ([post_impressions_unique],
-    [post_reactions_by_type_total], [post_clicks], [post_clicks_by_type],
-    aliased [insights]), comment and reaction summaries (aliased
-    [comments_summary] / [reactions_summary]) and [shares]. The metric set
-    is the one that has been seen to survive every post type in v25; the
-    successors [post_total_media_view_unique] and
-    [post_impressions_organic_unique] made Meta drop the whole expansion
-    when tried on a live Page. *)
+(** {!basic_fields} plus inline insights ([post_reactions_by_type_total],
+    [post_clicks], [post_clicks_by_type], aliased [insights]), comment and
+    reaction summaries (aliased [comments_summary] / [reactions_summary])
+    and [shares]. Deprecated impression metrics are excluded because one
+    invalid metric can invalidate the whole expansion. *)
 
 val parse_page_post : Yojson.Basic.t -> page_post
 (** Raises [Failure] when the item has no string [id]; every other field is

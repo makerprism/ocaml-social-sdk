@@ -1234,14 +1234,7 @@ let test_get_page_posts_includes_inline_analytics_expansions () =
                   failwith ("get_page_posts URL missing expected marker: " ^ marker)
               in
               must_contain "insights.metric";
-              (* [post_impressions_unique] is the legacy / pre-v25 name
-                 for unique reach. We request it instead of the v25
-                 successor [post_total_media_view_unique] because the
-                 latter triggers Meta's silent-omit-on-any-invalid-
-                 metric behaviour, dropping the entire insights field
-                 from the response. The legacy name still works in v25
-                 in 2026. *)
-              must_contain "post_impressions_unique";
+              assert (not (string_contains url "post_impressions_unique"));
               must_contain "post_reactions_by_type_total";
               must_contain "comments.summary";
               must_contain "reactions.summary";
@@ -3709,6 +3702,9 @@ let test_get_page_posts_page_positions () =
        assert (Uri.path cursor_uri = "/v25.0/104857/feed");
        assert (Uri.get_query_param cursor_uri "after" = Some "QUZU");
        assert (Uri.get_query_param cursor_uri "fields" = Some Page_posts.analytics_fields);
+       assert (not (string_contains Page_posts.analytics_fields "post_impressions_unique"));
+       assert (string_contains Page_posts.analytics_fields
+         "insights.metric(post_reactions_by_type_total,post_clicks,post_clicks_by_type)");
        assert (Uri.get_query_param cursor_uri "limit" = None);
        let uri = Uri.of_string followed_url in
        assert (Uri.path uri = "/v25.0/104857/posts");
