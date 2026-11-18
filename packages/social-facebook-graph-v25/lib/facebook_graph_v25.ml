@@ -1343,6 +1343,7 @@ module Make_internal (Config : COORDINATED_CONFIG)
 
   let should_try_next_recovery_token = is_page_token_auth_error
 
+  include (struct
   let recover_page_access_token_unlocked ~account_id ~current_access_token on_success on_error =
     Config.get_page_id ~account_id
       (fun page_id ->
@@ -1513,6 +1514,12 @@ module Make_internal (Config : COORDINATED_CONFIG)
           (fun page_id -> on_success page_id credentials.Social_core.access_token)
           (fun error -> on_error (Error_types.Internal_error error)))
       on_error
+
+  end : sig
+    val recover_page_access_token :
+      account_id:string -> current_access_token:string ->
+      (string -> string -> unit) -> (Error_types.error -> unit) -> unit
+  end)
 
   let with_posting_page_context ~account_id on_success on_error =
     ensure_valid_token ~account_id
