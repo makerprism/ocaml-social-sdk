@@ -766,6 +766,7 @@ let string_contains haystack needle =
   scan 0
 
 let test_get_oauth_url_scopes_and_s256 () =
+  assert (Social_tiktok_v1.OAuth.Metadata.supports_pkce);
   print_string "Test: get_oauth_url honours scopes and S256 hex PKCE... ";
   reset_mock_state ();
   TikTok.get_oauth_url ~redirect_uri:"https://example.com/callback" ~state:"s" ~code_verifier:""

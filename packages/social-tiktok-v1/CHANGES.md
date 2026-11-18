@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- OAuth metadata now advertises PKCE support. Desktop login uses hex S256 challenges; the existing RFC 7636 verifier generator is compatible with TikTok’s documented unreserved-character alphabet.
+
+### Fixed
+
 - **The test suite runs under `dune runtest` (and so in CI).** `test/` was
   declared as an `executable`, so it never ran, and three of its assertions
   had gone stale against the code:
