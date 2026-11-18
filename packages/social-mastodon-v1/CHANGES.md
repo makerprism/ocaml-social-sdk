@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `Make.reply_to_status_exact`: posts the exact supplied text with `in_reply_to_id`, visibility and Idempotency-Key, returning a typed `Entities.status` result. The existing mention-prefixed `reply_to_status` is unchanged.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

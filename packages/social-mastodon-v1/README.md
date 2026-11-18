@@ -448,3 +448,13 @@ MIT
 WebFinger validates host inputs with `Social_public_host.is_public_host`. The
 HTTP adapter must also reject private resolved addresses and unsafe redirects
 to prevent DNS rebinding. The helper performs no DNS or runtime-specific I/O.
+
+### Replies with exact text
+
+`Make.reply_to_status_exact ~account_id ~in_reply_to_id ~text ?visibility
+?idempotency_key callback` returns `Entities.status Error_types.api_result`,
+including `id`, nullable `url`, `uri`, and `created_at`. It sends the text
+unchanged and uses the local target status ID on the posting instance.
+Visibility defaults to `Public`; pass a stable idempotency key for retries
+(or omit it to generate a fresh UUID). The existing `reply_to_status` keeps
+its automatic mention behavior.

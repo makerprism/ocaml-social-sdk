@@ -3439,6 +3439,71 @@ module Make (Config : CONFIG) = struct
     else
       Ok ()
 
+  (** Post exactly [text] as a reply, with no author lookup or mention prefix.
+      Returns the created {!Entities.status}. [in_reply_to_id] must be the status
+      ID on the posting instance. Requires [write:statuses]. Supply the same
+      [idempotency_key] when retrying a logical reply; when omitted, a fresh UUID
+      is generated. Visibility defaults to [Public].
+      {{:https://docs.joinmastodon.org/methods/statuses/#create}Official contract}.
+  *)
+  let reply_to_status_exact ~account_id ~in_reply_to_id ~text
+      ?(visibility = Public) ?idempotency_key on_result =
+    if String.trim in_reply_to_id = "" then
+      on_result
+        (Stdlib.Error
+           (Error_types.Validation_error
+              [ Error_types.Invalid_url "in_reply_to_id must not be empty" ]))
+    else
+      with_credentials ~account_id on_result (fun creds ->
+          let key =
+            match idempotency_key with
+            | Some key -> key
+            | None -> generate_uuid ()
+          in
+          let headers =
+            [
+              ("Authorization", "Bearer " ^ creds.access_token);
+              ("Content-Type", "application/json");
+              ("Idempotency-Key", key);
+            ]
+          in
+          let body =
+            Yojson.Basic.to_string
+              (`Assoc
+                 [
+                   ("status", `String text);
+                   ("in_reply_to_id", `String in_reply_to_id);
+                   ("visibility", `String (visibility_to_string visibility));
+                 ])
+          in
+          Config.Http.post ~headers ~body
+            (creds.instance_url ^ "/api/v1/statuses")
+            (fun response ->
+              if response.status >= 200 && response.status < 300 then
+                let result =
+                  try
+                    Entities.status_of_json
+                      (Yojson.Basic.from_string response.body)
+                  with Yojson.Json_error _ ->
+                    Stdlib.Error "Invalid JSON response"
+                in
+                on_result
+                  (Result.map_error
+                     (fun message ->
+                       Error_types.Internal_error
+                         ("Failed to parse created status: " ^ message))
+                     result)
+              else
+                on_result
+                  (Stdlib.Error
+                     (parse_api_error ~headers:response.headers
+                        ~status_code:response.status ~response_body:response.body)))
+            (fun err ->
+              on_result
+                (Stdlib.Error
+                   (Error_types.Network_error
+                      (Error_types.Connection_failed (redact_sensitive_text err))))))
+
   (** Reply to an existing status
 
       Fetches the original status to determine its author, then posts a reply
