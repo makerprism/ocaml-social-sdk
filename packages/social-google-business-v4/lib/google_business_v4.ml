@@ -389,7 +389,17 @@ module type CONFIG = sig
 end
 
 (** Make functor to create Google Business Profile provider with given configuration *)
-module Make (Config : CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   module Shared_oauth = Social_google_oauth.Make(Config.Http)
 
   let account_management_base = "https://mybusinessaccountmanagement.googleapis.com/v1"
@@ -498,6 +508,8 @@ module Make (Config : CONFIG) = struct
             (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
+      ~with_refresh_lock:Config.with_refresh_lock
+      ~reload_credentials:Config.get_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = 600 }
       ~account_id
       ~load_credentials:Config.get_credentials
@@ -777,3 +789,10 @@ module Make (Config : CONFIG) = struct
     else
       Ok ()
 end
+
+module Make (Config : CONFIG) = Make_coordinated (struct
+  include Config
+
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end)

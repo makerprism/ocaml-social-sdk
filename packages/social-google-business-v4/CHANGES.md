@@ -1,5 +1,7 @@
 # Changelog
 
+- Add `COORDINATED_CONFIG` and `Make_coordinated` for account refresh locks held through persistence, with credential reload under the lock. Existing functors remain compatible.
+
 ## Unreleased
 
 - Discovery sends pageSize 20 for accounts and 100 for locations. `list_all_*` returns `Validation_error` when `max_pages` stops before the final page; use a larger cap or the paged API instead of receiving a silently partial list.

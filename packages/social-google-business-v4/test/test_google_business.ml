@@ -700,3 +700,62 @@ let () =
   print_endline "  - Token management (2 tests)";
   print_endline "";
   print_endline "Total: 20 test functions"
+
+let test_coordinated_refresh () =
+  Mock_config.reset ();
+  Mock_http.reset ();
+  Mock_config.env_vars := [("GOOGLE_BUSINESS_CLIENT_ID", "client"); ("GOOGLE_BUSINESS_CLIENT_KEY", "client"); ("GOOGLE_BUSINESS_CLIENT_SECRET", "secret")];
+  let credentials = {
+    Social_core.access_token = "old-access";
+    refresh_token = Some "current-refresh";
+    expires_at = Some "2020-01-01T00:00:00Z";
+    auth_type = Social_core.Bearer;
+    scope = None;
+  } in
+  Mock_config.credentials_store := [ ("account", credentials) ];
+  let locked = ref false in
+  let waiting = Queue.create () in
+  let persist = ref None in
+  let completed = ref 0 in
+  let module Config = struct
+    include Mock_config
+    let get_credentials ~account_id on_success on_error =
+      assert !locked;
+      Mock_config.get_credentials ~account_id on_success on_error
+    let update_credentials ~account_id ~credentials on_success on_error =
+      assert !locked;
+      persist := Some (fun () ->
+        Mock_config.update_credentials ~account_id ~credentials on_success on_error)
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      let release () =
+        locked := false;
+        if not (Queue.is_empty waiting) then (Queue.take waiting) ()
+      in
+      let start () =
+        assert (not !locked);
+        locked := true;
+        run
+          (fun credentials -> release (); on_success credentials)
+          (fun error -> release (); on_error error)
+      in
+      if !locked then Queue.add start waiting else start ()
+  end in
+  let module Provider = Social_google_business_v4.Make_coordinated (Config) in
+  Mock_http.set_responses [{
+    Social_core.status = 200; headers = [];
+    body = "{\"access_token\":\"new-access\",\"token_type\":\"bearer\",\"expires_in\":3600}";
+  }];
+  let run () = Provider.ensure_valid_token ~account_id:"account"
+    (fun token -> assert (token = "new-access"); incr completed)
+    (fun error -> failwith (Error_types.error_to_string error))
+  in
+  run ();
+  run ();
+  assert (!completed = 0 && !locked);
+  assert (List.length !Mock_http.requests = 1);
+  (match !persist with Some finish -> finish () | None -> assert false);
+  assert (!completed = 2 && not !locked);
+  assert (List.length !Mock_http.requests = 1);
+  assert ((List.assoc "account" !Mock_config.credentials_store).Social_core.refresh_token = Some "current-refresh")
+
+let () = test_coordinated_refresh ()
