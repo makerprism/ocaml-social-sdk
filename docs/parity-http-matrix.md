@@ -248,3 +248,6 @@ repository by its session DID, including if credential persistence fails.
 Google Business Profile discovery: `list_all_accounts` sends `pageSize=20`;
 `list_all_locations` sends `pageSize=100`. A pending `nextPageToken` at
 `max_pages` returns a validation error rather than a partial success.
+
+Facebook Page post analytics expansion excludes deprecated
+`post_impressions_unique`; it requests reaction breakdowns and click metrics.
