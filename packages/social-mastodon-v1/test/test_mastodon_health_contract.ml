@@ -187,7 +187,7 @@ let test_every_written_status_is_recognised () =
     [ Verify_ok; Verify_transport_error; Verify_server_error; Verify_unauthorized ]
 
 (* Recording health is a side effect, never a gate on the operation. A
-   consumer that refuses the write, which the one in feedmansion does for any
+   consumer that refuses the write for any
    status string it does not recognise, must not turn a token that just
    verified into a failed publish. This path used to hand the caller a
    synthetic [Network_error] built from the consumer's rejection message. *)

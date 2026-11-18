@@ -234,4 +234,4 @@ MIT
 
 ---
 
-These libraries emerged from building [FeedMansion](https://feedmansion.com), a social media management tool. We're sharing them so others can build cool stuff too. Maintained by [Makerprism](https://makerprism.com).
+General-purpose social media API libraries, maintained by [Makerprism](https://makerprism.com).

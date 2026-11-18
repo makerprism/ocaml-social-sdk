@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Migration notes
+
+- #117: Video-init size/chunk diagnostics now live in `Api_error.message`; `raw_response` contains the untouched provider JSON. Consumers should parse `raw_response` and display `message`.
+
 ### Fixed
 
 - OAuth metadata now advertises PKCE support. Desktop login uses hex S256 challenges; the existing RFC 7636 verifier generator is compatible with TikTok’s documented unreserved-character alphabet.
