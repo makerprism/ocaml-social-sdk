@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+- `User.error_of_response` accepts optional `now` for deterministic retry-delay calculation; existing calls continue using system time.
+
 ### Security
 
 - PKCE verifiers came from `Stdlib.Random`, which is predictable. They now

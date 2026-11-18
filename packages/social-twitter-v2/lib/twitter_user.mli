@@ -46,8 +46,9 @@ val parse : string -> (t, string) result
     [name]. *)
 
 val error_of_response :
-  status_code:int -> headers:(string * string) list -> string -> Error_types.error
+  ?now:float -> status_code:int -> headers:(string * string) list -> string -> Error_types.error
 (** 401 [Token_invalid]; 403 [Insufficient_permissions ["tweet.read";
     "users.read"]] with X's [detail]; 429 [Rate_limited] with the delay
     until [x-rate-limit-reset] when given; otherwise [Api_error] with the
-    body. *)
+    body. [now] injects Unix time for deterministic retry-delay calculation;
+    omitted, the system clock preserves existing behavior. *)

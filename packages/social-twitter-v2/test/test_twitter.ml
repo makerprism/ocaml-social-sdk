@@ -6085,7 +6085,17 @@ let test_token_based_get_me () =
     | Error _ | Ok _ -> failwith "expected Internal_error for an incomplete user");
   print_endline "✓ Token-based users/me (OAuth 2.0 and 1.0a) returns the typed user"
 
+let test_user_error_injected_clock () =
+  List.iter (fun (now, expected) ->
+    match Social_twitter_v2.User.error_of_response ~now ~status_code:429
+      ~headers:[("X-Rate-Limit-Reset", "120")] "{}" with
+    | Error_types.Rate_limited { retry_after_seconds; _ } ->
+        assert (retry_after_seconds = Some expected)
+    | error -> failwith (Error_types.error_to_string error))
+    [ 100., 20; 130., 1 ]
+
 let () =
+  test_user_error_injected_clock ();
   test_token_based_get_me ();
   print_endline "===========================================";
   print_endline "Twitter API v2 Provider - Test Suite";

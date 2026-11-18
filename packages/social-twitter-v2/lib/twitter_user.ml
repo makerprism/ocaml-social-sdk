@@ -104,7 +104,7 @@ let detail_of body =
               None))
   | exception Yojson.Json_error _ -> None
 
-let error_of_response ~status_code ~headers body =
+let error_of_response ?now ~status_code ~headers body =
   match status_code with
   | 401 -> Error_types.Auth_error Error_types.Token_invalid
   | 403 ->
@@ -119,7 +119,9 @@ let error_of_response ~status_code ~headers body =
               if String.lowercase_ascii key = "x-rate-limit-reset" then int_of_string_opt value else None)
             headers
         in
-        Option.map (fun reset -> max 1 (reset - int_of_float (Unix.time ()))) reset
+        Option.map (fun reset ->
+          let now = match now with Some now -> now | None -> Unix.time () in
+          max 1 (reset - int_of_float now)) reset
       in
       Error_types.make_rate_limited ?retry_after_seconds ~remaining:0 ()
   | _ ->
