@@ -916,7 +916,9 @@ module type COORDINATED_CONFIG = sig
   val with_refresh_lock :
     account_id:string ->
     ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
-    (Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) ->
+    unit
 end
 
 module Make_internal (Config : COORDINATED_CONFIG) = struct
@@ -1059,53 +1061,51 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
          | Error _ -> true)
 
   let ensure_account_credentials ?refresh_window_seconds ?(force_refresh = false)
-      ?(allow_refresh = auto_refresh_token_enabled ())
-      ~account_id on_success on_error =
+      ?(allow_refresh = auto_refresh_token_enabled ()) ~account_id on_success
+      on_error =
     let map_credentials_error err =
       if classify_credentials_error err = `Missing then
         Error_types.Auth_error Error_types.Missing_credentials
-      else
-        Error_types.Internal_error ("Failed to load credentials: " ^ err)
+      else Error_types.Internal_error ("Failed to load credentials: " ^ err)
     in
     let load_credentials ~account_id on_loaded on_load_error =
       Config.get_credentials ~account_id
         (fun creds ->
-           let token = String.trim creds.access_token in
-           if token = "" then
-             on_load_error "missing credentials"
-           else
-             on_loaded { creds with access_token = token })
+          let token = String.trim creds.access_token in
+          if token = "" then on_load_error "missing credentials"
+          else on_loaded { creds with access_token = token })
         on_load_error
     in
     let perform_refresh ~credentials on_refresh_success on_refresh_error =
       if force_refresh || allow_refresh then
-        OAuth_http.refresh_token_typed ~long_lived_token:credentials.Social_core.access_token
+        OAuth_http.refresh_token_typed
+          ~long_lived_token:credentials.Social_core.access_token
           on_refresh_success on_refresh_error
-      else
-        on_refresh_error (Error_types.Auth_error Error_types.Token_expired)
+      else on_refresh_error (Error_types.Auth_error Error_types.Token_expired)
     in
-    let persist_credentials ~account_id ~credentials on_persisted on_persist_error =
+    let persist_credentials ~account_id ~credentials on_persisted on_persist_error
+        =
       Config.update_credentials ~account_id ~credentials
         (fun () -> on_persisted ())
         on_persist_error
     in
-    let update_health ~account_id ~status ~error_message on_health_ok on_health_error =
-      Config.update_health_status ~account_id ~status ~error_message on_health_ok on_health_error
+    let update_health ~account_id ~status ~error_message on_health_ok
+        on_health_error =
+      Config.update_health_status ~account_id ~status ~error_message on_health_ok
+        on_health_error
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
-      ~with_refresh_lock:Config.with_refresh_lock
-      ~force_refresh
+      ~with_refresh_lock:Config.with_refresh_lock ~force_refresh
       ~reload_credentials:load_credentials
-      ~policy:{ Social_refresh.refresh_window_seconds =
-        Option.value ~default:(token_expiry_skew_seconds ()) refresh_window_seconds }
-      ~map_load_error:map_credentials_error
-      ~account_id
-      ~load_credentials
-      ~perform_refresh
-      ~persist_credentials
-      ~update_health
-      on_success
-      on_error
+      ~policy:
+        {
+          Social_refresh.refresh_window_seconds =
+            Option.value
+              ~default:(token_expiry_skew_seconds ())
+              refresh_window_seconds;
+        }
+      ~map_load_error:map_credentials_error ~account_id ~load_credentials
+      ~perform_refresh ~persist_credentials ~update_health on_success on_error
 
   let with_valid_credentials ~account_id on_success on_error =
     ensure_account_credentials ~account_id on_success on_error
@@ -3076,6 +3076,7 @@ end
 
 module Make (Config : CONFIG) = Make_internal (struct
   include Config
+
   let with_refresh_lock ~account_id:_ run on_success on_error =
     run on_success on_error
 end)
