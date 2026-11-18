@@ -720,7 +720,38 @@ let test_record_operations_use_session_did () =
       (fun () -> B.block_actor ~account_id:"acct" ~actor:"did:plc:other" result);
       (fun () -> B.unblock_actor ~account_id:"acct" ~block_uri:uri result) ]
 
+let test_completed_duplicate_without_blob_is_polled () =
+  reset ();
+  video_responder
+    ~upload:(json_response ~status:409
+      {|{"error":"already_exists","jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_COMPLETED"}}|})
+    ~statuses:[json_response (Printf.sprintf
+      {|{"jobStatus":{"jobId":"job-1","did":"did:plc:alice","state":"JOB_STATE_COMPLETED","blob":%s}}|} video_blob_json)] ();
+  ignore (expect_outcome_success "completed duplicate" (post_video (module Video_bluesky)));
+  assert (count_requests "app.bsky.video.getJobStatus" = 1)
+
+let test_rejected_cached_token_is_invalidated () =
+  reset ();
+  Default_bluesky.invalidate_session ~account_id:"acct";
+  responder := (fun request ->
+    if has_suffix "com.atproto.repo.createRecord" request then
+      json_response ~status:400 {|{"error":"ExpiredToken","message":"revoked"}|}
+    else default_responder request);
+  Default_bluesky.like_post ~account_id:"acct" ~post_uri:"at://did:plc:x/app.bsky.feed.post/p"
+    ~post_cid:"cid" (function
+      | Social_core.Error (Error_types.Auth_error Error_types.Token_expired) -> ()
+      | Social_core.Error err -> failwith (Error_types.error_to_string err)
+      | Social_core.Ok _ -> failwith "expected expired token");
+  responder := default_responder;
+  Default_bluesky.like_post ~account_id:"acct" ~post_uri:"at://did:plc:x/app.bsky.feed.post/p"
+    ~post_cid:"cid" (function
+      | Social_core.Ok _ -> ()
+      | Social_core.Error err -> failwith (Error_types.error_to_string err));
+  assert (count_requests "com.atproto.server.refreshSession" = 2)
+
 let () =
+  test_completed_duplicate_without_blob_is_polled ();
+  test_rejected_cached_token_is_invalidated ();
   test_record_operations_use_session_did ();
   test_video_without_sleep_uses_upload_blob ();
   test_video_service_request_shapes ();

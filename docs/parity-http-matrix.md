@@ -262,3 +262,6 @@ Mastodon WebFinger rejects non-public hosts before HTTP. Bluesky discovered PDS
 and remote-media hosts use the same literal-address and hostname validation.
 
 Facebook permalink lookup percent-encodes the object ID as one path segment.
+
+Bluesky polls completed video job IDs until a blob is available, invalidates
+rejected cached JWTs, and preserves XRPC `RateLimit-Reset` retry delays.
