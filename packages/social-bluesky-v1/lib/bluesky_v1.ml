@@ -615,7 +615,18 @@ module Default_options = struct
 end
 
 (** Make functor with explicit {!OPTIONS} (e.g. a self-hosted PDS). *)
-module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
+    (Persistence : sig val required : bool end) = struct
   (** Base URL every XRPC call goes to, without a trailing slash. *)
   let service_url () =
     let url = String.trim (Options.service_url ()) in
@@ -1370,7 +1381,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
       - Once in Bearer mode, every refresh rotates [refresh_jwt] via
         [Auth.refresh_session]; an attacker who exfiltrated a refresh_jwt
         becomes useless after our next refresh. *)
-  let ensure_valid_token ~account_id on_success on_error =
+  let ensure_valid_token_unlocked ~account_id on_success on_error =
     let module AuthMake = Auth.Make (Http) in
     let cache_and_succeed ~did ~access_jwt =
       Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
@@ -1446,9 +1457,10 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                         Config.update_credentials ~account_id ~credentials:new_creds
                           (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                           (fun _ ->
-                            (* Persist failed but we still have a valid
-                               access_jwt; the next call will retry. *)
-                            cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
+                            if Persistence.required then
+                              on_error (Error_types.Network_error
+                                (Error_types.Connection_failed "Failed to persist refreshed session"))
+                            else cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                     | Error_types.Failure (Error_types.Auth_error _) ->
                         on_token_revoked ()
                     | Error_types.Failure (Error_types.Api_error api_err)
@@ -1474,16 +1486,32 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                           Config.update_credentials ~account_id ~credentials:rotated
                             (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                             (fun _ ->
-                              (* Rotation persistence failed; next call will
-                                 retry rotation. Still serve the current
-                                 access_jwt. *)
-                              cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
+                              if Persistence.required then
+                                on_error (Error_types.Network_error
+                                  (Error_types.Connection_failed "Failed to persist rotated session"))
+                              else cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                       | Error_types.Failure (Error_types.Auth_error _) ->
                           on_token_revoked ()
                       | Error_types.Failure err ->
                           on_refresh_error ~context:"Session creation failed" err))
           (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
   
+  let ensure_valid_token ~account_id on_success on_error =
+    Config.with_refresh_lock ~account_id
+      (fun on_locked_success on_locked_error ->
+        ensure_valid_token_unlocked ~account_id
+          (fun access_jwt ->
+            Config.get_credentials ~account_id
+              (fun credentials ->
+                (* Stored access_token is the DID. Only the completion value
+                   carries the session JWT; storage keeps its existing codec. *)
+                on_locked_success { credentials with Social_core.access_token = access_jwt })
+              (fun error -> on_locked_error (Error_types.Network_error
+                (Error_types.Connection_failed error))))
+          on_locked_error)
+      (fun credentials -> on_success credentials.Social_core.access_token)
+      on_error
+
   (** Ensure valid session token and also return the DID *)
   let ensure_valid_token_with_did ~account_id on_success on_error =
     ensure_valid_token ~account_id
@@ -2976,4 +3004,17 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
 end
 
 (** Make functor with {!Default_options} (the Bluesky-hosted entryway). *)
+module Make_with_options (Config : CONFIG) (Options : OPTIONS) =
+  Make_internal (struct
+    include Config
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      run on_success on_error
+  end) (Options) (struct let required = false end)
+
 module Make (Config : CONFIG) = Make_with_options (Config) (Default_options)
+
+module Make_coordinated_with_options (Config : COORDINATED_CONFIG) (Options : OPTIONS) =
+  Make_internal (Config) (Options) (struct let required = true end)
+
+module Make_coordinated (Config : COORDINATED_CONFIG) =
+  Make_coordinated_with_options (Config) (Default_options)
