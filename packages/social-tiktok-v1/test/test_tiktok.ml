@@ -793,6 +793,18 @@ let test_get_oauth_url_scopes_and_s256 () =
   print_endline "PASSED"
 
 let test_exchange_code_full () =
+  List.iter (fun body ->
+    reset_mock_state ();
+    Mock_http.set_custom_post_handler (fun _ _ _ ->
+      { Social_core.status = 503; headers = []; body });
+    Tiktok_oauth.exchange_code_full ~client_key:"ck" ~client_secret:"cs"
+      ~redirect_uri:"r" ~code:"c" (function
+      | Stdlib.Error (Error_types.Api_error {status_code; raw_response; _}) ->
+          assert (status_code = 503 && raw_response = Some body)
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+      | Stdlib.Ok _ -> failwith "HTTP failure must not succeed"))
+    [ "upstream unavailable"; "{}"; {|{"access_token":"a","open_id":"id"}|} ];
+
   print_string "Test: exchange_code_full keeps open_id, scopes, refresh lifetime... ";
   reset_mock_state ();
   Mock_http.set_custom_post_handler (fun _url _headers _body ->

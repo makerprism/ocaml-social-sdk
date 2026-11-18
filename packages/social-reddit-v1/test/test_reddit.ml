@@ -2038,6 +2038,15 @@ let test_post_to_subreddits_empty_list () =
 let test_oauth_get_me_typed () =
   let module OAuth_http = OAuth.Make (Mock_http) in
   Mock_http.reset ();
+  Mock_http.set_response { status = 403; headers = [];
+    body = {|{"message":"Account access restricted","error":403}|} };
+  OAuth_http.get_me ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Auth_error (Error_types.Insufficient_permissions {platform_message; _})) ->
+        assert (platform_message = Some "Account access restricted")
+    | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+    | Stdlib.Ok _ -> failwith "expected permission failure");
+
+  Mock_http.reset ();
   Mock_http.set_response
     { status = 200;
       body = {|{"id":"abc12","name":"maker","icon_img":"https://i/x.png","total_karma":42,"created_utc":1600000000.0}|};

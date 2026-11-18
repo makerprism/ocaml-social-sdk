@@ -196,12 +196,20 @@ module OAuth = struct
       refresh answer omits [refresh_token]. *)
   let parse_token_response ?previous_refresh_token ~status_code body
       : (token_response, Error_types.error) Stdlib.result =
+    let http_failed = status_code < 200 || status_code >= 300 in
+    let http_error () =
+      Error_types.make_api_error ~platform:Platform_types.TikTok ~status_code
+        ~message:(Printf.sprintf "TikTok token request failed (%d)" status_code)
+        ~raw_response:body ()
+    in
     match Yojson.Basic.from_string body with
     | exception Yojson.Json_error message ->
-        Stdlib.Error (Error_types.Internal_error ("TikTok token response is not JSON: " ^ message))
+        Stdlib.Error (if http_failed then http_error () else
+          Error_types.Internal_error ("TikTok token response is not JSON: " ^ message))
     | json -> (
         match tiktok_error_of_oauth_body ~status_code body json with
         | Some error -> Stdlib.Error error
+        | None when http_failed -> Stdlib.Error (http_error ())
         | None -> (
             let field key =
               match json with

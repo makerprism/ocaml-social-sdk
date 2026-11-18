@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Error diagnostics
+
+- Token endpoint HTTP failures preserve their status and raw body as `Api_error`, including non-JSON bodies and JSON without an OAuth error key. A failure status cannot be accepted as a successful token response.
+
 ### Migration notes
 
 - #117: Video-init size/chunk diagnostics now live in `Api_error.message`; `raw_response` contains the untouched provider JSON. Consumers should parse `raw_response` and display `message`.
