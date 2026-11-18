@@ -3568,7 +3568,7 @@ let test_search_places () =
     { status = 200; headers = [];
       body =
         {|{"data":[
-          {"id":"309968765748101","name":"Facebook HQ","location":{"city":"Menlo Park","country":"United States","latitude":37.4851,"longitude":-122.1483,"state":"CA","street":"1 Hacker Way","zip":"94025"}},
+          {"id":"309968765748101","name":"Facebook HQ","location":{"city":"Menlo Park","country":"United States","latitude":37.4851,"longitude":-122.1483,"state":"CA","street":"1 Hacker Way","zip":94025}},
           {"id":"42","name":"Online only"},
           {"id":"43","name":"Half","location":{"city":"Berlin","latitude":52}}]}|} };
   Facebook.search_places ~access_token:"page-token" ~query:" Facebook HQ " (function

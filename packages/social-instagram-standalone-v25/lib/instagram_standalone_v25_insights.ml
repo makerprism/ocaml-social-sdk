@@ -134,8 +134,10 @@ let field key = function
 
 let int_of = function
   | Some (`Int n) -> Some n
-  | Some (`Float f) -> Some (int_of_float f)
-  | Some (`Null | `Bool _ | `String _ | `List _ | `Assoc _) | None -> None
+  | Some (`Float f) when Float.is_finite f && Float.floor f = f
+      && f >= float_of_int min_int && f < -. (float_of_int min_int) ->
+      Some (int_of_float f)
+  | Some (`Null | `Bool _ | `Float _ | `String _ | `List _ | `Assoc _) | None -> None
 
 let string_of = function
   | Some (`String s) -> Some s

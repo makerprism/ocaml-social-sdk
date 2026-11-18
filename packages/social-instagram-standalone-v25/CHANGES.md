@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Insights readers ignore fractional, non-finite, and out-of-range numeric counts rather than truncating them to misleading integers. Integral floats remain supported.
+
 - Treat the documented Story code-10 "not enough viewers" insights response as unavailable data (empty metrics), while preserving actual permission errors. Report Instagram Business Login permissions for publishing, insights, profile counts, and comments.
 
 ### Fixed
