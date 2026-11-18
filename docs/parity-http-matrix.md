@@ -251,3 +251,6 @@ Google Business Profile discovery: `list_all_accounts` sends `pageSize=20`;
 
 Facebook Page post analytics expansion excludes deprecated
 `post_impressions_unique`; it requests reaction breakdowns and click metrics.
+
+Threads replies, conversation, and pending replies accept cursor-only paging:
+nonempty pages with `cursors.after` expose a followable `next_url`; empty pages stop.

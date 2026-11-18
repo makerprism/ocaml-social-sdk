@@ -5201,6 +5201,26 @@ let test_get_conversation_page_with_token () =
    | _ -> failwith "expected one GET");
   print_endline "ok: get_conversation_page with token"
 
+let test_reply_edges_cursor_only_traversal () =
+  List.iter (fun read ->
+    Mock_config.reset ();
+    Mock_http.set_responses
+      [ { status = 200; headers = []; body = conversation_page_body ~next:None };
+        { status = 200; headers = []; body = {|{"data":[],"paging":{"cursors":{"after":"last"}}}|} } ];
+    read Social_meta_graph_paging.First (function
+      | Error err -> failwith (Error_types.error_to_string err)
+      | Ok page ->
+          let url = Option.get page.Social_meta_graph_paging.next_url in
+          assert (Uri.get_query_param (Uri.of_string url) "after" = Some "QVFIUkF");
+          read (Social_meta_graph_paging.Page_url url) (function
+            | Error err -> failwith (Error_types.error_to_string err)
+            | Ok last -> assert (not (Social_meta_graph_paging.has_next last));
+                assert (Social_meta_graph_paging.next_after last = None)));
+    assert (List.length !Mock_http.requests = 2))
+    [ (fun position k -> Threads.get_replies_page ~access_token:"t" ~media_id:"m" ~position k);
+      (fun position k -> Threads.get_conversation_page ~access_token:"t" ~media_id:"m" ~position k);
+      (fun position k -> Threads.get_pending_replies_page ~access_token:"t" ~media_id:"m" ~position k) ]
+
 let test_reply_page_cursor_positions () =
   Mock_config.reset ();
   Mock_http.set_responses
@@ -5208,9 +5228,8 @@ let test_reply_page_cursor_positions () =
       { status = 200; headers = []; body = conversation_page_body ~next:None } ];
   let check_page = function
     | Ok page ->
-        assert (not (Social_meta_graph_paging.has_next page));
-        (* Meta returns an after cursor on the last page too *)
-        assert (Social_meta_graph_paging.next_after page = None)
+        assert (Social_meta_graph_paging.has_next page);
+        assert (Social_meta_graph_paging.next_after page = Some "QVFIUkF")
     | Error err -> failwith (Error_types.error_to_string err)
   in
   Threads.get_replies_page ~access_token:"t" ~media_id:"m"
@@ -5564,6 +5583,7 @@ let () =
   test_get_permalink_for_account ();
   test_parse_permalink_response ();
   test_get_conversation_page_with_token ();
+  test_reply_edges_cursor_only_traversal ();
   test_reply_page_cursor_positions ();
   test_reply_page_follows_next_url ();
   test_reply_page_rejects_foreign_next_url ();

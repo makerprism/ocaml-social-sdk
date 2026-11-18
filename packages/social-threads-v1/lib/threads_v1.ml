@@ -1940,6 +1940,19 @@ module Make (Config : CONFIG) = struct
             (Printf.sprintf "%s/%s/%s?%s" threads_api_base (String.trim media_id)
                edge (Uri.encoded_of_query params))
 
+  (* Threads documents cursors-only pages. Supply a followable URL so the
+     shared Graph paging helpers work without changing Facebook's rules. *)
+  let reply_page_with_cursor ~url (page : thread_post Social_meta_graph_paging.page) =
+    match page.data with
+    | [] -> { page with next_url = None; paging = None }
+    | _ :: _ ->
+        match page.next_url, Option.bind page.paging (fun cursors -> cursors.after) with
+        | None, Some after when String.trim after <> "" ->
+            let uri = Uri.remove_query_param (Uri.of_string url) "before" in
+            let uri = Uri.remove_query_param uri "after" in
+            { page with next_url = Some (Uri.to_string (Uri.add_query_param uri ("after", [ after ]))) }
+        | (Some _ | None), (Some _ | None) -> page
+
   (* Shared reader for the reply edges of a media object. They take the same
      paging parameters and return the same media-object page shape. *)
   let get_reply_edge_page ~edge ~fields ~extra_params ~access_token ~media_id
@@ -1954,7 +1967,7 @@ module Make (Config : CONFIG) = struct
           (fun response ->
             if response.status >= 200 && response.status < 300 then
               match Social_meta_graph_paging.of_body ~item:parse_thread_post response.body with
-              | Ok page -> on_result (Ok page)
+              | Ok page -> on_result (Ok (reply_page_with_cursor ~url page))
               | Error msg ->
                   on_result
                     (Error
@@ -1978,7 +1991,9 @@ module Make (Config : CONFIG) = struct
       ([GET /{media_id}/replies], fields {!reply_fields}), with a token.
       [reverse] (API default [true]) sorts newest first; [limit] is clamped
       to 1..100 (default 20). [position] selects the page by cursor or by a
-      [paging.next] URL, see {!Social_meta_graph_paging}. Use [has_replies] to
+      [paging.next] URL, see {!Social_meta_graph_paging}. When only an after
+      cursor is returned on a nonempty page, [next_url] is built from the
+      request options and cursor. Empty pages stop traversal. Use [has_replies] to
       decide whether to descend further. Needs [threads_read_replies].
 
       @see <https://developers.facebook.com/docs/threads/retrieve-and-manage-replies/replies-and-conversations> *)
@@ -2012,7 +2027,7 @@ module Make (Config : CONFIG) = struct
       ~access_token ~media_id ?position ?reverse ?limit on_result
 
   (* The account-bound readers keep their original result: the items and
-     [paging.cursors.after], which Meta also returns on the last page. *)
+     [paging.cursors.after]. An empty page terminates traversal. *)
   let with_account_page ~account_id ~media_id ?after read on_result =
     if String.trim media_id = "" then
       on_result (Error (invalid_input "media_id must not be empty"))
@@ -2036,8 +2051,8 @@ module Make (Config : CONFIG) = struct
 
   (** Immediate replies to a post or reply ([GET /{media_id}/replies]) with
       the account's stored credentials. Returns the items and
-      [paging.cursors.after] (present on the last page too; prefer
-      {!get_replies_page} and {!Social_meta_graph_paging.next_after}). *)
+      [paging.cursors.after] while the page is nonempty. An empty page ends
+      traversal. Token readers also support {!Social_meta_graph_paging.next_after}. *)
   let get_replies ~account_id ~media_id ?after ?reverse ?limit on_result =
     with_account_page ~account_id ~media_id ?after
       (fun ~access_token ~position ->
