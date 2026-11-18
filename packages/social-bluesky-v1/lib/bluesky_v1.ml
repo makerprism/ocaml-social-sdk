@@ -1510,7 +1510,11 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                 (Error_types.Connection_failed error))))
           on_locked_error)
       (fun credentials -> on_success credentials.Social_core.access_token)
-      on_error
+      (fun error ->
+        (* A transaction can fail after the session was cached but before the
+           refreshed credentials became durable. Never reuse that session. *)
+        invalidate_session ~account_id;
+        on_error error)
 
   (** Ensure valid session token and also return the DID *)
   let ensure_valid_token_with_did ~account_id on_success on_error =

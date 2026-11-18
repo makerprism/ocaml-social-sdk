@@ -1,6 +1,6 @@
 # Changelog
 
-- Add `COORDINATED_CONFIG` and `Make_coordinated` for account credential renewal held under a caller-provided lock through durable persistence.
+- Add `COORDINATED_CONFIG` and `Make_coordinated` for account credential renewal held under a caller-provided lock through durable persistence. Failed commits invalidate the session cache so subsequent callers cannot reuse an uncommitted session.
 
 All notable changes to this project will be documented in this file.
 

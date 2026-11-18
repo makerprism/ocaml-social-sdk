@@ -4648,12 +4648,13 @@ let () =
   print_endline "";
   print_endline "Total: 154 test functions"
 
-let test_coordinated_sessions ~fail_write =
+let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
   let stored = ref {
     Social_core.access_token = "did:plc:fixture";
     refresh_token = Some "eyJ-original-refresh";
     expires_at = None; auth_type = Social_core.Bearer; scope = None;
   } in
+  let original = !stored in
   let locked = ref false in
   let waiting = Queue.create () in
   let persist = ref None in
@@ -4667,7 +4668,7 @@ let test_coordinated_sessions ~fail_write =
       let post ?(headers=[]) ?body:_ url on_success _ =
         assert !locked;
         assert (String.ends_with ~suffix:"com.atproto.server.refreshSession" url);
-        let expected = if !requests = 0 then "eyJ-original-refresh" else "eyJ-rotated-refresh" in
+        let expected = if !requests = 0 || fail_commit then "eyJ-original-refresh" else "eyJ-rotated-refresh" in
         assert (List.assoc "Authorization" headers = "Bearer " ^ expected);
         incr requests;
         on_success { Social_core.status = 200; headers = [];
@@ -4690,7 +4691,12 @@ let test_coordinated_sessions ~fail_write =
         assert (not !locked);
         locked := true;
         run
-          (fun credentials -> release (); on_success credentials)
+          (fun credentials ->
+            if fail_commit then (
+              stored := original;
+              release ();
+              on_error (Error_types.Network_error (Error_types.Connection_failed "commit failed"))
+            ) else (release (); on_success credentials))
           (fun error -> release (); on_error error)
       in
       if !locked then Queue.add start waiting else start ()
@@ -4699,13 +4705,19 @@ let test_coordinated_sessions ~fail_write =
   let module Second = Social_bluesky_v1.Make_coordinated (Config) in
   let success token = assert (token = "access-jwt"); incr completed in
   let failure error =
-    if fail_write then incr failed else failwith (Error_types.error_to_string error)
+    if fail_write || fail_commit then incr failed else failwith (Error_types.error_to_string error)
   in
   First.ensure_valid_token ~account_id:"account" success failure;
-  if not fail_write then Second.ensure_valid_token ~account_id:"account" success failure;
+  if not fail_write && not fail_commit then Second.ensure_valid_token ~account_id:"account" success failure;
   assert (!requests = 1 && !completed = 0 && !locked);
   (match !persist with Some finish -> finish () | None -> assert false);
-  if fail_write then (
+  if fail_commit then (
+    assert (!failed = 1 && !completed = 0 && not !locked);
+    First.ensure_valid_token ~account_id:"account" success failure;
+    assert (!requests = 2 && !locked);
+    (match !persist with Some finish -> finish () | None -> assert false);
+    assert (!failed = 2 && !completed = 0 && not !locked)
+  ) else if fail_write then (
     assert (!failed = 1 && !completed = 0 && not !locked);
     assert ((!stored).Social_core.refresh_token = Some "eyJ-original-refresh")
   ) else (
@@ -4716,5 +4728,6 @@ let test_coordinated_sessions ~fail_write =
   )
 
 let () =
-  test_coordinated_sessions ~fail_write:false;
-  test_coordinated_sessions ~fail_write:true
+  test_coordinated_sessions ~fail_write:false ();
+  test_coordinated_sessions ~fail_write:true ();
+  test_coordinated_sessions ~fail_commit:true ~fail_write:false ()
