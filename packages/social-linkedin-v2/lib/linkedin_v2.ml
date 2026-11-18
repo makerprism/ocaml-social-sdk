@@ -1329,9 +1329,8 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
       without a request.
 
       Pairs with {!fetch_organization_accesses_by_token}, whose
-      [organization_id]s are the ids this takes. The token needs one of the
-      Community Management scopes ([r_organization_admin],
-      [rw_organization_admin]). *)
+      [organization_id]s are the ids this takes. The token needs
+      [rw_organization_admin]. *)
   let get_organizations ~access_token ~ids on_result =
     let ids =
       List.fold_left
@@ -1379,7 +1378,7 @@ module Make_with_options (Config : CONFIG) (Options : OPTIONS) = struct
                   else
                     on_result
                       (Error
-                         (parse_api_error ~required_scopes:[ "r_organization_admin" ]
+                         (parse_api_error ~required_scopes:[ "rw_organization_admin" ]
                             ~status_code:response.status ~body:response.body)))
                 (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
         in

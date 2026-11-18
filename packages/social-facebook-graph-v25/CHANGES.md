@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Video insight permission errors name `read_insights` and `pages_manage_engagement`. Page search no longer presents an unrelated OAuth scope as required; token/app-feature requirements remain documented.
+
 - Remove `post_impressions_unique` from `Page_posts.analytics_fields` and the legacy page-post request, following Meta’s metric deprecation. This avoids invalidating the entire inline insights expansion; reaction and click metrics remain. Correct the general-purpose page-post documentation.
 
 ### Fixed
