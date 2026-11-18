@@ -3461,3 +3461,61 @@ let () =
   test_validate_video_accepts_large_file_under_4gb ();
 
   print_endline "\n=== All tests passed! ==="
+
+let test_coordinated_refresh () =
+  Mock_http.reset ();
+  Mock_config.env_vars := [("TIKTOK_CLIENT_ID", "client"); ("TIKTOK_CLIENT_KEY", "client"); ("TIKTOK_CLIENT_SECRET", "secret")];
+  let credentials = {
+    Social_core.access_token = "old-access";
+    refresh_token = Some "current-refresh";
+    expires_at = Some "2020-01-01T00:00:00Z";
+    auth_type = Social_core.Bearer;
+    scope = None;
+  } in
+  Mock_config.current_credentials := credentials;
+  let locked = ref false in
+  let waiting = Queue.create () in
+  let persist = ref None in
+  let completed = ref 0 in
+  let module Config = struct
+    include Mock_config
+    let get_credentials ~account_id on_success on_error =
+      assert !locked;
+      Mock_config.get_credentials ~account_id on_success on_error
+    let update_credentials ~account_id ~credentials on_success on_error =
+      assert !locked;
+      persist := Some (fun () ->
+        Mock_config.update_credentials ~account_id ~credentials on_success on_error)
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      let release () =
+        locked := false;
+        if not (Queue.is_empty waiting) then (Queue.take waiting) ()
+      in
+      let start () =
+        assert (not !locked);
+        locked := true;
+        run
+          (fun credentials -> release (); on_success credentials)
+          (fun error -> release (); on_error error)
+      in
+      if !locked then Queue.add start waiting else start ()
+  end in
+  let module Provider = Social_tiktok_v1.Make_coordinated (Config) in
+  Mock_http.set_custom_post_handler (fun _ _ _ -> {
+    Social_core.status = 200; headers = [];
+    body = "{\"access_token\":\"new-access\",\"token_type\":\"bearer\",\"refresh_token\":\"rotated-refresh\",\"expires_in\":5184000}";
+  });
+  let run () = Provider.ensure_valid_token ~account_id:"account"
+    (fun token -> assert (token = "new-access"); incr completed)
+    (fun error -> failwith (Error_types.error_to_string error))
+  in
+  run ();
+  run ();
+  assert (!completed = 0 && !locked);
+  assert (List.length !Mock_http.post_calls = 1);
+  (match !persist with Some finish -> finish () | None -> assert false);
+  assert (!completed = 2 && not !locked);
+  assert (List.length !Mock_http.post_calls = 1);
+  assert ((!Mock_config.current_credentials).Social_core.refresh_token = Some "rotated-refresh")
+
+let () = test_coordinated_refresh ()
