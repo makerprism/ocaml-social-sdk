@@ -12,3 +12,26 @@
 
     Keep the existing public surface while documenting the typed refresh API. *)
 include module type of Threads_v1
+
+(** {1 Coordinated refresh}
+
+    [Make_coordinated] accepts [COORDINATED_CONFIG.with_refresh_lock]. The hook
+    must serialize the account across every process, run the supplied callback
+    inside the lock, and release the lock before delivering either completion
+    callback. It must keep the lock until asynchronous persistence finishes and
+    report commit failures through the error callback. Never acquire this lock
+    again outside an account-based operation.
+
+    [ensure_account_credentials] reloads credentials inside the lock and checks
+    expiry again. Workers can supply their refresh window and [allow_refresh]
+    independently of the read-side auto-refresh flag. Explicit
+    [refresh_account_credentials] forces a refresh, even without stored expiry.
+    Account reads and publishing use the same orchestrator and hook.
+
+    [Make] remains available with its existing uncoordinated configuration and
+    explicit-refresh behavior. Token-only OAuth helpers do not persist account
+    credentials and do not acquire an account lock.
+
+    Provider contract:
+    {{:https://developers.facebook.com/docs/threads/get-started/long-lived-tokens/}Threads long-lived tokens}.
+*)

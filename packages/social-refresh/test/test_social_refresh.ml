@@ -446,3 +446,64 @@ let () =
   test_orchestrator_credential_failures_still_write_health ();
   test_orchestrator_custom_health_mapping_can_write_nothing ();
   print_endline "social-refresh tests passed"
+
+(* A stale snapshot must be replaced under the lock before consuming a
+   single-use rotating refresh token. *)
+let test_scoped_lock_reloads_rotating_credentials () =
+  let old =
+    make_credentials ~refresh_token:"retired-refresh"
+      ~expires_at:(rfc3339_in_seconds 5) "stale-access"
+  in
+  let latest =
+    { old with Social_core.refresh_token = Some "current-refresh" }
+  in
+  let stored = ref latest in
+  let locked = ref false in
+  let pending = ref None in
+  let completed = ref false in
+  Social_refresh.Orchestrator.ensure_valid_access_token
+    ~with_refresh_lock:(fun ~account_id:_ run on_success on_error ->
+      locked := true;
+      run
+        (fun credentials ->
+          locked := false;
+          on_success credentials)
+        (fun error ->
+          locked := false;
+          on_error error))
+    ~account_id:"account"
+    ~load_credentials:(fun ~account_id:_ success _ -> success old)
+    ~reload_credentials:(fun ~account_id:_ success _ ->
+      assert !locked;
+      success !stored)
+    ~perform_refresh:(fun ~credentials success _ ->
+      assert !locked;
+      assert (credentials.refresh_token = Some "current-refresh");
+      pending :=
+        Some
+          (fun () ->
+            success
+              {
+                credentials with
+                access_token = "rotated-access";
+                refresh_token = Some "rotated-refresh";
+                expires_at = Some (rfc3339_in_seconds 4000);
+              }))
+    ~persist_credentials:(fun ~account_id:_ ~credentials success _ ->
+      assert !locked;
+      stored := credentials;
+      success ())
+    ~update_health:(fun ~account_id:_ ~status:_ ~error_message:_ success _ ->
+      assert !locked;
+      success ())
+    (fun credentials ->
+      assert (not !locked);
+      assert (credentials.refresh_token = Some "rotated-refresh");
+      completed := true)
+    (fun error -> failwith (Error_types.error_to_string error));
+  assert !locked;
+  assert (not !completed);
+  (match !pending with Some finish -> finish () | None -> assert false);
+  assert !completed
+
+let () = test_scoped_lock_reloads_rotating_credentials ()

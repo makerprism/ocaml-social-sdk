@@ -247,3 +247,16 @@ MIT
 ---
 
 General-purpose social media API libraries, maintained by [Makerprism](https://makerprism.com).
+
+
+### Coordinating Threads credential refresh
+
+Use `Social_threads_v1.Make_coordinated (Config)` with a
+`COORDINATED_CONFIG.with_refresh_lock` hook to serialize account refresh across
+workers, readers and publishers. The hook receives `account_id`, the operation,
+and success/error callbacks. Run the operation under your account lock, keep the
+lock through asynchronous credential persistence, and deliver success only after
+commit. Use `ensure_account_credentials ~allow_refresh:true
+~refresh_window_seconds:604800 ~account_id` in a proactive worker; it reloads and
+rechecks expiry under the same lock. Do not wrap the worker in a second lock.
+The existing `Make (Config)` remains compatible and does not provide coordination.

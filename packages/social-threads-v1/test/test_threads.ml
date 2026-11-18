@@ -5657,3 +5657,162 @@ let () =
   read (function | Error (Error_types.Network_error _) -> ()
     | Error err -> failwith (Error_types.error_to_string err)
     | Ok _ -> failwith "transport error accepted")
+
+(* A suspended persistence callback models overlapping worker/read requests.
+   The lock must survive the return from the HTTP callback. *)
+let test_coordinated_refresh () =
+  Mock_config.reset ();
+  Mock_config.env_vars := [ ("THREADS_AUTO_REFRESH_TOKEN", "true") ];
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          Social_core.access_token = "old-access";
+          refresh_token = None;
+          expires_at = Some (rfc3339_after_seconds 10);
+          auth_type = Social_core.Bearer;
+          scope = None;
+        } );
+    ];
+  let locked = ref false in
+  let waiting = Queue.create () in
+  let persist = ref None in
+  let completed = ref 0 in
+  let module Config = struct
+    include Mock_config
+
+    let update_credentials ~account_id ~credentials on_success on_error =
+      assert !locked;
+      persist :=
+        Some
+          (fun () ->
+            Mock_config.update_credentials ~account_id ~credentials on_success
+              on_error)
+
+    let get_credentials ~account_id on_success on_error =
+      assert !locked;
+      Mock_config.get_credentials ~account_id on_success on_error
+
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      let release () =
+        locked := false;
+        if not (Queue.is_empty waiting) then (Queue.take waiting) ()
+      in
+      let start () =
+        assert (not !locked);
+        locked := true;
+        run
+          (fun credentials ->
+            release ();
+            on_success credentials)
+          (fun error ->
+            release ();
+            on_error error)
+      in
+      if !locked then Queue.add start waiting else start ()
+  end in
+  let module Provider = Social_threads_v1.Make_coordinated (Config) in
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"access_token\":\"new-access\",\"token_type\":\"Bearer\",\"expires_in\":5184000}";
+      };
+      {
+        status = 200;
+        headers = [];
+        body = "{\"id\":\"user-1\",\"username\":\"alice\"}";
+      };
+      { status = 200; headers = []; body = "{\"id\":\"post-1\"}" };
+      {
+        status = 200;
+        headers = [];
+        body = "{\"id\":\"user-1\",\"username\":\"alice\"}";
+      };
+    ];
+  Provider.ensure_account_credentials ~refresh_window_seconds:604800
+    ~account_id:"acct-1"
+    (fun credentials ->
+      assert (credentials.access_token = "new-access");
+      incr completed)
+    (fun error -> failwith (Error_types.error_to_string error));
+  Provider.get_me ~account_id:"acct-1" (function
+    | Ok me ->
+        assert (me.id = "user-1");
+        incr completed
+    | Error error -> failwith (Error_types.error_to_string error));
+  Provider.post_single ~account_id:"acct-1" ~text:"fixture" ~media_urls:[]
+    (function
+    | Error_types.Success id ->
+        assert (id = "post-1");
+        incr completed
+    | Error_types.Partial_success _ | Error_types.Failure _ -> assert false);
+  assert (!completed = 0);
+  assert !locked;
+  assert (List.length !Mock_http.requests = 1);
+  (match !persist with Some finish -> finish () | None -> assert false);
+  assert (!completed = 3);
+  assert (not !locked);
+  assert (List.length !Mock_http.requests = 4);
+  assert (
+    (List.assoc "acct-1" !Mock_config.credentials_store).access_token
+    = "new-access")
+
+let () = test_coordinated_refresh ()
+
+let test_coordinated_explicit_refresh_without_expiry () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "account",
+        {
+          Social_core.access_token = "long-lived";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Social_core.Bearer;
+          scope = None;
+        } );
+    ];
+  let locked = ref false in
+  let module Config = struct
+    include Mock_config
+
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      locked := true;
+      run
+        (fun credentials ->
+          locked := false;
+          on_success credentials)
+        (fun error ->
+          locked := false;
+          on_error error)
+
+    let update_credentials ~account_id ~credentials on_success on_error =
+      assert !locked;
+      Mock_config.update_credentials ~account_id ~credentials on_success
+        on_error
+  end in
+  let module Provider = Social_threads_v1.Make_coordinated (Config) in
+  Mock_http.set_responses
+    [
+      {
+        status = 200;
+        headers = [];
+        body =
+          "{\"access_token\":\"refreshed\",\"token_type\":\"Bearer\",\"expires_in\":5184000}";
+      };
+    ];
+  let result = ref None in
+  Provider.refresh_account_credentials ~account_id:"account"
+    (fun credentials ->
+      assert (not !locked);
+      result := Some (Ok credentials))
+    (fun error -> result := Some (Error error));
+  (match !result with
+  | Some (Ok credentials) -> assert (credentials.access_token = "refreshed")
+  | Some (Error _) | None -> assert false);
+  assert (List.length !Mock_http.requests = 1)
+
+let () = test_coordinated_explicit_refresh_without_expiry ()
