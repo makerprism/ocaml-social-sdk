@@ -57,3 +57,8 @@
  (name test_social_public_host)
  (modules test_social_public_host)
  (libraries social-core))
+
+(test
+ (name test_social_capabilities)
+ (modules test_social_capabilities)
+ (libraries social-core))

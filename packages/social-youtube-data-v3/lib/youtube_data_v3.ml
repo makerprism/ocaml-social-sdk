@@ -1143,7 +1143,287 @@ module Make (Config : CONFIG) = struct
       ]);
     ]
 
+  (** {2 Video upload with explicit metadata} *)
+
+  (** A video's visibility. YouTube accepts exactly these three values in
+      [status.privacyStatus]
+      ({{:https://developers.google.com/youtube/v3/docs/videos#status.privacyStatus}}). *)
+  type privacy_status =
+    | Public
+    | Unlisted
+    | Private
+
+  let string_of_privacy_status = function
+    | Public -> "public"
+    | Unlisted -> "unlisted"
+    | Private -> "private"
+
+  (** The video resource sent to [videos.insert], exactly as the caller
+      wants it on YouTube. Nothing is derived, defaulted or mutated: an
+      empty [tags] list and an empty [category_id] omit those fields, and
+      the SDK never appends hashtags, truncates text or picks a visibility.
+      Endpoint facts the API itself enforces are validated in
+      {!validate_video_metadata} and applied in {!video_metadata_json}. *)
+  type video_metadata = {
+    title : string;
+    description : string;
+    tags : string list;
+    category_id : string;
+    privacy_status : privacy_status;
+    made_for_kids : bool;
+    publish_at : string option;
+    notify_subscribers : bool;
+    recording_location : recording_location option;
+  }
+
+  (* YouTube caps the title at 100 characters and the description at 5000
+     bytes (https://developers.google.com/youtube/v3/docs/videos), so the
+     two limits are counted in different units. *)
+  let utf8_length s =
+    let n = ref 0 in
+    String.iter
+      (fun c ->
+         (* count UTF-8 leading bytes only: 0xxxxxxx and 11xxxxxx *)
+         if Char.code c land 0xC0 <> 0x80 then incr n)
+      s;
+    !n
+
+  (** Endpoint-encoded requirements of [videos.insert]: [snippet.title] is
+      required and capped at 100 characters (UTF-8 codepoints), and
+      [snippet.description] at 5000 bytes
+      ({{:https://developers.google.com/youtube/v3/docs/videos}}). *)
+  let validate_video_metadata (metadata : video_metadata) :
+      (unit, Error_types.validation_error list) result =
+    let title_errors =
+      if metadata.title = "" then [ Error_types.Text_empty ]
+      else if utf8_length metadata.title > max_title_length then
+        [ Error_types.Text_too_long
+            { length = utf8_length metadata.title; max = max_title_length } ]
+      else []
+    in
+    let description_errors =
+      if String.length metadata.description > max_description_length then
+        [ Error_types.Text_too_long
+            { length = String.length metadata.description;
+              max = max_description_length } ]
+      else []
+    in
+    match title_errors @ description_errors with
+    | [] -> Ok ()
+    | errors -> Error errors
+
+  (** The serialized [videos.insert] metadata JSON for [metadata] together
+      with the [part] parameter it covers.
+
+      A scheduled upload ([publish_at]) is forced to [private]: YouTube
+      rejects a [publishAt] on a public or unlisted video
+      ({{:https://developers.google.com/youtube/v3/docs/videos#status.publishAt}}),
+      so this is endpoint validation, not a publishing default. *)
+  let video_metadata_json (metadata : video_metadata) =
+    let effective_privacy =
+      match metadata.publish_at with
+      | Some _ -> Private
+      | None -> metadata.privacy_status
+    in
+    let snippet_fields =
+      [ ("title", `String metadata.title);
+        ("description", `String metadata.description) ]
+      @ (match metadata.tags with
+         | [] -> []
+         | tags -> [ ("tags", `List (List.map (fun tag -> `String tag) tags)) ])
+      @ (if metadata.category_id = "" then []
+         else [ ("categoryId", `String metadata.category_id) ])
+    in
+    let status_fields =
+      [ ("privacyStatus", `String (string_of_privacy_status effective_privacy));
+        ("selfDeclaredMadeForKids", `Bool metadata.made_for_kids) ]
+      @ (match metadata.publish_at with
+         | Some timestamp -> [ ("publishAt", `String timestamp) ]
+         | None -> [])
+    in
+    ( Yojson.Basic.to_string
+        (`Assoc
+           ([ ("snippet", `Assoc snippet_fields);
+              ("status", `Assoc status_fields) ]
+            @ (match metadata.recording_location with
+               | Some location -> [ ("recordingDetails", recording_details_json location) ]
+               | None -> []))),
+      match metadata.recording_location with
+      | Some _ -> "snippet,status,recordingDetails"
+      | None -> "snippet,status" )
+
+  (* Downloads [video_url], optionally enforces the 2GB client limit, then
+     runs the resumable [videos.insert] upload: init with [metadata_json]
+     and [parts], PUT the bytes, and recover a 5xx/408/transport failure by
+     resuming from the byte offset the server reports. Shared by the
+     explicit {!upload_video} and the deprecated {!post_single}. *)
+  let resumable_upload ~access_token ~video_url ~metadata_json ~parts
+      ~notify_subscribers ~validate_media_before_upload on_result =
+    Config.Http.get ~headers:[] video_url
+      (fun video_response ->
+        if video_response.status >= 200 && video_response.status < 300 then
+          let video_data = video_response.body in
+          let file_size = String.length video_data in
+
+          (* Validate if requested *)
+          let validation_result =
+            if validate_media_before_upload then
+              let media : Platform_types.post_media = {
+                media_type = Platform_types.Video;
+                mime_type = List.assoc_opt "content-type" video_response.headers
+                            |> Option.value ~default:"video/mp4";
+                file_size_bytes = file_size;
+                width = None;
+                height = None;
+                duration_seconds = None;
+                alt_text = None;
+              } in
+              validate_media_file ~media
+            else
+              Ok ()
+          in
+
+          (match validation_result with
+          | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
+          | Ok () ->
+          let content_type =
+            match List.assoc_opt "content-type" video_response.headers with
+            | Some ct -> ct
+            | None -> "video/mp4"
+          in
+
+          let notify_param = if notify_subscribers then "true" else "false" in
+          let init_url = youtube_upload_base ^ "/videos?uploadType=resumable&part=" ^ parts ^ "&notifySubscribers=" ^ notify_param in
+          let init_headers = [
+            ("Authorization", "Bearer " ^ access_token);
+            ("Content-Type", "application/json");
+            ("X-Upload-Content-Length", string_of_int (String.length video_data));
+            ("X-Upload-Content-Type", content_type);
+          ] in
+
+          let parse_upload_response upload_response =
+            if upload_response.status >= 200 && upload_response.status < 300 then
+              try
+                let open Yojson.Basic.Util in
+                let json = Yojson.Basic.from_string upload_response.body in
+                let video_id = json |> member "id" |> to_string in
+                on_result (Error_types.Success video_id)
+              with _e ->
+                on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse response: %s" upload_response.body)))
+            else
+              on_result (Error_types.Failure (parse_api_error ~status_code:upload_response.status ~response_body:upload_response.body))
+          in
+
+          (* H5: Resumable upload recovery - query upload URI for byte offset and resume *)
+          let attempt_resume upload_url =
+            let resume_headers = [
+              ("Content-Range", "bytes */" ^ string_of_int (String.length video_data));
+            ] in
+            Config.Http.put ~headers:resume_headers ~body:"" upload_url
+              (fun resume_response ->
+                if resume_response.status = 308 then
+                  (* Server reports partial upload via Range header *)
+                  let received =
+                    match List.assoc_opt "range" resume_response.headers with
+                    | Some range_hdr ->
+                        (try
+                           let dash = String.index range_hdr '-' in
+                           int_of_string (String.sub range_hdr (dash + 1) (String.length range_hdr - dash - 1)) + 1
+                         with _ -> 0)
+                    | None -> 0
+                  in
+                  let total = String.length video_data in
+                  let remaining = total - received in
+                  let remaining_data = String.sub video_data received remaining in
+                  let resume_upload_headers = [
+                    ("Content-Type", content_type);
+                    ("Content-Length", string_of_int remaining);
+                    ("Content-Range", Printf.sprintf "bytes %d-%d/%d" received (total - 1) total);
+                  ] in
+                  Config.Http.put ~headers:resume_upload_headers ~body:remaining_data upload_url
+                    parse_upload_response
+                    (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+                else if resume_response.status >= 200 && resume_response.status < 300 then
+                  (* Upload was already complete *)
+                  parse_upload_response resume_response
+                else
+                  on_result (Error_types.Failure (parse_api_error ~status_code:resume_response.status ~response_body:resume_response.body)))
+              (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+          in
+
+          Config.Http.post ~headers:init_headers ~body:metadata_json init_url
+            (fun init_response ->
+              if init_response.status >= 200 && init_response.status < 300 then
+                (* Get upload URL from Location header *)
+                match List.assoc_opt "location" init_response.headers with
+                | Some upload_url ->
+                    (* Step 2: Upload video data to resumable URL *)
+                    let upload_headers = [
+                      ("Content-Type", content_type);
+                      ("Content-Length", string_of_int (String.length video_data));
+                    ] in
+
+                    Config.Http.put ~headers:upload_headers ~body:video_data upload_url
+                      (fun upload_response ->
+                        if upload_response.status >= 200 && upload_response.status < 300 then
+                          parse_upload_response upload_response
+                        else if upload_response.status >= 500 || upload_response.status = 408 then
+                          (* Server error or timeout - attempt resumable recovery *)
+                          attempt_resume upload_url
+                        else
+                          on_result (Error_types.Failure (parse_api_error ~status_code:upload_response.status ~response_body:upload_response.body)))
+                      (fun _err ->
+                        (* Network error during upload - attempt resumable recovery *)
+                        attempt_resume upload_url)
+                | None ->
+                    on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "No upload URL in response: %s" init_response.body)))
+              else
+                on_result (Error_types.Failure (parse_api_error ~status_code:init_response.status ~response_body:init_response.body)))
+            (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
+        else
+          on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to download video (%d)" video_response.status))))
+      (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
+
+  (** Upload a video to YouTube ([POST /upload/youtube/v3/videos], resumable)
+      with the metadata the caller supplies. Unlike {!post_single} this
+      sends exactly {!video_metadata}: no [#Shorts] suffix, no derived or
+      byte-truncated title, no default tags, visibility or category. Shorts
+      conventions, if wanted, are the caller's policy.
+
+      [media_urls] must contain the URL of one video file; it is downloaded
+      and uploaded with resumable recovery (5xx/408/transport failures
+      resume from the byte offset the server reports).
+
+      @param validate_media_before_upload When true, validates the video
+             file size after download but before upload. Practical limit:
+             2GB. Default: false *)
+  let upload_video ~account_id ~media_urls ~(metadata : video_metadata)
+      ?(validate_media_before_upload = false) on_result =
+    match (validate_video_metadata metadata, media_urls) with
+    | Error errors, _ ->
+        on_result (Error_types.Failure (Error_types.Validation_error errors))
+    | Ok (), [] ->
+        on_result
+          (Error_types.Failure (Error_types.Validation_error [ Error_types.Media_required ]))
+    | Ok (), video_url :: _ ->
+        ensure_valid_token ~account_id
+          (fun access_token ->
+            let metadata_json, parts = video_metadata_json metadata in
+            resumable_upload ~access_token ~video_url ~metadata_json ~parts
+              ~notify_subscribers:metadata.notify_subscribers
+              ~validate_media_before_upload on_result)
+          (fun err -> on_result (Error_types.Failure err))
+
   (** Upload video to YouTube Shorts
+
+      @deprecated since this module grew an explicit upload API. This entry
+      point derives publishing policy the caller never asked for when
+      [title], [description] or [tags] are empty: a byte-truncated title
+      from [text] (which can split a multibyte UTF-8 character), a
+      [" #Shorts"] hashtag suffix, ["shorts";"short"] tags, and defaults the
+      status (public, category 22, subscriber notification). Build a
+      {!video_metadata} explicitly and call {!upload_video}; the behavior
+      of this function is unchanged for existing callers.
 
       @param validate_media_before_upload When true, validates video file size after
              download but before upload. Practical limit: 2GB.
@@ -1153,8 +1433,8 @@ module Make (Config : CONFIG) = struct
       @param notify_subscribers When false, suppresses subscriber notifications.
              Default: true
       @param recording_location Where the video was recorded. When given, the
-             upload adds [recordingDetails] to both the video resource and the
-             [part] parameter. Omitted by default.
+              upload adds [recordingDetails] to both the video resource and the
+              [part] parameter. Omitted by default.
   *)
   let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(title="") ?(description="") ?(privacy_status="public") ?(tags=[]) ?(made_for_kids=false) ?(category_id="22") ?(validate_media_before_upload=false) ?publish_at ?(notify_subscribers=true) ?recording_location on_result =
     let _ = alt_texts in (* YouTube doesn't support alt text for videos *)
@@ -1162,189 +1442,67 @@ module Make (Config : CONFIG) = struct
     match validate_post ~text ~media_count () with
     | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
     | Ok () ->
+        (* Resolve metadata: use explicit params or derive from text. This
+           derivation is the publishing policy {!upload_video} refuses to
+           apply; it stays here for backward compatibility, payload shape
+           included: [tags] and [categoryId] are always sent, whatever
+           their value. *)
+        let resolved_title =
+          if title <> "" then title
+          else String.sub text 0 (min (String.length text) max_title_length)
+        in
+        let resolved_description =
+          if description <> "" then description
+          else text ^ " #Shorts"
+        in
+        let resolved_tags =
+          if tags <> [] then List.map (fun t -> `String t) tags
+          else [`String "shorts"; `String "short"]
+        in
+        (* When publish_at is set, force privacy to "private" per YouTube API requirement *)
+        let effective_privacy = match publish_at with
+          | Some _ -> "private"
+          | None -> privacy_status
+        in
+        let metadata_json =
+          Yojson.Basic.to_string
+            (`Assoc ([
+               ("snippet", `Assoc [
+                 ("title", `String resolved_title);
+                 ("description", `String resolved_description);
+                 ("tags", `List resolved_tags);
+                 ("categoryId", `String category_id);
+               ]);
+               ("status", `Assoc (
+                 [("privacyStatus", `String effective_privacy);
+                  ("selfDeclaredMadeForKids", `Bool made_for_kids)]
+                 @ (match publish_at with
+                    | Some ts -> [("publishAt", `String ts)]
+                    | None -> [])));
+             ] @ (match recording_location with
+                  | Some location -> [("recordingDetails", recording_details_json location)]
+                  | None -> [])))
+        in
+        let parts =
+          match recording_location with
+          | Some _ -> "snippet,status,recordingDetails"
+          | None -> "snippet,status"
+        in
         (* Validation ensures media_urls is non-empty *)
         let video_url = List.hd media_urls in
         ensure_valid_token ~account_id
           (fun access_token ->
-            (* Download video *)
-            Config.Http.get ~headers:[] video_url
-              (fun video_response ->
-                if video_response.status >= 200 && video_response.status < 300 then
-                  let video_data = video_response.body in
-                  let file_size = String.length video_data in
-
-                  (* Validate if requested *)
-                  let validation_result =
-                    if validate_media_before_upload then
-                      let media : Platform_types.post_media = {
-                        media_type = Platform_types.Video;
-                        mime_type = List.assoc_opt "content-type" video_response.headers
-                                    |> Option.value ~default:"video/mp4";
-                        file_size_bytes = file_size;
-                        width = None;
-                        height = None;
-                        duration_seconds = None;
-                        alt_text = None;
-                      } in
-                      validate_media_file ~media
-                    else
-                      Ok ()
-                  in
-
-                  (match validation_result with
-                  | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
-                  | Ok () ->
-                  let content_type =
-                    match List.assoc_opt "content-type" video_response.headers with
-                    | Some ct -> ct
-                    | None -> "video/mp4"
-                  in
-
-                  (* Resolve metadata: use explicit params or derive from text *)
-                  let resolved_title =
-                    if title <> "" then title
-                    else String.sub text 0 (min (String.length text) max_title_length)
-                  in
-                  let resolved_description =
-                    if description <> "" then description
-                    else text ^ " #Shorts"
-                  in
-                  let resolved_tags =
-                    if tags <> [] then List.map (fun t -> `String t) tags
-                    else [`String "shorts"; `String "short"]
-                  in
-
-                  (* When publish_at is set, force privacy to "private" per YouTube API requirement *)
-                  let effective_privacy = match publish_at with
-                    | Some _ -> "private"
-                    | None -> privacy_status
-                  in
-
-                  (* Build status fields, optionally including publishAt *)
-                  let status_fields =
-                    [("privacyStatus", `String effective_privacy);
-                     ("selfDeclaredMadeForKids", `Bool made_for_kids)]
-                    @ (match publish_at with
-                       | Some ts -> [("publishAt", `String ts)]
-                       | None -> [])
-                  in
-
-                  (* Step 1: Initialize resumable upload with metadata *)
-                  let video_metadata = `Assoc ([
-                    ("snippet", `Assoc [
-                      ("title", `String resolved_title);
-                      ("description", `String resolved_description);
-                      ("tags", `List resolved_tags);
-                      ("categoryId", `String category_id);
-                    ]);
-                    ("status", `Assoc status_fields);
-                  ] @ (match recording_location with
-                       | Some location -> [("recordingDetails", recording_details_json location)]
-                       | None -> [])) in
-
-                  let parts =
-                    match recording_location with
-                    | Some _ -> "snippet,status,recordingDetails"
-                    | None -> "snippet,status"
-                  in
-                  let notify_param = if notify_subscribers then "true" else "false" in
-                  let init_url = youtube_upload_base ^ "/videos?uploadType=resumable&part=" ^ parts ^ "&notifySubscribers=" ^ notify_param in
-                  let init_headers = [
-                    ("Authorization", "Bearer " ^ access_token);
-                    ("Content-Type", "application/json");
-                    ("X-Upload-Content-Length", string_of_int (String.length video_data));
-                    ("X-Upload-Content-Type", content_type);
-                  ] in
-
-                  let metadata_str = Yojson.Basic.to_string video_metadata in
-
-                  let parse_upload_response upload_response =
-                    if upload_response.status >= 200 && upload_response.status < 300 then
-                      try
-                        let open Yojson.Basic.Util in
-                        let json = Yojson.Basic.from_string upload_response.body in
-                        let video_id = json |> member "id" |> to_string in
-                        on_result (Error_types.Success video_id)
-                      with _e ->
-                        on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse response: %s" upload_response.body)))
-                    else
-                      on_result (Error_types.Failure (parse_api_error ~status_code:upload_response.status ~response_body:upload_response.body))
-                  in
-
-                  (* H5: Resumable upload recovery - query upload URI for byte offset and resume *)
-                  let attempt_resume upload_url =
-                    let resume_headers = [
-                      ("Content-Range", "bytes */" ^ string_of_int (String.length video_data));
-                    ] in
-                    Config.Http.put ~headers:resume_headers ~body:"" upload_url
-                      (fun resume_response ->
-                        if resume_response.status = 308 then
-                          (* Server reports partial upload via Range header *)
-                          let received =
-                            match List.assoc_opt "range" resume_response.headers with
-                            | Some range_hdr ->
-                                (try
-                                   let dash = String.index range_hdr '-' in
-                                   int_of_string (String.sub range_hdr (dash + 1) (String.length range_hdr - dash - 1)) + 1
-                                 with _ -> 0)
-                            | None -> 0
-                          in
-                          let total = String.length video_data in
-                          let remaining = total - received in
-                          let remaining_data = String.sub video_data received remaining in
-                          let resume_upload_headers = [
-                            ("Content-Type", content_type);
-                            ("Content-Length", string_of_int remaining);
-                            ("Content-Range", Printf.sprintf "bytes %d-%d/%d" received (total - 1) total);
-                          ] in
-                          Config.Http.put ~headers:resume_upload_headers ~body:remaining_data upload_url
-                            parse_upload_response
-                            (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
-                        else if resume_response.status >= 200 && resume_response.status < 300 then
-                          (* Upload was already complete *)
-                          parse_upload_response resume_response
-                        else
-                          on_result (Error_types.Failure (parse_api_error ~status_code:resume_response.status ~response_body:resume_response.body)))
-                      (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err)))
-                  in
-
-                  Config.Http.post ~headers:init_headers ~body:metadata_str init_url
-                    (fun init_response ->
-                      if init_response.status >= 200 && init_response.status < 300 then
-                        (* Get upload URL from Location header *)
-                        match List.assoc_opt "location" init_response.headers with
-                        | Some upload_url ->
-                            (* Step 2: Upload video data to resumable URL *)
-                            let upload_headers = [
-                              ("Content-Type", content_type);
-                              ("Content-Length", string_of_int (String.length video_data));
-                            ] in
-
-                            Config.Http.put ~headers:upload_headers ~body:video_data upload_url
-                              (fun upload_response ->
-                                if upload_response.status >= 200 && upload_response.status < 300 then
-                                  parse_upload_response upload_response
-                                else if upload_response.status >= 500 || upload_response.status = 408 then
-                                  (* Server error or timeout - attempt resumable recovery *)
-                                  attempt_resume upload_url
-                                else
-                                  on_result (Error_types.Failure (parse_api_error ~status_code:upload_response.status ~response_body:upload_response.body)))
-                              (fun _err ->
-                                (* Network error during upload - attempt resumable recovery *)
-                                attempt_resume upload_url)
-                        | None ->
-                            on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "No upload URL in response: %s" init_response.body)))
-                      else
-                        on_result (Error_types.Failure (parse_api_error ~status_code:init_response.status ~response_body:init_response.body)))
-                    (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
-                else
-                  on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to download video (%d)" video_response.status))))
-              (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
+            resumable_upload ~access_token ~video_url ~metadata_json ~parts
+              ~notify_subscribers ~validate_media_before_upload on_result)
           (fun err -> on_result (Error_types.Failure err))
   
   (** Post thread (YouTube doesn't support threads, posts only first item)
-      
-      @param validate_media_before_upload When true, validates video file size after 
+
+      @deprecated delegates to {!post_single} and therefore applies its
+      Shorts derivation to the first item; new code decides its own
+      metadata and calls {!upload_video}.
+
+      @param validate_media_before_upload When true, validates video file size after
              download but before upload. Practical limit: 2GB.
              Default: false
   *)

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Breaking:** removed the deprecated `Secure_random`, `Oauth_pkce`, `Meta_graph_error`, `Meta_graph_paging` and `Provider_error_detail` aliases. Use their `Social_`-prefixed equivalents; their APIs are unchanged.
+- **Added:** `Social_capabilities.eligible_video_formats ~platform ~width ~height ~duration_seconds` reports the posting formats a video can be published in on a platform, computed from the format-specific constraint records (`get_capability_with_format`): aspect ratio within the format's `video_aspect_ratios` at the 5% tolerance, duration within the format's cap. `Social_capabilities.classify_video_format` is deprecated in favour of it: choosing Reel over Regular is a publishing preference, not a platform fact, so the caller picks the default. Both functions stay available and unchanged.
 
 All notable changes to this project will be documented in this file.
 
