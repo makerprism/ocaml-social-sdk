@@ -1381,6 +1381,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       - Once in Bearer mode, every refresh rotates [refresh_jwt] via
         [Auth.refresh_session]; an attacker who exfiltrated a refresh_jwt
         becomes useless after our next refresh. *)
+  include (struct
   let ensure_valid_token_unlocked ~account_id on_success on_error =
     let module AuthMake = Auth.Make (Http) in
     let cache_and_succeed ~did ~access_jwt =
@@ -1518,6 +1519,12 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
            refreshed credentials became durable. Never reuse that session. *)
         invalidate_session ~account_id;
         on_error error)
+
+  end : sig
+    val ensure_valid_token :
+      account_id:string -> (string -> unit) ->
+      (Error_types.error -> unit) -> unit
+  end)
 
   (** Ensure valid session token and also return the DID *)
   let ensure_valid_token_with_did ~account_id on_success on_error =
