@@ -34,7 +34,22 @@ let test_zero_delay_continues_once () =
   assert (!calls = 1);
   print_endline "ok: Lwt_adapter.sleep continues once for a zero delay"
 
+let test_continuation_exception_reaches_error () =
+  let errors = ref [] in
+  let async_errors = ref [] in
+  let previous_hook = !Lwt.async_exception_hook in
+  Fun.protect ~finally:(fun () -> Lwt.async_exception_hook := previous_hook)
+    (fun () ->
+      Lwt.async_exception_hook := (fun exn -> async_errors := exn :: !async_errors);
+      Social_lwt.Lwt_adapter.sleep ~seconds:0.0
+        (fun () -> failwith "continuation failed")
+        (fun message -> errors := message :: !errors);
+      Lwt_main.run (Lwt_unix.sleep 0.01);
+      assert (!async_errors = []);
+      assert (List.length !errors = 1))
+
 let () =
   test_sleep_does_not_block_the_event_loop ();
   test_zero_delay_continues_once ();
+  test_continuation_exception_reaches_error ();
   print_endline "social-lwt tests passed"

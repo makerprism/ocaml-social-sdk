@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Route exceptions raised by sleep continuations to `on_error`, avoiding Lwt’s default process-exiting async exception hook.
+
 - Close each Cohttp connection on timeout, transport failure, and completion, including stalls before headers and while reading the body.
 
 ### Added

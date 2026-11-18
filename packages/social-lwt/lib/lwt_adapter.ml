@@ -99,13 +99,13 @@ let outcome_to_lwt_typed f =
 
 (** {!Social_core.SLEEP} for Lwt: schedules [on_continue] on the Lwt event
     loop after [seconds] instead of blocking the process. Exceptions raised
-    by [on_continue] itself are not routed to [on_error] (that would call a
-    second continuation); they reach [Lwt.async_exception_hook]. *)
+    by [on_continue] are routed to [on_error], like HTTP continuations. *)
 let sleep ~seconds on_continue on_error =
   Lwt.async (fun () ->
-    Lwt.try_bind
-      (fun () -> Lwt_unix.sleep seconds)
-      (fun () -> on_continue (); Lwt.return_unit)
+    Lwt.catch
+      (fun () ->
+        Lwt.bind (Lwt_unix.sleep seconds)
+          (fun () -> on_continue (); Lwt.return_unit))
       (fun exn -> on_error (Printexc.to_string exn); Lwt.return_unit))
 
 (** Adapt HTTP_CLIENT to Lwt *)
