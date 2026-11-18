@@ -3417,7 +3417,7 @@ let test_get_permalink () =
   Mock_http.set_responses
     [ { status = 200; headers = [];
         body = {|{"permalink_url":"https://example.com/p/1","id":"123_456"}|} } ];
-  Facebook.get_permalink ~post_id:"123_456" ~access_token:"tok"
+  Facebook.get_permalink ~post_id:"123_456/other?x=y" ~access_token:"tok"
     (function
       | Ok (Some "https://example.com/p/1") -> ()
       | Ok _ -> failwith "expected the permalink"
@@ -3426,7 +3426,8 @@ let test_get_permalink () =
    | [ ("GET", url, _, _) ] ->
        let uri = Uri.of_string url in
        assert (Uri.host uri = Some "graph.facebook.com");
-       assert (Uri.path uri = "/v25.0/123_456");
+       assert (Uri.path uri = "/v25.0/123_456%2Fother%3Fx=y");
+       assert (Uri.get_query_param uri "x" = None);
        assert (Uri.get_query_param uri "fields" = Some "permalink_url");
        assert (Uri.get_query_param uri "appsecret_proof" <> None)
    | _ -> failwith "expected one GET");

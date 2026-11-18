@@ -2854,7 +2854,7 @@ module Make (Config : CONFIG) = struct
       [GET /{post_id}?fields=permalink_url], with [appsecret_proof] when an
       app secret is configured. [Ok None] when Meta returns no permalink. *)
   let get_permalink ~post_id ~access_token on_result =
-    get ~path:post_id ~access_token ~fields:[ "permalink_url" ]
+    get ~path:(Uri.pct_encode post_id) ~access_token ~fields:[ "permalink_url" ]
       ~required_permissions:[ "pages_read_engagement" ]
       (function
         | Error err -> on_result (Error err)

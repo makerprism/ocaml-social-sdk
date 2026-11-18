@@ -260,3 +260,5 @@ without forwarding the member bearer token to signed upload URLs.
 
 Mastodon WebFinger rejects non-public hosts before HTTP. Bluesky discovered PDS
 and remote-media hosts use the same literal-address and hostname validation.
+
+Facebook permalink lookup percent-encodes the object ID as one path segment.
