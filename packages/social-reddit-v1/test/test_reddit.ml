@@ -2190,3 +2190,81 @@ let () =
   print_endline "  - Multi-subreddit posting (3 tests)";
   print_endline "";
   print_endline "Total: 59 test functions\n"
+
+let () =
+  let response body = { Social_core.status = 200; headers = []; body } in
+  let details = {|{"kind":"t5","data":{"id":"2qhm0","display_name":"ocaml","subscribers":42,"over18":false,"user_is_moderator":true,"link_flair_enabled":true,"icon_img":"https://example.org/icon.png"}}|} in
+  let listing = "{\"kind\":\"Listing\",\"data\":{\"children\":[" ^ details ^ "],\"after\":\"t5_next+id\",\"before\":null}}" in
+  let check_request path =
+    match !Mock_http.requests with
+    | [ ("GET", url, headers, _) ] ->
+        assert (Uri.host (Uri.of_string url) = Some "oauth.reddit.com");
+        assert (Uri.path (Uri.of_string url) = path);
+        assert (List.assoc_opt "Authorization" headers = Some "Bearer token");
+        assert (List.assoc_opt "User-Agent" headers = Some "web:example:v1 (by /u/example)");
+        Uri.of_string url
+    | [] | _ :: _ -> failwith "expected one GET"
+  in
+  Mock_config.reset ();
+  Mock_config.set_env "REDDIT_USER_AGENT" "web:example:v1 (by /u/example)";
+  Mock_http.set_response (response listing);
+  Reddit.get_moderated_subreddits_with_token ~access_token:"token" ~after:"t5_prev+id" ~limit:100
+    (function
+      | Stdlib.Ok page ->
+          assert (page.after = Some "t5_next+id"); assert (page.before = None);
+          (match page.data with
+          | [ subreddit ] -> assert (subreddit.id = "2qhm0");
+              assert (subreddit.display_name = "ocaml");
+              assert (subreddit.subscribers = Some 42);
+              assert (subreddit.icon_img = Some "https://example.org/icon.png")
+          | [] | _ :: _ -> failwith "expected one subreddit")
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  let uri = check_request "/subreddits/mine/moderator" in
+  assert (Uri.get_query_param uri "after" = Some "t5_prev+id");
+  assert (Uri.get_query_param uri "limit" = Some "100");
+  Mock_http.reset ();
+  Mock_http.set_response (response {|{"kind":"Listing","data":{"children":[],"after":null,"before":null}}|});
+  Reddit.get_moderated_subreddits_with_token ~access_token:"token"
+    (function | Stdlib.Ok page -> assert (page.data = []); assert (page.after = None)
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  Mock_http.reset ();
+  Mock_http.set_response (response details);
+  Reddit.get_subreddit_about_with_token ~access_token:"token" ~subreddit:"name/with?chars"
+    (function | Stdlib.Ok subreddit -> assert (subreddit.user_is_moderator = Some true)
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  ignore (check_request "/r/name%2Fwith%3Fchars/about");
+  Mock_http.reset ();
+  Mock_http.set_response (response {|[{"id":"template","text":"News","text_editable":true,"background_color":"#112233","text_color":"light"},{"id":"minimal","text":null}]|});
+  Reddit.get_subreddit_flairs_with_token ~access_token:"token" ~subreddit:"ocaml"
+    (function | Stdlib.Ok [ flair; minimal ] ->
+        assert (flair.text = Some "News"); assert (flair.text_editable = Some true);
+        assert (flair.background_color = Some "#112233"); assert (flair.text_color = Some "light");
+        assert (minimal.text = None); assert (minimal.text_editable = None)
+      | Stdlib.Ok _ -> failwith "expected two templates"
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err));
+  ignore (check_request "/r/ocaml/api/link_flair_v2");
+  let reads = [
+    (fun callback -> Reddit.get_moderated_subreddits_with_token ~access_token:"token" (fun result -> callback (Result.map (fun _ -> ()) result)));
+    (fun callback -> Reddit.get_subreddit_about_with_token ~access_token:"token" ~subreddit:"ocaml" (fun result -> callback (Result.map (fun _ -> ()) result)));
+    (fun callback -> Reddit.get_subreddit_flairs_with_token ~access_token:"token" ~subreddit:"ocaml" (fun result -> callback (Result.map (fun _ -> ()) result))) ] in
+  List.iter (fun read ->
+    List.iter (fun body ->
+      Mock_http.reset (); Mock_http.set_response (response body);
+      read (function | Stdlib.Error _ -> () | Stdlib.Ok () -> failwith "malformed response accepted"))
+      [ "not JSON"; {|{"data":{}}|} ];
+    Mock_http.reset ();
+    Mock_http.set_response { Social_core.status = 401; headers = [];
+      body = {|{"message":"Unauthorized","error":401}|} };
+    read (function | Stdlib.Error (Error_types.Auth_error Error_types.Token_invalid) -> ()
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+      | Stdlib.Ok () -> failwith "401 accepted");
+    Mock_http.reset ();
+    read (function | Stdlib.Error (Error_types.Network_error _) -> ()
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+      | Stdlib.Ok () -> failwith "transport failure accepted")) reads;
+  Mock_http.reset ();
+  Reddit.get_subreddit_about_with_token ~access_token:"token" ~subreddit:" "
+    (function | Stdlib.Error (Error_types.Validation_error _) -> ()
+      | Stdlib.Error err -> failwith (Error_types.error_to_string err)
+      | Stdlib.Ok _ -> failwith "blank subreddit accepted");
+  assert (!Mock_http.requests = [])

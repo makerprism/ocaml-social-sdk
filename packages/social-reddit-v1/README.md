@@ -200,3 +200,14 @@ match Reddit.validate_content ~title:"My Title" ~body:"My content" () with
 - [Reddit API Documentation](https://www.reddit.com/dev/api/)
 - [PRAW (Python Reddit API Wrapper)](https://praw.readthedocs.io/) - Reference implementation
 - [go-reddit](https://github.com/vartanbeno/go-reddit) - Go client used for test patterns
+
+### Token-only subreddit discovery
+
+`Make.get_moderated_subreddits_with_token ~access_token ?after ?limit` returns
+`Reads.subreddit_page`; follow its `after` cursor for the next page.
+`Make.get_subreddit_flairs_with_token ~access_token ~subreddit` returns
+`Reads.flair list`. `Make.get_subreddit_about_with_token ~access_token ~subreddit`
+returns `Reads.subreddit`, including optional `user_is_moderator`.
+All take a final result callback, require no stored account and use
+`REDDIT_USER_AGENT`. `OAuth.Make(Http).get_me ~user_agent ~access_token` already
+provides token-only `/api/v1/me` reads.

@@ -127,6 +127,9 @@ type media_upload = {
     the {!OAuth.Make} functions. *)
 let default_user_agent = "ocaml:social-reddit-v1:v0.1.0"
 
+(** Typed token-only subreddit discovery responses. *)
+module Reads = Reddit_v1_reads
+
 (** {1 OAuth Module} *)
 
 module OAuth = struct
@@ -755,6 +758,72 @@ module Make (Config : CONFIG) = struct
         request_id = None;
       }
   
+  let get_token_json ~access_token ~path ~query ~parse on_result =
+    let url =
+      Uri.with_query (Uri.of_string (api_base ^ path)) query |> Uri.to_string
+    in
+    let headers =
+      [
+        ("Authorization", "Bearer " ^ access_token);
+        ("User-Agent", request_user_agent ());
+      ]
+    in
+    Config.Http.get ~headers url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          let result =
+            try parse (Yojson.Basic.from_string response.body)
+            with Yojson.Json_error _ -> Stdlib.Error "Invalid JSON response"
+          in
+          on_result
+            (Result.map_error
+               (fun message ->
+                 Error_types.Internal_error
+                   ("Failed to parse Reddit response: " ^ message))
+               result)
+        else
+          on_result
+            (Stdlib.Error
+               (parse_api_error ~status_code:response.status
+                  ~response_body:response.body)))
+      (fun _ ->
+        on_result
+          (Stdlib.Error
+             (Error_types.Network_error
+                (Error_types.Connection_failed "Reddit request failed"))))
+
+  (** Token-only moderator Listing. See {!Reads} for scopes and paging. *)
+  let get_moderated_subreddits_with_token ~access_token ?after ?(limit = 100)
+      on_result =
+    let query =
+      [ ("limit", [ string_of_int (max 1 (min 100 limit)) ]) ]
+      @ match after with None -> [] | Some cursor -> [ ("after", [ cursor ]) ]
+    in
+    get_token_json ~access_token ~path:"/subreddits/mine/moderator" ~query
+      ~parse:Reads.page_of_json on_result
+
+  let with_subreddit subreddit on_result request =
+    if String.trim subreddit = "" then
+      on_result
+        (Stdlib.Error
+           (Error_types.Validation_error
+              [ Error_types.Invalid_url "subreddit must not be empty" ]))
+    else request (Uri.pct_encode (String.trim subreddit))
+
+  (** Token-only flair templates. See {!Reads} for the response contract. *)
+  let get_subreddit_flairs_with_token ~access_token ~subreddit on_result =
+    with_subreddit subreddit on_result (fun name ->
+        get_token_json ~access_token
+          ~path:("/r/" ^ name ^ "/api/link_flair_v2")
+          ~query:[] ~parse:Reads.flairs_of_json on_result)
+
+  (** Token-only subreddit details, including moderator status. See {!Reads}. *)
+  let get_subreddit_about_with_token ~access_token ~subreddit on_result =
+    with_subreddit subreddit on_result (fun name ->
+        get_token_json ~access_token
+          ~path:("/r/" ^ name ^ "/about")
+          ~query:[] ~parse:Reads.about_of_json on_result)
+
   (** {1 Token Management} *)
   
   (** Check if token needs refresh *)

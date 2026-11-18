@@ -1,7 +1,7 @@
 (library
  (name social_reddit_v1)
  (public_name social-reddit-v1)
- (modules social_reddit_v1 reddit_v1)
+ (modules reddit_v1_reads social_reddit_v1 reddit_v1)
  (libraries
   social-core
   social-refresh
