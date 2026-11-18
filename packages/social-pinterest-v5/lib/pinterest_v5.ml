@@ -504,7 +504,17 @@ module type CONFIG = sig
 end
 
 (** Make functor to create Pinterest provider with given configuration *)
-module Make (Config : CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   let pinterest_api_base = "https://api.pinterest.com/v5"
   let pinterest_auth_url = "https://www.pinterest.com/oauth"
   let pinterest_token_url = "https://api.pinterest.com/v5/oauth/token"
@@ -745,6 +755,8 @@ module Make (Config : CONFIG) = struct
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
     Social_refresh.Orchestrator.ensure_valid_access_token
+      ~with_refresh_lock:Config.with_refresh_lock
+      ~reload_credentials:load_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = OAuth.Metadata.refresh_buffer_seconds }
       ~map_persist_error:(fun err -> Error_types.Auth_error (Error_types.Refresh_failed err))
       ~account_id
@@ -1705,3 +1717,10 @@ module Make (Config : CONFIG) = struct
     else
       Ok ()
 end
+
+module Make (Config : CONFIG) = Make_coordinated (struct
+  include Config
+
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end)
