@@ -92,7 +92,18 @@ val account_of_json : Yojson.Basic.t -> (account, string) result
 (** Requires [id], [acct], the three counts (documented as integers, never
     null), [created_at], [locked] and [bot]. *)
 
-(** {1 Status} *)
+(** {1 Status}
+
+    [Social_mastodon_v1.Make.reply_to_status_exact ~account_id ~in_reply_to_id
+    ~text ?visibility ?idempotency_key callback] returns this typed status in
+    an [Error_types.api_result]. It sends [text] unchanged to
+    {{:https://docs.joinmastodon.org/methods/statuses/#create}POST /api/v1/statuses},
+    with [in_reply_to_id], [visibility], and an [Idempotency-Key] header.
+    Pass the target's local status ID on the posting instance. Supply a stable
+    key for retries; omission generates a new UUID. The response provides
+    [id], [uri], nullable [url], and [created_at] as documented by the
+    {{:https://docs.joinmastodon.org/entities/Status/}Status entity reference}.
+    The existing [reply_to_status] still adds the author's mention. *)
 
 (** A visibility outside the four Mastodon values. Other servers that
     implement this API send more (Pleroma and Akkoma send ["local"] and

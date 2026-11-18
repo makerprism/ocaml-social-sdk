@@ -265,3 +265,5 @@ Facebook permalink lookup percent-encodes the object ID as one path segment.
 
 Bluesky polls completed video job IDs until a blob is available, invalidates
 rejected cached JWTs, and preserves XRPC `RateLimit-Reset` retry delays.
+
+Mastodon `reply_to_status_exact`: `POST /api/v1/statuses`, exact status text, `in_reply_to_id`, visibility, Bearer auth and Idempotency-Key; parses the created Status entity. No target-author GET or automatic mention.

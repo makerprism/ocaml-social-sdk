@@ -62,3 +62,8 @@
  (name test_mastodon_status_reads_contract)
  (modules test_mastodon_status_reads_contract)
  (libraries social_mastodon_v1 social-core yojson str uri))
+
+(test
+ (name test_mastodon_exact_reply)
+ (modules test_mastodon_exact_reply)
+ (libraries social_mastodon_v1 social-core yojson))
