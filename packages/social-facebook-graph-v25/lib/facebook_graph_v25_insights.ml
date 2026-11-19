@@ -162,6 +162,138 @@ let by_type name metrics =
   | Some (By_type counts) -> Some counts
   | Some (Count _) | None -> None
 
+(* ---------- Typed metrics, descriptors and projections ----------
+
+    A response series is identified by the free-form [name] Meta sent.
+    The types below give the metrics this package documents a fixed
+    identity, so a consumer can ask for "the unique viewers of this
+    post" without tracking Meta's renames: the descriptor carries the
+    request name, the older names that still report the same figure,
+    what the metric counts and how values aggregate. *)
+
+type typed_metric =
+  | Page_follows
+  | Page_daily_follows_unique
+  | Page_media_view
+  | Page_unique_viewers
+  | Post_media_view
+  | Post_unique_viewers
+  | Post_organic_unique_viewers
+  | Post_reactions_by_type_total
+  | Post_clicks
+  | Post_clicks_by_type
+  | Reel_plays
+
+(* Preference order: [series] and [typed_metric_of_name] resolve a set
+   of names to the first metric that claims one of them. *)
+let all_typed_metrics =
+  [ Page_follows; Page_daily_follows_unique; Page_media_view; Page_unique_viewers;
+    Post_media_view; Post_unique_viewers; Post_organic_unique_viewers;
+    Post_reactions_by_type_total; Post_clicks; Post_clicks_by_type; Reel_plays ]
+
+type unit_ =
+  | Views
+  | Unique_viewers
+  | Followers
+  | Clicks
+  | Reactions
+
+type aggregation =
+  | Running_total
+  | Per_period
+  | Lifetime_value
+
+type edge = Page_edge | Post_edge | Video_edge
+
+type descriptor = {
+  request_name : string;
+  aliases : string list;
+  unit_ : unit_;
+  aggregation : aggregation;
+  edges : edge list;
+}
+
+let descriptor = function
+  | Page_follows ->
+      { request_name = "page_follows"; aliases = [ "page_fans" ]; unit_ = Followers;
+        aggregation = Running_total; edges = [ Page_edge ] }
+  | Page_daily_follows_unique ->
+      { request_name = "page_daily_follows_unique"; aliases = []; unit_ = Followers;
+        aggregation = Per_period; edges = [ Page_edge ] }
+  | Page_media_view ->
+      { request_name = "page_media_view"; aliases = [ "page_impressions" ]; unit_ = Views;
+        aggregation = Per_period; edges = [ Page_edge ] }
+  | Page_unique_viewers ->
+      { request_name = "page_total_media_view_unique"; aliases = [ "page_impressions_unique" ];
+        unit_ = Unique_viewers; aggregation = Per_period; edges = [ Page_edge ] }
+  | Post_media_view ->
+      { request_name = "post_media_view"; aliases = [ "post_impressions" ]; unit_ = Views;
+        aggregation = Lifetime_value; edges = [ Post_edge ] }
+  | Post_unique_viewers ->
+      { request_name = "post_total_media_view_unique"; aliases = [ "post_impressions_unique" ];
+        unit_ = Unique_viewers; aggregation = Lifetime_value; edges = [ Post_edge; Video_edge ] }
+  | Post_organic_unique_viewers ->
+      { request_name = "post_impressions_organic_unique"; aliases = [];
+        unit_ = Unique_viewers; aggregation = Lifetime_value; edges = [ Post_edge ] }
+  | Post_reactions_by_type_total ->
+      { request_name = "post_reactions_by_type_total"; aliases = []; unit_ = Reactions;
+        aggregation = Lifetime_value; edges = [ Post_edge ] }
+  | Post_clicks ->
+      { request_name = "post_clicks"; aliases = []; unit_ = Clicks;
+        aggregation = Lifetime_value; edges = [ Post_edge ] }
+  | Post_clicks_by_type ->
+      { request_name = "post_clicks_by_type"; aliases = []; unit_ = Clicks;
+        aggregation = Lifetime_value; edges = [ Post_edge ] }
+  | Reel_plays ->
+      { request_name = "fb_reels_total_plays";
+        aliases = [ "fb_reels_total_views"; "blue_reels_play_count" ];
+        unit_ = Views; aggregation = Lifetime_value; edges = [ Video_edge ] }
+
+let names_of_typed metric =
+  let d = descriptor metric in
+  d.request_name :: d.aliases
+
+let typed_metric_of_name name =
+  List.find_opt (fun metric -> List.mem name (names_of_typed metric)) all_typed_metrics
+
+let request_names metrics =
+  List.map (fun metric -> (descriptor metric).request_name) metrics
+
+let series typed metrics =
+  List.find_map (fun name -> find name metrics) (names_of_typed typed)
+
+let reel_plays_metrics = names_of_typed Reel_plays
+
+let first_count (metric : metric) =
+  match metric.points with
+  | { value = Count n; _ } :: _ -> Some n
+  | { value = By_type _; _ } :: _ | [] -> None
+
+(* The name that answered travels with the count: which of the alias
+   names a response used is provider identity, not consumer data. *)
+let reel_plays metrics =
+  List.find_map
+    (fun name ->
+      Option.map (fun n -> (name, n)) (Option.bind (find name metrics) first_count))
+    reel_plays_metrics
+
+(* [page_follows] reports the follower total as of each day, so every
+   point is an absolute count. The day is the date part of [end_time]
+   (an ISO 8601 timestamp; its first ten characters are the date).
+   Points without a usable [end_time], and [By_type] values, carry no
+   day total and are left out. *)
+let follower_totals_by_day metrics =
+  match series Page_follows metrics with
+  | None -> []
+  | Some metric ->
+      List.filter_map
+        (fun (point : point) ->
+          match (point.value, point.end_time) with
+          | Count total, Some end_time when String.length end_time >= 10 ->
+              Some (String.sub end_time 0 10, total)
+          | Count _, Some _ | Count _, None | By_type _, Some _ | By_type _, None -> None)
+        metric.points
+
 let granularity = function
   | Day -> Some Analytics_types.Day
   | Week -> Some Analytics_types.Week

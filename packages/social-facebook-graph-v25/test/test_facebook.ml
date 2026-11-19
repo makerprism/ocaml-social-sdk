@@ -3998,6 +3998,112 @@ let test_page_insights_for_account () =
    | _ -> failwith "expected one GET");
   print_endline "✓ Page insights for account"
 
+let parse_insights_fixture body =
+  match Insights.parse body with
+  | Ok metrics -> metrics
+  | Error e -> failwith ("insights fixture did not parse: " ^ e)
+
+(* Typed descriptors: a rename is one typed metric, every request name
+   and alias resolves to exactly one, and the descriptor carries the
+   unit, aggregation and edges (deprecated names from
+   https://developers.facebook.com/docs/platforminsights/page/deprecated-metrics,
+   edge applicability from the insights and video insights
+   references). *)
+let test_insights_typed_descriptors () =
+  assert (Insights.request_names
+            [ Insights.Page_follows; Insights.Page_media_view; Insights.Page_unique_viewers ]
+          = [ "page_follows"; "page_media_view"; "page_total_media_view_unique" ]);
+  assert (Insights.typed_metric_of_name "page_fans" = Some Insights.Page_follows);
+  assert (Insights.typed_metric_of_name "page_impressions_unique"
+          = Some Insights.Page_unique_viewers);
+  assert (Insights.typed_metric_of_name "post_impressions_unique"
+          = Some Insights.Post_unique_viewers);
+  assert (Insights.typed_metric_of_name "post_total_media_view_unique"
+          = Some Insights.Post_unique_viewers);
+  assert (Insights.typed_metric_of_name "blue_reels_play_count" = Some Insights.Reel_plays);
+  assert (Insights.typed_metric_of_name "page_no_such_metric" = None);
+  List.iter
+    (fun metric ->
+      let d = Insights.descriptor metric in
+      List.iter
+        (fun name ->
+          match Insights.typed_metric_of_name name with
+          | Some resolved -> assert (resolved = metric)
+          | None -> failwith ("unresolved descriptor name: " ^ name))
+        (d.request_name :: d.aliases))
+    Insights.all_typed_metrics;
+  let page_follows = Insights.descriptor Insights.Page_follows in
+  assert (page_follows.aggregation = Insights.Running_total);
+  assert (page_follows.unit_ = Insights.Followers);
+  assert (page_follows.edges = [ Insights.Page_edge ]);
+  let post_unique_viewers = Insights.descriptor Insights.Post_unique_viewers in
+  assert (post_unique_viewers.edges = [ Insights.Post_edge; Insights.Video_edge ]);
+  assert ((Insights.descriptor Insights.Reel_plays).edges = [ Insights.Video_edge ]);
+  assert ((Insights.descriptor Insights.Page_daily_follows_unique).aggregation
+          = Insights.Per_period);
+  print_endline "✓ Insights typed metric descriptors"
+
+(* [series] follows descriptor order, not the order Meta listed the
+   series in, so a rename cannot flip which figure wins. *)
+let test_insights_series_prefers_request_name () =
+  let both_names = parse_insights_fixture {|{"data":[
+    {"name":"post_impressions_unique","period":"lifetime","values":[{"value":450}]},
+    {"name":"post_total_media_view_unique","period":"lifetime","values":[{"value":500}]}]}|} in
+  (match Insights.series Insights.Post_unique_viewers both_names with
+   | Some { name = "post_total_media_view_unique"; _ } -> ()
+   | Some { name; _ } -> failwith ("series preferred " ^ name ^ " over the v25 name")
+   | None -> failwith "no series answered for Post_unique_viewers");
+  let legacy_only =
+    parse_insights_fixture
+      {|{"data":[{"name":"post_impressions_unique","period":"lifetime","values":[{"value":90}]}]}|} in
+  (match Insights.series Insights.Post_unique_viewers legacy_only with
+   | Some { name = "post_impressions_unique"; _ } -> ()
+   | _ -> failwith "the deprecated name should answer for its successor");
+  let no_family_member =
+    parse_insights_fixture {|{"data":[{"name":"page_video_views","values":[{"value":1}]}]}|} in
+  assert (Insights.series Insights.Page_follows no_family_member = None);
+  print_endline "✓ Insights series resolves renames by descriptor order"
+
+(* The Reel plays family: [fb_reels_total_plays] (includes replays) is
+   the documented total; [fb_reels_total_views] is not in the video
+   insights reference but has been observed; [blue_reels_play_count]
+   excludes replays. A member Meta left without a figure does not
+   answer. *)
+let test_insights_reel_plays () =
+  assert (Insights.reel_plays_metrics
+          = [ "fb_reels_total_plays"; "fb_reels_total_views"; "blue_reels_play_count" ]);
+  let plays body = Insights.reel_plays (parse_insights_fixture body) in
+  assert (plays {|{"data":[
+    {"name":"blue_reels_play_count","period":"lifetime","values":[{"value":700}]},
+    {"name":"fb_reels_total_plays","period":"lifetime","values":[{"value":900}]}]}|}
+    = Some ("fb_reels_total_plays", 900));
+  assert (plays {|{"data":[
+    {"name":"fb_reels_total_plays","period":"lifetime","values":[{"value":null}]},
+    {"name":"blue_reels_play_count","period":"lifetime","values":[{"value":700}]}]}|}
+    = Some ("blue_reels_play_count", 700));
+  assert (plays
+            {|{"data":[{"name":"fb_reels_total_views","period":"lifetime","values":[{"value":650}]}]}|}
+    = Some ("fb_reels_total_views", 650));
+  assert (plays {|{"data":[]}|} = None);
+  print_endline "✓ Insights reel plays alias chain"
+
+(* [page_follows] reports the follower total as of each day, so every
+   point is an absolute; the day is the date part of [end_time].
+   Points without a figure or without [end_time] carry no day total. *)
+let test_insights_follower_totals_by_day () =
+  let metrics =
+    parse_insights_fixture {|{"data":[
+      {"name":"page_follows","period":"day","values":[
+        {"value":1200,"end_time":"2026-11-15T08:00:00+0000"},
+        {"value":1203,"end_time":"2026-11-16T08:00:00+0000"},
+        {"value":null,"end_time":"2026-11-17T08:00:00+0000"},
+        {"value":1207}],
+       "title":"Daily Follows","id":"123/insights/page_follows/day"}]}|} in
+  assert (Insights.follower_totals_by_day metrics
+          = [ ("2026-11-15", 1200); ("2026-11-16", 1203) ]);
+  assert (Insights.follower_totals_by_day (parse_insights_fixture {|{"data":[]}|}) = []);
+  print_endline "✓ Insights follower totals by day"
+
 (* Regression: the legacy analytics calls sent no appsecret_proof, so apps
    with "Require App Secret" enabled could not read insights. *)
 let test_legacy_analytics_send_appsecret_proof () =
@@ -4066,6 +4172,10 @@ let () =
   test_contextual_permission_errors ();
   test_video_insights_reels ();
   test_page_insights_for_account ();
+  test_insights_typed_descriptors ();
+  test_insights_series_prefers_request_name ();
+  test_insights_reel_plays ();
+  test_insights_follower_totals_by_day ();
   test_legacy_analytics_send_appsecret_proof ();
   test_account_analytics_parsing ();
   test_post_analytics_parsing ();
