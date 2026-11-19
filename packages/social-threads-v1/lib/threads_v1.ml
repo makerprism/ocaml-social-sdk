@@ -1068,16 +1068,6 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
   let http_delete url on_success on_error =
     Config.Http.delete url on_success on_error
 
-  let is_token_expired = function
-    | None -> false
-    | Some expires_at ->
-        (match Social_refresh.Time.needs_refresh
-                 ~refresh_window_seconds:(token_expiry_skew_seconds ())
-                 expires_at
-         with
-         | Ok refresh_needed -> refresh_needed
-         | Error _ -> true)
-
   let acquire_credentials ~with_refresh_lock ~reused ~renewed ?refresh_window_seconds ?(force_refresh = false)
       ?(allow_refresh = auto_refresh_token_enabled ()) ~account_id on_success
       on_error =

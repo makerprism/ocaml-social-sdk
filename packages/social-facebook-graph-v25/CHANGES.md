@@ -1,4 +1,6 @@
 # Unreleased
+- `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
+
 
 - Add `OAuth.Scopes.page_insights` (`pages_read_engagement`, `pages_read_user_content`, `read_insights`) and `OAuth.Scopes.page_comment_management` (`pages_read_engagement`, `pages_read_user_content`, `pages_manage_engagement`): per-operation scope requirements as scope strings. Page insights need both read permissions together; the endpoints answer permission error (#10) until `pages_read_user_content` joins `pages_read_engagement`.
 

@@ -1,4 +1,6 @@
 # Unreleased
+- `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
+
 
 - Add `Posts.list_fields`: the fields parameter the user-media listing requests (every `Posts.post` field except `username`). `get_user_media_page`, `get_user_media_page_detailed` take `~fields` optionally and default to it; `get_user_media` already requested exactly this selection. Explicit `~fields` callers are unchanged.
 - Add `OAuth.Scopes.insights` (`instagram_business_manage_insights`) and `OAuth.Scopes.comment_management` (`instagram_business_manage_comments`): per-operation scope requirements as scope strings, for comparing against a granted-scope string.

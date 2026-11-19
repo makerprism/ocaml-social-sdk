@@ -440,8 +440,6 @@ module Mock_config = struct
     stored_credentials := credentials;
     on_success ()
 
-  let encrypt data on_success _ = on_success data
-  let decrypt data on_success _ = on_success data
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _ = on_success ()
   let resize_image ~data:_ ~mime_type:_ ~max_bytes:_ on_result = on_result None
 end

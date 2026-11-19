@@ -1,4 +1,6 @@
 # Unreleased
+- `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
+
 
 - `validate_post` counts post text in Unicode code points (the lexicon caps `text` at 300 graphemes and 3,000 code points) instead of UTF-8 bytes, so accented text is no longer over-counted at the 300 limit.
 

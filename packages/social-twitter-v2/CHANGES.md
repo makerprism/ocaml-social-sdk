@@ -1,4 +1,6 @@
 # Unreleased
+- `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
+
 
 - Token-endpoint refresh failures keep their kind: `refresh_access_token_typed` reports a dead refresh grant (RFC 6749 `invalid_grant`, or Twitter's `invalid_request` "value passed for the token was invalid") as `Auth_error Token_invalid`, transport failures as `Network_error`, and every other rejection as `Auth_error (Refresh_failed _)` with the message `refresh_access_token` has always produced. `acquire_credentials`/`ensure_valid_token` now deliver these typed failures instead of wrapping every refresh error in `Refresh_failed`, so consumers can distinguish "reconnect this account" from a transient outage. The string `refresh_access_token` remains and renders the same rejection text (transport failures now render through `Error_types.error_to_string`). App-level codes (`invalid_client`, `unauthorized_client`) deliberately stay `Refresh_failed`: they are not evidence about the user's stored token. New pure helper `OAuth.dead_refresh_token_error ~status_code body`.
 

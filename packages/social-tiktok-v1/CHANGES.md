@@ -1,4 +1,6 @@
 # Unreleased
+- `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
+
 
 - Add `Error.reason_of_error`: typed reasons for the Content Posting API error codes the SDK keeps in `Api_error.raw_response` — `Client_not_audited` (`unaudited_client_can_only_post_to_private_accounts`) and `Source_url_not_verified` (`url_ownership_unverified`), each carrying the exact reported code and message; every other code stays `Unrecognized` with its text preserved, and errors without a TikTok error body return `None`. Classification is exact-code, not prefix or message matching.
 - Add `OAuth.Scopes.publish` (`user.info.basic`, `video.publish`, `video.upload`): the scopes publishing needs in either source mode, direct post and inbox/FILE_UPLOAD.

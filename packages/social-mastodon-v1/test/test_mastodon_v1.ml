@@ -144,12 +144,6 @@ module Mock_config = struct
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
     on_success ()
   
-  let encrypt _data on_success _on_error =
-    on_success "encrypted_data"
-  
-  let decrypt _data on_success _on_error =
-    on_success {|{"access_token":"test_token"}|}
-
   let sleep ~seconds:_ on_success _on_error =
     on_success ()
 

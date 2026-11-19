@@ -1,3 +1,7 @@
+# Unreleased
+
+- **Breaking:** `Lwt_adapter.Config_to_lwt` no longer wraps `encrypt` / `decrypt`: `Social_core.CONFIG` dropped those obligations because no SDK operation calls them.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

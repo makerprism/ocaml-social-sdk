@@ -1,4 +1,7 @@
 # Unreleased
+- **Breaking:** removed `with_retry`, `rate_limit_info` and `parse_rate_limit_headers` from `Make` results. No Pinterest operation called `with_retry` (so it never protected one), and the supported retry utility is `social-core` `Social_http_retry.read_with_retry`, which knows transport failures and a delay budget. `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members.
+- Deleted `lib/pinterest_v5_enhanced.ml.reference`, an unbuilt draft (excluded from the dune modules) that still targeted the pre-split `Social_provider_core`.
+
 - The token exchange reads the granted `scope` string with the `social-core` `Social_oauth_scope` tokenizer instead of a local comma/space splitter: any comma or whitespace separation counts, and comparison is case-insensitive like every other package. Previously only comma- or space-separated exact-case matches were recognized.
 
 - Parse analytics reports with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged.

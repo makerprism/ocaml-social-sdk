@@ -33,8 +33,6 @@ module Mock_config = struct
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let sleep ~seconds:_ on_success _on_error = on_success ()
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
 end
@@ -87,8 +85,6 @@ module Contract_config = struct
   let get_env _key = None
   let get_credentials ~account_id:_ _on_success on_error = on_error "not-used"
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let sleep ~seconds:_ on_success _on_error = on_success ()
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
 end

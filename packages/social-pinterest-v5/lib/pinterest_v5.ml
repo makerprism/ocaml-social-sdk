@@ -494,8 +494,6 @@ module type CONFIG = sig
   val get_env : string -> string option
   val get_credentials : account_id:string -> (credentials -> unit) -> (string -> unit) -> unit
   val update_credentials : account_id:string -> credentials:credentials -> (unit -> unit) -> (string -> unit) -> unit
-  val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
-  val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
 
   (** Non-blocking timer used for retry backoff and media-processing polls.
@@ -632,74 +630,6 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
         raw_response = Some response_body;
         request_id = None;
       }
-
-  (** {1 Rate Limit Header Parsing} *)
-
-  (** Parsed rate limit information from response headers *)
-  type rate_limit_info = {
-    limit: int option;
-    remaining: int option;
-    reset: int option;
-  }
-
-  (** Parse rate limit headers from an HTTP response.
-
-      Pinterest returns:
-      - X-RateLimit-Limit: requests allowed per interval
-      - X-RateLimit-Remaining: requests remaining
-      - X-RateLimit-Reset: seconds until the limit resets
-  *)
-  let parse_rate_limit_headers (headers : (string * string) list) : rate_limit_info =
-    let find_int name =
-      let lower_name = String.lowercase_ascii name in
-      List.find_map (fun (k, v) ->
-        if String.lowercase_ascii k = lower_name then
-          (try Some (int_of_string (String.trim v)) with _ -> None)
-        else
-          None
-      ) headers
-    in
-    {
-      limit = find_int "x-ratelimit-limit";
-      remaining = find_int "x-ratelimit-remaining";
-      reset = find_int "x-ratelimit-reset";
-    }
-
-  (** {1 Retry Logic} *)
-
-  (** Retry a request-making function on transient failures (429 and 5xx).
-
-      @param max_retries Maximum number of retry attempts (default: 3)
-      @param initial_delay_seconds Initial delay before first retry (default: 1.0)
-      @param make_request Function that issues the HTTP request and calls on_result
-      @param on_result Final continuation receiving the outcome
-  *)
-  let with_retry ?(max_retries=3) ?(initial_delay_seconds=1.0) ~make_request on_result =
-    let max_delay = 60.0 in
-    let rec loop attempt delay =
-      make_request (fun response ->
-        if response.status = 429 || response.status >= 500 then begin
-          if attempt < max_retries then begin
-            let actual_delay =
-              if response.status = 429 then
-                let rl = parse_rate_limit_headers response.headers in
-                match rl.reset with
-                | Some secs when secs > 0 -> min (float_of_int secs) max_delay
-                | _ -> delay
-              else
-                delay
-            in
-            (* If the runtime cannot schedule the backoff, hand back the
-               transient response rather than retrying immediately. *)
-            Config.sleep ~seconds:actual_delay
-              (fun () -> loop (attempt + 1) (min (delay *. 2.0) max_delay))
-              (fun _ -> on_result response)
-          end else
-            on_result response
-        end else
-          on_result response)
-    in
-    loop 0 initial_delay_seconds
 
   let normalize_content_type content_type =
     let lowered = String.lowercase_ascii content_type in

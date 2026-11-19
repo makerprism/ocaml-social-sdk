@@ -124,12 +124,6 @@ module Mock_config = struct
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
     on_success ()
   
-  let encrypt _data on_success _on_error =
-    on_success "encrypted_data"
-  
-  let decrypt _data on_success _on_error =
-    on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
-  
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
     on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
@@ -483,8 +477,6 @@ module Mock_config_refresh_success = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     refresh_success_statuses := status :: !refresh_success_statuses;
     on_success ()
@@ -538,8 +530,6 @@ module Mock_config_refresh_missing = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     refresh_missing_statuses := status :: !refresh_missing_statuses;
     on_success ()
@@ -597,8 +587,6 @@ module Mock_config_refresh_failed = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     refresh_failed_statuses := status :: !refresh_failed_statuses;
     on_success ()
@@ -662,8 +650,6 @@ module Mock_config_refresh_preserve = struct
   let update_credentials ~account_id:_ ~credentials on_success _on_error =
     refresh_preserve_updated_refresh := credentials.Social_core.refresh_token;
     on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -714,8 +700,6 @@ module Mock_config_no_refresh = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -767,8 +751,6 @@ module Mock_config_missing_client = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     missing_client_statuses := status :: !missing_client_statuses;
     on_success ()
@@ -832,8 +814,6 @@ module Mock_config_mixed_payload = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -1202,8 +1182,6 @@ module Mock_config_reply_quote_contract = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -1361,8 +1339,6 @@ module Mock_config_request_contract = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -1551,8 +1527,6 @@ module Mock_config_analytics_contract = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -1962,8 +1936,6 @@ module Mock_config_invalid_media_post = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2024,8 +1996,6 @@ module Mock_config_no_retry_post = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2082,8 +2052,6 @@ module Mock_config_too_long_guard = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2146,8 +2114,6 @@ module Mock_config_malformed_post_response = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2214,8 +2180,6 @@ module Mock_config_boundary_validation = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2292,8 +2256,6 @@ module Mock_config_alt_meta_contract = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2368,8 +2330,6 @@ module Mock_config_unknown_fields = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2429,8 +2389,6 @@ module Mock_config_partial_read = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2486,8 +2444,6 @@ module Mock_config_read_no_retry = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -2562,8 +2518,6 @@ module Mock_config_refresh_rotation = struct
   let update_credentials ~account_id:_ ~credentials on_success _on_error =
     rotation_creds := credentials;
     on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -3739,12 +3693,6 @@ module Mock_config_errors = struct
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
     on_success ()
   
-  let encrypt _data on_success _on_error =
-    on_success "encrypted_data"
-  
-  let decrypt _data on_success _on_error =
-    on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
-  
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
     on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
@@ -3790,8 +3738,6 @@ module Mock_config_rate_reset = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -4065,8 +4011,6 @@ module Mock_config_pagination_stop = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -4667,8 +4611,6 @@ module Mock_config_video_gate = struct
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted_data"
-  let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
 
   let sleeps = ref []
@@ -4792,8 +4734,6 @@ module Mock_config_video_immediate = struct
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted_data"
-  let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -4870,8 +4810,6 @@ module Mock_config_video_fail = struct
   let get_credentials ~account_id:_ on_success _on_error =
     on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer; scope = None }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted_data"
-  let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -4947,8 +4885,6 @@ module Mock_config_video_timeout = struct
   let get_credentials ~account_id:_ on_success _on_error =
     on_success { Social_core.access_token = "test_access_token"; refresh_token = Some "test_refresh_token"; expires_at = None; auth_type = Bearer; scope = None }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted_data"
-  let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -5066,8 +5002,6 @@ module Mock_config_video_interrupt = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -5167,8 +5101,6 @@ module Mock_config_video_codec = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -5328,8 +5260,6 @@ module Mock_config_chunked_contract = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -5487,8 +5417,6 @@ module Mock_config_upload_mode = struct
     }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted_data"
-  let decrypt _data on_success _on_error = on_success {|{"access_token":"test_token","refresh_token":"test_refresh"}|}
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -5861,8 +5789,6 @@ module Mock_config_retry_401 = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -5950,8 +5876,6 @@ module Mock_config_share_followers = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds:_ on_continue _on_error = on_continue ()
 end
@@ -6094,7 +6018,6 @@ let test_user_error_injected_clock () =
     | error -> failwith (Error_types.error_to_string error))
     [ 100., 20; 130., 1 ]
 
-
 (* Remote-media download retries: every posting path (single post, thread,
    quote, reply) shares one policy. Transport failures and 429/5xx back
    off and retry; a permanent 4xx is final on the first answer; a 429's
@@ -6154,8 +6077,6 @@ module Mock_config_media_retry = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
   let sleep ~seconds on_continue _on_error =
     media_fetch_sleeps := seconds :: !media_fetch_sleeps;
@@ -6649,8 +6570,6 @@ module Mock_config_refresh_dead_token = struct
       scope = None;
     }
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt _data on_success _on_error = on_success "encrypted"
-  let decrypt _data on_success _on_error = on_success "decrypted"
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     dead_token_statuses := status :: !dead_token_statuses;
     on_success ()

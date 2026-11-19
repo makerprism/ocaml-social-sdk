@@ -135,9 +135,6 @@ module Mock_config = struct
         credentials_store := (account_id, credentials) :: List.remove_assoc account_id !credentials_store;
         on_success ()
 
-  let encrypt value on_success _on_error = on_success value
-  let decrypt value on_success _on_error = on_success value
-
   let update_health_status ~account_id:_ ~status ~error_message on_success _on_error =
     health_status_updates := (status, error_message) :: !health_status_updates;
     on_success ()
@@ -4710,7 +4707,6 @@ let test_get_pending_replies_approval_status () =
       | Ok _ -> failwith "expected two pending replies"
       | Error _ -> failwith "expected successful get_pending_replies")
 
-
 (* Graph error body as Meta sends it, for the shared-classifier contract. *)
 let graph_error_body ?subcode ?(error_type = "OAuthException") ~message code =
   Printf.sprintf {|{"error":{"message":%S,"type":%S,"code":%d%s,"fbtrace_id":"AvX3kq0Lm2P"}}|}
@@ -4780,7 +4776,6 @@ let test_api_error_detail_survives_redaction () =
         | None -> failwith "expected an excerpt")
    | None -> failwith "expected provider detail");
   print_endline "ok: api error detail survives redaction"
-
 
 (* Permalink by id: GET /{id}?fields=permalink with the token in the query,
    percent-encoded, and the three outcomes callers branch on. *)
