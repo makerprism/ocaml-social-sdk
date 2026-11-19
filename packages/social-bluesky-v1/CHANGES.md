@@ -1,4 +1,6 @@
 # Unreleased
+
+- Add typed publish outcomes: `post_single_ref` and `reply_to_post_ref` return the new post as a `strong_ref`, `post_thread_refs` returns `thread_refs_result` with `posted_refs`. The thread chain keeps typed refs internally and no longer re-parses the `uri|cid` format. The legacy `post_single` / `reply_to_post` / `post_thread` keep their string results, now encoded through `post_id_of_strong_ref`.
 - Keep pending sessions unusable until the coordinated completion callback confirms commit. A failed acquisition cannot evict a newer waiter's cache entry.
 
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.

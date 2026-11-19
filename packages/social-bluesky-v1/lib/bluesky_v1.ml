@@ -216,14 +216,30 @@ type strong_ref = Bluesky_views.strong_ref = { uri : string; cid : string }
     itself when it is a top-level post). *)
 type reply_ref = Bluesky_views.reply_ref = { root : strong_ref; parent : strong_ref }
 
-(** Parse the ["uri|cid"] id that {!Make_with_options.post_single} and
-    {!Make_with_options.post_thread} return. *)
+(** The typed thread outcome of {!Make_with_options.post_thread_refs}:
+    the same shape as {!Error_types.thread_result} with the posts that
+    went out as strong refs, so a caller chaining or resuming a thread
+    never re-parses the ["uri|cid"] id format. *)
+type thread_refs_result = {
+  posted_refs : strong_ref list;
+  failed_at_index : int option;
+  total_requested : int;
+}
+
+(** Parse the ["uri|cid"] id that the legacy {!Make_with_options.post_single},
+    {!Make_with_options.reply_to_post} and {!Make_with_options.post_thread}
+    return. *)
 let strong_ref_of_post_id post_id =
   match String.split_on_char '|' post_id with
   | [ uri; cid ] when uri <> "" && cid <> "" -> Some { uri; cid }
   | _ -> None
 
-(** The ["uri|cid"] id format the posting functions return. *)
+(** The ["uri|cid"] id format the legacy posting functions return. It is
+    an application storage convention, not a platform fact: new callers
+    should take the typed refs from {!Make_with_options.post_single_ref},
+    {!Make_with_options.reply_to_post_ref} and
+    {!Make_with_options.post_thread_refs}, and encode them for their own
+    storage with this codec. *)
 let post_id_of_strong_ref { uri; cid } = uri ^ "|" ^ cid
 
 (** Configuration module type for Bluesky provider *)
@@ -1557,7 +1573,9 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
 
   (** {1 Public API - Posting} *)
 
-  (** Post with optional reply references (internal implementation) *)
+  (** Post with optional reply references (internal implementation). The
+      outcome carries the new post as a {!strong_ref}; the legacy string
+      functions encode it with {!post_id_of_strong_ref}. *)
   let post_with_reply_impl ~account_id ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ~reply_refs on_result =
     (* Validate first *)
     match validate_post ~text ~media_count:(List.length media_urls) () with
@@ -1681,7 +1699,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                         (* Add reply references if provided *)
                         let base_with_reply = match reply_refs with
                           | None -> base_with_facets
-                          | Some (root_uri, root_cid, parent_uri, parent_cid) ->
+                          | Some { root = { uri = root_uri; cid = root_cid };
+                                   parent = { uri = parent_uri; cid = parent_cid } } ->
                               base_with_facets @ [
                                 ("reply", `Assoc [
                                   ("root", `Assoc [
@@ -1811,14 +1830,15 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                                 let open Yojson.Basic.Util in
                                 let post_uri = json |> member "uri" |> to_string in
                                 let post_cid = json |> member "cid" |> to_string in
-                                (* Return both URI and CID as "uri|cid" *)
-                                let result = Printf.sprintf "%s|%s" post_uri post_cid in
+                                (* createRecord answers with both the AT URI
+                                   and the CID of the created record. *)
+                                let result = { uri = post_uri; cid = post_cid } in
                                 if !accumulated_warnings = [] then
                                   on_result (Error_types.Success result)
                                 else
-                                  on_result (Error_types.Partial_success { 
-                                    result; 
-                                    warnings = !accumulated_warnings 
+                                  on_result (Error_types.Partial_success {
+                                    result;
+                                    warnings = !accumulated_warnings
                                   })
                               with e ->
                                 on_result (Error_types.Failure (Error_types.Internal_error 
@@ -1832,6 +1852,11 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                   (fun err -> on_result (Error_types.Failure err))))
           (fun err -> on_result (Error_types.Failure err))
   
+  (** Post a single post to Bluesky; the outcome carries the new post as a
+      {!strong_ref}. Parameters as {!post_single}. *)
+  let post_single_ref ~account_id ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
+    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload ~reply_refs:None on_result
+
   (** Post a single post to Bluesky
 
       @param account_id The account identifier
@@ -1844,10 +1869,20 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       @param validate_media_before_upload When true, validates media size after download
              but before upload. Bluesky limits: 50MB video, 60s duration, 1MB images.
              Default: false
-      @param on_result Callback receiving the outcome
+      @param on_result Callback receiving the outcome, the new post's
+             ["uri|cid"] id ({!post_id_of_strong_ref}). Prefer
+             {!post_single_ref}, which returns the typed ref.
   *)
   let post_single ~account_id ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
-    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload ~reply_refs:None on_result
+    post_single_ref ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload
+      (fun outcome -> on_result (Error_types.outcome_map post_id_of_strong_ref outcome))
+
+  (** Reply to a post; the outcome carries the new post as a {!strong_ref}.
+      [reply_to] is the same reference {!reply_to_post} takes. *)
+  let reply_to_post_ref ~account_id ~(reply_to : reply_ref) ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
+    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload
+      ~reply_refs:(Some reply_to)
+      on_result
 
   (** Reply to a post.
 
@@ -1857,11 +1892,11 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       posting function returned ({!strong_ref_of_post_id}). The reply is
       posted with the same text, media, facet and link-card handling as
       {!post_single}, and the outcome carries the new post's ["uri|cid"].
+      Prefer {!reply_to_post_ref}, which returns the typed ref.
   *)
   let reply_to_post ~account_id ~(reply_to : reply_ref) ~text ~media_urls ?(alt_texts=[]) ?(widths=[]) ?(heights=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) on_result =
-    post_with_reply_impl ~account_id ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload
-      ~reply_refs:(Some (reply_to.root.uri, reply_to.root.cid, reply_to.parent.uri, reply_to.parent.cid))
-      on_result
+    reply_to_post_ref ~account_id ~reply_to ~text ~media_urls ~alt_texts ~widths ~heights ~skip_enrichments ~validate_media_before_upload
+      (fun outcome -> on_result (Error_types.outcome_map post_id_of_strong_ref outcome))
 
   (** Post a thread to Bluesky
 
@@ -1880,12 +1915,11 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
              pass the original root and the last post that went out, and
              only the remaining texts. Default: the first post starts a
              new thread.
-      @param on_result Callback receiving the outcome with thread_result.
-             When a post after the first fails, the outcome is
-             [Partial_success] with [failed_at_index = Some i] and the
-             ["uri|cid"] ids of the posts that went out.
+      @param on_result Callback receiving the outcome. When a post after
+             the first fails, the outcome is [Partial_success] with
+             [failed_at_index = Some i] and the posts that went out.
   *)
-  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ?(reply_to : reply_ref option) on_result =
+  let post_thread_impl ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ?(reply_to : reply_ref option) on_result =
     (* Validate entire thread upfront *)
     let media_counts = List.map List.length media_urls_per_post in
     match validate_thread ~texts ~media_counts () with
@@ -1902,13 +1936,20 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           let post_heights = try List.nth heights_per_post i with _ -> [] in
           (media_urls, alt_texts, post_widths, post_heights)
         ) media_urls_per_post in
-        
-        (* Helper to post thread items sequentially *)
-        let rec post_thread_items remaining_texts remaining_media root_ref parent_ref acc_uris =
+
+        (* The first post that goes out becomes the thread root; an
+           explicit root (a reply or a resumed thread) is kept. *)
+        let next_root root_ref posted =
+          match root_ref with None -> Some posted | Some root -> Some root
+        in
+
+        (* Helper to post thread items sequentially. Root and parent stay
+           typed strong refs: the chain never re-parses the id format. *)
+        let rec post_thread_items remaining_texts remaining_media root_ref parent_ref acc_refs =
           match remaining_texts with
-          | [] -> 
-              let result = { 
-                Error_types.posted_ids = List.rev acc_uris; 
+          | [] ->
+              let result = {
+                posted_refs = List.rev acc_refs;
                 failed_at_index = None;
                 total_requested;
               } in
@@ -1928,65 +1969,79 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
 
               let reply_refs = match root_ref with
                 | None -> None  (* First post, no reply *)
-                | Some (root_uri, root_cid) ->
+                | Some root ->
                     (* Subsequent posts are replies *)
                     match parent_ref with
-                    | Some (parent_uri, parent_cid) ->
-                        Some (root_uri, root_cid, parent_uri, parent_cid)
+                    | Some parent -> Some { root; parent }
                     | None ->
                         (* Should not happen, but use root as parent *)
-                        Some (root_uri, root_cid, root_uri, root_cid)
+                        Some { root; parent = root }
               in
 
               post_with_reply_impl ~account_id ~text ~media_urls:media ~alt_texts ~widths:post_widths ~heights:post_heights ~skip_enrichments ~validate_media_before_upload ~reply_refs
                 (function
-                  | Error_types.Success uri_cid ->
-                      process_post_result uri_cid [] rest_texts rest_media root_ref acc_uris
-                  | Error_types.Partial_success { result = uri_cid; warnings } ->
+                  | Error_types.Success posted ->
+                      let new_root = next_root root_ref posted in
+                      post_thread_items rest_texts rest_media new_root (Some posted)
+                        (posted :: acc_refs)
+                  | Error_types.Partial_success { result = posted; warnings } ->
                       accumulated_warnings := !accumulated_warnings @ warnings;
-                      process_post_result uri_cid warnings rest_texts rest_media root_ref acc_uris
+                      let new_root = next_root root_ref posted in
+                      post_thread_items rest_texts rest_media new_root (Some posted)
+                        (posted :: acc_refs)
                   | Error_types.Failure err ->
                       (* Thread failed mid-way - return partial result *)
-                      let result = { 
-                        Error_types.posted_ids = List.rev acc_uris;
+                      let result = {
+                        posted_refs = List.rev acc_refs;
                         failed_at_index = Some (total_requested - List.length remaining_texts);
                         total_requested;
                       } in
-                      if acc_uris = [] then
+                      if acc_refs = [] then
                         (* No posts succeeded - this is a full failure *)
                         on_result (Error_types.Failure err)
                       else
                         (* Some posts succeeded - partial success with the error info in warnings *)
-                        on_result (Error_types.Partial_success { 
-                          result; 
+                        on_result (Error_types.Partial_success {
+                          result;
                           warnings = !accumulated_warnings @ [
                             Error_types.Enrichment_skipped (Error_types.error_to_string err)
                           ]
                         }))
-        
-        and process_post_result uri_cid _warnings rest_texts rest_media root_ref acc_uris =
-          (* Parse URI and CID from "uri|cid" format *)
-          match String.split_on_char '|' uri_cid with
-          | [uri; cid] ->
-              let new_root_ref = match root_ref with
-                | None -> Some (uri, cid)  (* First post becomes root *)
-                | Some r -> Some r  (* Keep existing root *)
-              in
-              let new_parent_ref = Some (uri, cid) in
-              post_thread_items rest_texts rest_media new_root_ref new_parent_ref (uri_cid :: acc_uris)
-          | _ ->
-              on_result (Error_types.Failure (Error_types.Internal_error 
-                "Failed to parse post response (expected uri|cid format)"))
+
         in
-        
+
         let initial_root, initial_parent =
           match reply_to with
           | None -> (None, None)
-          | Some { root; parent } ->
-              (Some (root.uri, root.cid), Some (parent.uri, parent.cid))
+          | Some { root; parent } -> (Some root, Some parent)
         in
         post_thread_items texts media_with_meta_per_post initial_root initial_parent []
-  
+
+  (** Post a thread to Bluesky; the outcome is a {!thread_refs_result}
+      carrying the posts that went out as strong refs. Parameters and
+      partial-failure behavior as documented on {!post_thread_impl}. *)
+  let post_thread_refs ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ?(reply_to : reply_ref option) on_result =
+    post_thread_impl ~account_id ~texts ~media_urls_per_post ~alt_texts_per_post ~widths_per_post ~heights_per_post ~skip_enrichments ~validate_media_before_upload ?reply_to on_result
+
+  (** Post a thread to Bluesky; the outcome's [posted_ids] are the
+      ["uri|cid"] ids ({!post_id_of_strong_ref}) of the posts that went
+      out. Parameters and partial-failure behavior as
+      {!post_thread_refs}, which returns the typed strong refs instead.
+  *)
+  let post_thread ~account_id ~texts ~media_urls_per_post ?(alt_texts_per_post=[]) ?(widths_per_post=[]) ?(heights_per_post=[]) ?(skip_enrichments=false) ?(validate_media_before_upload=false) ?(reply_to : reply_ref option) on_result =
+    post_thread_impl ~account_id ~texts ~media_urls_per_post ~alt_texts_per_post ~widths_per_post ~heights_per_post ~skip_enrichments ~validate_media_before_upload ?reply_to
+      (fun outcome ->
+         on_result
+           (Error_types.outcome_map
+              (fun result ->
+                 {
+                   Error_types.posted_ids =
+                     List.map post_id_of_strong_ref result.posted_refs;
+                   failed_at_index = result.failed_at_index;
+                   total_requested = result.total_requested;
+                 })
+              outcome))
+
   (** {1 Public API - Post Management} *)
   
   (** Delete a post from Bluesky *)
