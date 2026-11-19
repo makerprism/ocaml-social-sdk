@@ -64,6 +64,11 @@
  (libraries social-core))
 
 (test
+ (name test_social_text_counter)
+ (modules test_social_text_counter)
+ (libraries social-core))
+
+(test
  (name test_social_json_reader)
  (modules test_social_json_reader)
  (libraries social-core))

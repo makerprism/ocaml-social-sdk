@@ -21,6 +21,20 @@ type posting_format =
   | ReelFormat
   | StoryFormat
 
+(** How a platform measures post text against its [max_text_length].
+
+    Platforms do not count the same way: Twitter wraps every URL at 23 and
+    counts wide code points as 2 ({{!Social_text_counter.count}}), Threads
+    counts one per code point but an emoji as its UTF-8 byte count
+    ({{!Social_text_counter.codepoints_emoji_as_bytes_length}}), YouTube
+    counts the description in bytes, and the rest document plain character
+    limits (code points). *)
+type text_counting =
+  | Utf8_codepoints
+  | Utf8_bytes
+  | Twitter_weighted
+  | Codepoints_emoji_as_bytes
+
 (** Rich platform capability record *)
 type capability = {
   platform : platform;
@@ -30,6 +44,11 @@ type capability = {
   max_title_length : int option;
   supports_threads : bool;
   media_requirement : media_requirement;
+  (* How [max_text_length] is measured *)
+  text_counting : text_counting;
+  (* Documented accessibility-text (alt text) ceiling in code points for
+     platforms whose API enforces one; [None] when no limit is documented *)
+  alt_text_max_length : int option;
 
   (* Image constraints *)
   image_max_width : int option;
@@ -40,8 +59,21 @@ type capability = {
   video_max_duration_seconds : int option;
   video_formats : string list;
   video_max_size_mb : int option;
+  (* When the platform documents an accepted aspect-ratio *range*
+     (inclusive min/max of width/height) instead of discrete ratios.
+     E.g. Instagram feed media: "Aspect ratio: Must be within a 4:5 to
+     1.91:1 range"
+     (https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media).
+     When [None], [video_aspect_ratios] applies. *)
+  video_aspect_ratio_range : (float * float) option;
   video_aspect_ratios : string list;
   video_max_frame_rate : float option;
+  (* This client library's own upload ceiling in MB, when it is stricter than
+     the platform's [video_max_size_mb] (chunked resumable upload is not
+     implemented everywhere, so large files fail client-side first).
+     An SDK implementation limit, not a platform fact; consumers that do not
+     upload through this library may ignore it. *)
+  video_client_max_size_mb : int option;
   (* Carousel/multi-media limits *)
   max_carousel_items : int option;
   (* Rate limits *)
@@ -56,11 +88,15 @@ type capability = {
 let twitter = {
   platform = Twitter;
   display_name = "Twitter / X";
-  max_text_length = 280;
+  (* https://developer.twitter.com/en/docs/counting-characters: the 280
+     budget is the weighted count of {!Social_text_counter}. *)
+  max_text_length = Social_text_counter.max_tweet_length;
   requires_title = false;
   max_title_length = None;
   supports_threads = true;
   media_requirement = NoMedia;
+  text_counting = Twitter_weighted;
+  alt_text_max_length = None;
   image_max_width = Some 4096;
   image_max_height = Some 4096;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"; "webp"];
@@ -68,7 +104,9 @@ let twitter = {
   video_max_duration_seconds = Some 140;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 512;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["16:9"; "1:1"; "9:16"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 4;
   posts_per_day = Some 15;
@@ -83,6 +121,8 @@ let linkedin = {
   max_title_length = None;
   supports_threads = false;
   media_requirement = NoMedia;
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = Some 7680;
   image_max_height = Some 4320;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
@@ -90,7 +130,9 @@ let linkedin = {
   video_max_duration_seconds = Some 600;
   video_formats = ["mp4"];
   video_max_size_mb = Some 200;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["16:9"; "1:1"; "9:16"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 9;
   posts_per_day = Some 100;
@@ -105,6 +147,12 @@ let bluesky = {
   max_title_length = None;
   supports_threads = true;
   media_requirement = NoMedia;
+  (* app.bsky.feed.post caps text at 300 graphemes and 3000 code points
+     (https://github.com/bluesky-social/bsky/blob/main/lexicons/app/bsky/feed/post.json).
+     Code points are used here: without grapheme segmentation it is a safe
+     over-approximation (never under-counts the grapheme limit). *)
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = Some 2000;
   image_max_height = Some 2000;
   image_formats = ["jpg"; "jpeg"; "png"];
@@ -112,7 +160,9 @@ let bluesky = {
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "mpeg"; "webm"; "mov"];
   video_max_size_mb = Some 50;
+  video_client_max_size_mb = None;
   video_aspect_ratios = [];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 4;
   posts_per_day = None;
@@ -127,6 +177,8 @@ let pinterest = {
   max_title_length = None;
   supports_threads = false;
   media_requirement = MediaRequired;
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = Some 4000;
   image_max_height = Some 10000;
   image_formats = ["jpg"; "jpeg"; "png"];
@@ -134,7 +186,9 @@ let pinterest = {
   video_max_duration_seconds = Some 900;
   video_formats = ["mp4"; "mov"; "m4v"];
   video_max_size_mb = Some 2048;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["2:3"; "1:1"; "9:16"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 1;
   posts_per_day = Some 100;
@@ -149,14 +203,23 @@ let youtube_shorts = {
   max_title_length = Some 100;
   supports_threads = false;
   media_requirement = VideoRequired;
+  (* https://developers.google.com/youtube/v3/docs/videos: the description
+     has "a maximum length of 5000 bytes" (the title is 100 characters). *)
+  text_counting = Utf8_bytes;
+  alt_text_max_length = None;
   image_max_width = None;
   image_max_height = None;
   image_formats = [];
   image_max_size_mb = None;
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "mov"];
-  video_max_size_mb = Some 256;
+  (* https://developers.google.com/youtube/v3/docs/videos/insert:
+     "Maximum file size: 256GB". This library uploads without the chunked
+     resumable protocol, so its own ceiling is 2GB. *)
+  video_max_size_mb = Some 262144;
+  video_client_max_size_mb = Some 2048;
   video_aspect_ratios = ["9:16"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = None;
   posts_per_day = None;
@@ -171,6 +234,10 @@ let mastodon = {
   max_title_length = None;
   supports_threads = true;
   media_requirement = NoMedia;
+  (* Documented as characters; instances may lower the 500 default and wrap
+     URLs at 23 characters, which this count does not model. *)
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = Some 3840;
   image_max_height = Some 2160;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"; "webp"];
@@ -178,7 +245,9 @@ let mastodon = {
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "webm"; "mov"];
   video_max_size_mb = Some 40;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["16:9"; "1:1"; "9:16"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 4;
   posts_per_day = None;
@@ -193,6 +262,8 @@ let facebook_page = {
   max_title_length = None;
   supports_threads = false;
   media_requirement = NoMedia;
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = Some 2048;
   image_max_height = Some 2048;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
@@ -200,7 +271,9 @@ let facebook_page = {
   video_max_duration_seconds = Some 7200;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 1024;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["16:9"; "1:1"; "9:16"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 10;
   posts_per_day = None;
@@ -215,6 +288,10 @@ let instagram = {
   max_title_length = None;
   supports_threads = false;
   media_requirement = MediaRequired;
+  text_counting = Utf8_codepoints;
+  (* https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media:
+     "Alternative text, up to 1000 character, for an image." (image posts) *)
+  alt_text_max_length = Some 1000;
   image_max_width = Some 1440;
   image_max_height = Some 1800;
   image_formats = ["jpg"; "jpeg"; "png"];
@@ -222,7 +299,9 @@ let instagram = {
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 100;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["1:1"; "4:5"; "1.91:1"];
+  video_aspect_ratio_range = Some (0.8, 1.91);
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 10;
   posts_per_day = Some 25;
@@ -237,6 +316,8 @@ let tiktok = {
   max_title_length = None;
   supports_threads = false;
   media_requirement = VideoRequired;
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = None;
   image_max_height = None;
   image_formats = ["webp"; "jpeg"];
@@ -244,7 +325,9 @@ let tiktok = {
   video_max_duration_seconds = Some 600;
   video_formats = ["mp4"; "webm"; "mov"];
   video_max_size_mb = Some 50;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["9:16"; "1:1"; "16:9"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = None;
   posts_per_day = None;
@@ -259,6 +342,8 @@ let reddit = {
   max_title_length = Some 300;
   supports_threads = false;
   media_requirement = NoMedia;
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = None;
   image_max_height = None;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
@@ -266,7 +351,9 @@ let reddit = {
   video_max_duration_seconds = Some 900;
   video_formats = ["mp4"];
   video_max_size_mb = Some 1000;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["16:9"; "1:1"; "9:16"; "4:3"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 20;
   posts_per_day = None;
@@ -281,6 +368,13 @@ let threads = {
   max_title_length = None;
   supports_threads = true;
   media_requirement = NoMedia;
+  (* https://developers.facebook.com/docs/threads/posts: "Text posts are
+     limited to 500 characters. Emojis are counted as the number of UTF-8
+     bytes." *)
+  text_counting = Codepoints_emoji_as_bytes;
+  (* https://developers.facebook.com/documentation/threads/reference/publishing:
+     "The maximum length of alt_text is 1,000 characters." *)
+  alt_text_max_length = Some 1000;
   image_max_width = Some 1080;
   image_max_height = Some 1920;
   image_formats = ["jpg"; "jpeg"; "png"];
@@ -288,7 +382,9 @@ let threads = {
   video_max_duration_seconds = Some 300;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 100;
+  video_client_max_size_mb = None;
   video_aspect_ratios = ["1:1"; "9:16"; "16:9"];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = Some 60.0;
   max_carousel_items = Some 20;
   posts_per_day = Some 25;
@@ -303,6 +399,8 @@ let google_business_profile = {
   max_title_length = None;
   supports_threads = false;
   media_requirement = NoMedia;
+  text_counting = Utf8_codepoints;
+  alt_text_max_length = None;
   image_max_width = None;
   image_max_height = None;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
@@ -310,7 +408,9 @@ let google_business_profile = {
   video_max_duration_seconds = None;
   video_formats = [];
   video_max_size_mb = None;
+  video_client_max_size_mb = None;
   video_aspect_ratios = [];
+  video_aspect_ratio_range = None;
   video_max_frame_rate = None;
   max_carousel_items = Some 1;
   posts_per_day = None;
@@ -346,7 +446,8 @@ let get_capability_with_format platform format =
         media_requirement = VideoRequired;
         video_max_duration_seconds = Some 90;
         max_carousel_items = None;
-        video_aspect_ratios = ["9:16"] }
+        video_aspect_ratios = ["9:16"];
+        video_aspect_ratio_range = None }
   | Instagram, Some StoryFormat ->
       { instagram with
         display_name = "Instagram Stories";
@@ -354,7 +455,8 @@ let get_capability_with_format platform format =
         media_requirement = MediaRequired;
         video_max_duration_seconds = Some 60;
         max_carousel_items = None;
-        video_aspect_ratios = ["9:16"] }
+        video_aspect_ratios = ["9:16"];
+        video_aspect_ratio_range = None }
   | FacebookPage, Some ReelFormat ->
       { facebook_page with
         display_name = "Facebook Reels";
@@ -383,6 +485,7 @@ let get_capability_with_format platform format =
         video_formats = [];
         video_max_duration_seconds = None;
         video_max_size_mb = None;
+  video_client_max_size_mb = None;
         video_aspect_ratios = [] }
   | TikTok, Some ReelFormat ->
       { tiktok with
@@ -400,14 +503,37 @@ let all_capabilities = [
 (*  Validation helpers                                                 *)
 (* ------------------------------------------------------------------ *)
 
-(** Validate text length against platform limit *)
+(** Count [text] the way [counting] measures it: the number the platform
+    compares against its limit. See {!text_counting} for which platforms use
+    which strategy. *)
+let count_text (counting : text_counting) text =
+  match counting with
+  | Utf8_codepoints -> Social_text_counter.utf8_codepoint_length text
+  | Utf8_bytes -> String.length text
+  | Twitter_weighted -> Social_text_counter.count text
+  | Codepoints_emoji_as_bytes ->
+      Social_text_counter.codepoints_emoji_as_bytes_length text
+
+(** Validate text length against the platform limit, counted the way the
+    platform counts (see {!count_text}). *)
 let validate_text_length ~platform ~text =
   let cap = get_capability platform in
-  if String.length text > cap.max_text_length then
+  if count_text cap.text_counting text > cap.max_text_length then
     Error (Printf.sprintf "Text exceeds %d character limit for %s"
       cap.max_text_length cap.display_name)
   else
     Ok ()
+
+(** [Some (length, max)] when [alt_text] exceeds the platform's documented
+    alt-text ceiling (counted in UTF-8 code points), [None] when it fits or
+    the platform documents no limit. Callers render their own message. *)
+let alt_text_length_violation ~platform ~alt_text =
+  let cap = get_capability platform in
+  match cap.alt_text_max_length with
+  | None -> None
+  | Some max ->
+      let length = Social_text_counter.utf8_codepoint_length alt_text in
+      if length > max then Some (length, max) else None
 
 (** Map a video MIME type to the file extension used in [video_formats] lists.
     MIME subtypes don't always match file extensions (e.g. video/quicktime -> mov). *)
@@ -457,7 +583,19 @@ let validate_image ~platform ~mime_type ~file_size_bytes ~width ~height =
         else
           Ok ()
 
-(** Validate a video against platform constraints *)
+(** The video size ceiling validation should enforce: the client library's
+    own upload ceiling when it is stricter than the platform's documented
+    limit, else the platform limit. *)
+let effective_video_max_size_mb (cap : capability) =
+  match cap.video_client_max_size_mb, cap.video_max_size_mb with
+  | Some client, Some platform -> Some (min client platform)
+  | Some only, None | None, Some only -> Some only
+  | None, None -> None
+
+(** Validate a video against platform constraints. The size check uses the
+    effective ceiling ({!effective_video_max_size_mb}): an upload this
+    library cannot send never passes validation even when the platform would
+    accept a larger file. *)
 let validate_video ~platform ~mime_type ~file_size_bytes ~duration_seconds =
   let cap = get_capability platform in
   if cap.video_formats = [] then
@@ -468,13 +606,13 @@ let validate_video ~platform ~mime_type ~file_size_bytes ~duration_seconds =
       Error (Printf.sprintf "Video format %s not supported by %s. Supported: %s"
         ext cap.display_name (String.concat ", " cap.video_formats))
     else
-      let max_bytes = match cap.video_max_size_mb with
+      let max_bytes = match effective_video_max_size_mb cap with
         | Some mb -> mb * 1024 * 1024
         | None -> max_int
       in
       if file_size_bytes > max_bytes then
         Error (Printf.sprintf "Video size exceeds %dMB limit for %s"
-          (Option.get cap.video_max_size_mb) cap.display_name)
+          (Option.get (effective_video_max_size_mb cap)) cap.display_name)
       else
         match cap.video_max_duration_seconds with
         | Some max_dur when duration_seconds > float_of_int max_dur ->
@@ -498,16 +636,25 @@ let aspect_ratio_matches ~actual ~target =
   let tolerance = 0.05 in
   abs_float (actual -. target) /. target <= tolerance
 
+(** Check whether an aspect ratio (width / height) satisfies a capability's
+    video aspect constraint: the documented inclusive range when
+    [video_aspect_ratio_range] is set, else within 5% of one of
+    [video_aspect_ratios] (any ratio passes when neither is set). *)
+let aspect_ratio_satisfied (cap : capability) ~aspect_ratio =
+  match cap.video_aspect_ratio_range with
+  | Some (min_ratio, max_ratio) ->
+      aspect_ratio >= min_ratio && aspect_ratio <= max_ratio
+  | None ->
+      cap.video_aspect_ratios = []
+      || List.exists (fun ratio_str ->
+          match parse_aspect_ratio_string ratio_str with
+          | Some target -> aspect_ratio_matches ~actual:aspect_ratio ~target
+          | None -> false
+        ) cap.video_aspect_ratios
+
 (** Check if video aspect ratio is compatible with platform *)
 let is_aspect_ratio_compatible ~platform ~aspect_ratio =
-  let cap = get_capability platform in
-  if cap.video_aspect_ratios = [] then true
-  else
-    List.exists (fun ratio_str ->
-      match parse_aspect_ratio_string ratio_str with
-      | Some target -> aspect_ratio_matches ~actual:aspect_ratio ~target
-      | None -> false
-    ) cap.video_aspect_ratios
+  aspect_ratio_satisfied (get_capability platform) ~aspect_ratio
 
 (** Video format for platforms that distinguish Reels from regular videos *)
 type video_format = Reel | Regular
@@ -547,34 +694,29 @@ let video_meets_format_constraints ~width ~height ~duration_seconds (cap : capab
     | _ -> true
   in
   let ratio_ok =
-    cap.video_aspect_ratios = []
+    (cap.video_aspect_ratio_range = None && cap.video_aspect_ratios = [])
     || (width > 0 && height > 0
-        && List.exists
-          (fun ratio_str ->
-             match parse_aspect_ratio_string ratio_str with
-             | Some target ->
-                 aspect_ratio_matches
-                   ~actual:(float_of_int width /. float_of_int height)
-                   ~target
-             | None -> false)
-          cap.video_aspect_ratios)
+        && aspect_ratio_satisfied cap
+             ~aspect_ratio:(float_of_int width /. float_of_int height))
   in
   cap.video_formats <> [] && duration_ok && ratio_ok
 
 (** The posting formats a video with these dimensions can be published in
     on [platform], computed from the format-specific constraints of
     {!get_capability_with_format}: the aspect ratio must match one of the
-    format's [video_aspect_ratios] within the 5% tolerance of
-    {!aspect_ratio_matches} (any ratio passes when the list is empty, and
-    no format matches when the dimensions are unknown), and the duration
+    format's aspect constraint (the documented
+    [video_aspect_ratio_range] when set, else [video_aspect_ratios] within
+    the 5% tolerance of {!aspect_ratio_matches}; any ratio passes when
+    neither is set, and no format matches when the dimensions are unknown),
+    and the duration
     must not exceed the format's [video_max_duration_seconds] (a duration
     of [0.0] counts as unknown and never excludes a format).
 
     Eligibility is a platform fact; which eligible format to publish in is
     the caller's decision. Example: a 9:16 video of 30 seconds is
-    [\[ReelFormat; StoryFormat\]] on Instagram (its feed ratios are
-    [1:1], [4:5] and [1.91:1]), [\[PostFormat\]] on Twitter, and [\[\]]
-    on YouTube Shorts once it exceeds 60 seconds. *)
+    [\[ReelFormat; StoryFormat\]] on Instagram (its feed accepts the
+    documented 4:5 to 1.91:1 range), [\[PostFormat\]] on Twitter, and
+    [\[\]] on YouTube Shorts once it exceeds 60 seconds. *)
 let eligible_video_formats ~platform ~width ~height ~duration_seconds =
   List.filter
     (fun format ->

@@ -19,6 +19,7 @@ depends: [
   "base64"
   "ptime"
   "uri"
+  "uutf"
   "odoc" {with-doc}
 ]
 build: [

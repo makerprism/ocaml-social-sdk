@@ -22,7 +22,8 @@
   digestif
   base64
   ptime
-  uri))
+  uri
+  uutf))
 
 (package
  (name social-lwt)
