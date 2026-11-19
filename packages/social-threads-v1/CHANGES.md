@@ -1,4 +1,6 @@
 # Unreleased
+- Retry and refresh behaviour is explicit consumer policy: new `options` record, `OPTIONS` module type, `Default_options`, and `Make_with_options` / `Make_coordinated_with_options` / `Make_credentials_only_with_options` functors. The plain `Make` / `Make_coordinated` / `Make_credentials_only` keep reading the six `THREADS_*` environment keys through the new `Env_options` (same keys, same defaults, parsed on every call), so nothing changes for existing consumers that do not pass options.
+
 - **Breaking:** removed the unused `is_token_expired` helper from `Make` results (the refresh orchestrator checks expiry itself; nothing in this SDK or its consumers called it). `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members.
 
 

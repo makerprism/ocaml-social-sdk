@@ -1,4 +1,6 @@
 # Unreleased
+- **Breaking:** `get_authorization_url` takes `?access_type` (`Online` / `Offline`) and `?prompt` (`No_prompt` / `Consent` / `Select_account` / `Login`) and now ends with an explicit `unit` argument, like every other URL builder in this SDK with optional parameters: whether the flow returns a refresh token and whether Google re-prompts for consent is consumer policy. Defaults keep the previous hard-wired `access_type=offline` and `prompt=consent`; existing callers only add `()`.
+
 
 - `api_error ?headers` reads a 429/quota response's `Retry-After` into `Rate_limited.retry_after_seconds` (fractional values round up, capped at one day) via `social-core` `Social_http_retry.delay_header_seconds`. Without `~headers`, or with an unusable header, `retry_after_seconds` stays `None`; callers that passed no headers are unchanged.
 

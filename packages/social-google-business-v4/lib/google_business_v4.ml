@@ -84,9 +84,12 @@ module OAuth = struct
 
   module Pkce = Social_google_oauth.Pkce
 
-  (** Generate authorization URL for Google Business Profile OAuth 2.0 flow with PKCE *)
-  let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.all) () =
-    Social_google_oauth.get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
+  (** Generate authorization URL for Google Business Profile OAuth 2.0 flow
+      with PKCE. [access_type] / [prompt] default to offline access with a
+      consent re-prompt, as {!Social_google_oauth.get_authorization_url}
+      documents. *)
+  let get_authorization_url ?access_type ?prompt ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.all) () =
+    Social_google_oauth.get_authorization_url ?access_type ?prompt ~client_id ~redirect_uri ~state ~code_verifier ~scopes ()
 
   (** {2 Token-based discovery types} *)
 

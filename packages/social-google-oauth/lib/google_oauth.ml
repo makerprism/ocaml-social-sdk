@@ -17,7 +17,36 @@ module Endpoints = struct
   let userinfo = "https://www.googleapis.com/oauth2/v2/userinfo"
 end
 
-let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes =
+(* Whether the authorization flow returns a refresh token. A general
+   consumer may want a plain online access token; the default keeps the
+   historical behavior of always asking for offline access.
+   {:https://developers.google.com/identity/protocols/oauth2/web-server#offline} *)
+type access_type =
+  | Online
+  | Offline
+
+(* Whether Google re-prompts for consent or account selection. The default
+   re-prompts for consent so a refresh token is returned even when one was
+   granted before; a consumer that stores its refresh tokens can drop that.
+   {:https://developers.google.com/identity/protocols/oauth2/web-server#prompt} *)
+type prompt =
+  | No_prompt
+  | Consent
+  | Select_account
+  | Login
+
+let string_of_access_type = function
+  | Online -> "online"
+  | Offline -> "offline"
+
+let string_of_prompt = function
+  | No_prompt -> "none"
+  | Consent -> "consent"
+  | Select_account -> "select_account"
+  | Login -> "login"
+
+let get_authorization_url ?(access_type = Offline) ?(prompt = Consent)
+    ~client_id ~redirect_uri ~state ~code_verifier ~scopes () =
   let code_challenge = Pkce.generate_challenge code_verifier in
   let scope_str = String.concat " " scopes in
   let params = [
@@ -26,8 +55,8 @@ let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
     ("response_type", "code");
     ("scope", scope_str);
     ("state", state);
-    ("access_type", "offline");
-    ("prompt", "consent");
+    ("access_type", string_of_access_type access_type);
+    ("prompt", string_of_prompt prompt);
     ("code_challenge", code_challenge);
     ("code_challenge_method", Pkce.challenge_method);
   ] in

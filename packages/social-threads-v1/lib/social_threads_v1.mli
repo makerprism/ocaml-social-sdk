@@ -35,3 +35,16 @@ include module type of Threads_v1
     Provider contract:
     {{:https://developers.facebook.com/docs/threads/get-started/long-lived-tokens/}Threads long-lived tokens}.
 *)
+
+(** {1 Retry and refresh options}
+
+    How many attempts a read may cost and whether an account read may refresh
+    an expiring token is consumer policy, not a platform fact, so the
+    {b Make} functors come in pairs: [Make_with_options] /
+    [Make_coordinated_with_options] / [Make_credentials_only_with_options]
+    take an explicit {!OPTIONS}; the plain [Make] / [Make_coordinated] /
+    [Make_credentials_only] keep the historical behavior by reading the six
+    [THREADS_*] environment keys through {!Env_options} (same keys, same
+    defaults, parsed on every call). {!Default_options} holds those defaults
+    without any environment lookup. *)
+

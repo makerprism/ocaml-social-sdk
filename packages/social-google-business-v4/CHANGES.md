@@ -1,4 +1,6 @@
 # Unreleased
+- `OAuth.get_authorization_url` passes the new `?access_type` / `?prompt` through to `social-google-oauth`; defaults are unchanged.
+
 - `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
 
 

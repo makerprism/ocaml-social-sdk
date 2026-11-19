@@ -939,7 +939,98 @@ module type COORDINATED_CONFIG = sig
     unit
 end
 
-module Make_internal (Config : COORDINATED_CONFIG) = struct
+(* Retry and refresh behaviour is consumer policy, not a platform fact:
+   how many attempts a read may cost, which transient failures are worth
+   retrying, whether account reads may refresh an expiring token, and how
+   far before expiry that is allowed to happen. *)
+type options = {
+  max_read_retry_attempts : int;  (** Total tries per idempotent read, at least 1. *)
+  retry_on_429 : bool;  (** Retry a 429 answer (respecting Retry-After where sent). *)
+  retry_on_5xx : bool;  (** Retry a 5xx answer. *)
+  retry_on_network_error : bool;  (** Retry a transport-level failure. *)
+  auto_refresh_token : bool;  (** Account reads may refresh an expiring token. *)
+  token_expiry_skew_seconds : int;  (** Refresh this early so clocks cannot race the expiry. *)
+}
+
+module type OPTIONS = sig
+  (** The settings for the operation about to run. A function, not a
+      value, so a consumer can change policy after the functor is applied;
+      the environment-based {!Env_options} reads its keys on every call
+      the same way the historical behaviour did. *)
+  val options : unit -> options
+end
+
+(** The settings every {b Make} functor used before options existed:
+   3 attempts, 429 not retried, 5xx and transport failures retried, no
+   read-side auto-refresh, 60 s expiry skew. *)
+let default_options = {
+  max_read_retry_attempts = 3;
+  retry_on_429 = false;
+  retry_on_5xx = true;
+  retry_on_network_error = true;
+  auto_refresh_token = false;
+  token_expiry_skew_seconds = 60;
+}
+
+module Default_options = struct
+  let options () = default_options
+end
+
+let parse_retry_attempts raw =
+  try
+    let value = int_of_string (String.trim raw) in
+    if value < 1 then 1 else if value > 10 then 10 else value
+  with _ -> 3
+
+let parse_non_negative_int ~default ~max_value raw =
+  try
+    let value = int_of_string (String.trim raw) in
+    if value < 0 then 0 else if value > max_value then max_value else value
+  with _ -> default
+
+let parse_bool ?(default = false) raw =
+  match String.lowercase_ascii (String.trim raw) with
+  | "1" | "true" | "yes" | "on" -> true
+  | "0" | "false" | "no" | "off" -> false
+  | _ -> default
+
+(** The historical environment-variable configuration as an {!OPTIONS}
+    implementation, so the plain {b Make} functors keep reading the six
+    [THREADS_*] keys with their documented defaults. Values are parsed on
+    every call; an unreadable value falls back to the default. *)
+module Env_options (Config : sig
+  val get_env : string -> string option
+end) : OPTIONS = struct
+  let options () =
+    let read_bool key default =
+      match Config.get_env key with
+      | Some raw -> parse_bool ~default raw
+      | None -> default
+    in
+    {
+      max_read_retry_attempts =
+        (match Config.get_env "THREADS_MAX_READ_RETRY_ATTEMPTS" with
+         | Some raw -> parse_retry_attempts raw
+         | None -> default_options.max_read_retry_attempts);
+      retry_on_429 =
+        read_bool "THREADS_READ_RETRY_ON_429" default_options.retry_on_429;
+      retry_on_5xx =
+        read_bool "THREADS_READ_RETRY_ON_5XX" default_options.retry_on_5xx;
+      retry_on_network_error =
+        read_bool "THREADS_READ_RETRY_ON_NETWORK"
+          default_options.retry_on_network_error;
+      auto_refresh_token =
+        read_bool "THREADS_AUTO_REFRESH_TOKEN" default_options.auto_refresh_token;
+      token_expiry_skew_seconds =
+        (match Config.get_env "THREADS_TOKEN_EXPIRY_SKEW_SECONDS" with
+         | Some raw ->
+             parse_non_negative_int ~default:default_options.token_expiry_skew_seconds
+               ~max_value:3600 raw
+         | None -> default_options.token_expiry_skew_seconds);
+    }
+end
+
+module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS) = struct
   module OAuth_http = OAuth.Make (Config.Http)
 
   let max_text_length = 500
@@ -982,53 +1073,12 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
     in
     if indicates_missing then `Missing else `Backend
 
-  let parse_retry_attempts raw =
-    try
-      let value = int_of_string (String.trim raw) in
-      if value < 1 then 1 else if value > 10 then 10 else value
-    with _ -> 3
-
-  let parse_non_negative_int ~default ~max_value raw =
-    try
-      let value = int_of_string (String.trim raw) in
-      if value < 0 then 0 else if value > max_value then max_value else value
-    with _ -> default
-
-  let parse_bool ?(default = false) raw =
-    match String.lowercase_ascii (String.trim raw) with
-    | "1" | "true" | "yes" | "on" -> true
-    | "0" | "false" | "no" | "off" -> false
-    | _ -> default
-
-  let max_read_retry_attempts () =
-    match Config.get_env "THREADS_MAX_READ_RETRY_ATTEMPTS" with
-    | Some raw -> parse_retry_attempts raw
-    | None -> 3
-
-  let token_expiry_skew_seconds () =
-    match Config.get_env "THREADS_TOKEN_EXPIRY_SKEW_SECONDS" with
-    | Some raw -> parse_non_negative_int ~default:60 ~max_value:3600 raw
-    | None -> 60
-
-  let auto_refresh_token_enabled () =
-    match Config.get_env "THREADS_AUTO_REFRESH_TOKEN" with
-    | Some raw -> parse_bool ~default:false raw
-    | None -> false
-
-  let retry_on_429 () =
-    match Config.get_env "THREADS_READ_RETRY_ON_429" with
-    | Some raw -> parse_bool ~default:false raw
-    | None -> false
-
-  let retry_on_5xx () =
-    match Config.get_env "THREADS_READ_RETRY_ON_5XX" with
-    | Some raw -> parse_bool ~default:true raw
-    | None -> true
-
-  let retry_on_network_error () =
-    match Config.get_env "THREADS_READ_RETRY_ON_NETWORK" with
-    | Some raw -> parse_bool ~default:true raw
-    | None -> true
+  let max_read_retry_attempts () = (Options.options ()).max_read_retry_attempts
+  let token_expiry_skew_seconds () = (Options.options ()).token_expiry_skew_seconds
+  let auto_refresh_token_enabled () = (Options.options ()).auto_refresh_token
+  let retry_on_429 () = (Options.options ()).retry_on_429
+  let retry_on_5xx () = (Options.options ()).retry_on_5xx
+  let retry_on_network_error () = (Options.options ()).retry_on_network_error
 
   let http_get_with_retry url on_success on_error =
     let max_attempts = max_read_retry_attempts () in
@@ -3326,25 +3376,36 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
 end
 
 
-module Make (Config : CONFIG) = Make_internal (struct
-  include Config
+module Make_with_options (Config : CONFIG) (Options : OPTIONS) =
+  Make_internal (struct
+    include Config
 
-  let with_refresh_lock ~account_id:_ run on_success on_error =
-    run on_success on_error
-end)
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      run on_success on_error
+  end) (Options)
 
-module Make_coordinated (Config : COORDINATED_CONFIG) = struct
-  include Make_internal (Config)
+module Make (Config : CONFIG) = Make_with_options (Config) (Env_options (Config))
+
+module Make_coordinated_with_options (Config : COORDINATED_CONFIG)
+    (Options : OPTIONS) = struct
+  include Make_internal (Config) (Options)
 
   let refresh_account_credentials ~account_id on_success on_error =
     ensure_account_credentials ~force_refresh:true ~account_id on_success
       (fun error -> on_error (Error_types.error_to_string error))
 end
 
+module Make_coordinated (Config : COORDINATED_CONFIG) =
+  Make_coordinated_with_options (Config) (Env_options (Config))
+
 (** Coordinated credential operations without legacy account-health writes.
     All typed results, credential persistence, and locking are preserved. *)
-module Make_credentials_only (Config : COORDINATED_CONFIG) =
-  Make_coordinated (struct
+module Make_credentials_only_with_options (Config : COORDINATED_CONFIG)
+    (Options : OPTIONS) =
+  Make_coordinated_with_options (struct
     include Config
     let update_health_status = Health_status.ignore_updates
-  end)
+  end) (Options)
+
+module Make_credentials_only (Config : COORDINATED_CONFIG) =
+  Make_credentials_only_with_options (Config) (Env_options (Config))

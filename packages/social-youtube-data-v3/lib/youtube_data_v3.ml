@@ -106,9 +106,11 @@ module OAuth = struct
 
   module Pkce = Social_google_oauth.Pkce
 
-  (** Generate authorization URL for YouTube OAuth 2.0 flow with PKCE *)
-  let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.write) () =
-    Social_google_oauth.get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
+  (** Generate authorization URL for YouTube OAuth 2.0 flow with PKCE.
+      [access_type] / [prompt] default to offline access with a consent
+      re-prompt, as {!Social_google_oauth.get_authorization_url} documents. *)
+  let get_authorization_url ?access_type ?prompt ~client_id ~redirect_uri ~state ~code_verifier ?(scopes=Scopes.write) () =
+    Social_google_oauth.get_authorization_url ?access_type ?prompt ~client_id ~redirect_uri ~state ~code_verifier ~scopes ()
 
   (** {2 Typed channel read} *)
 
@@ -1568,15 +1570,15 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                 on_result (Error_types.Failure err))
   
   (** OAuth authorization URL with PKCE *)
-  let get_oauth_url ~redirect_uri ~state ~code_verifier on_success on_error =
+  let get_oauth_url ?access_type ?prompt ~redirect_uri ~state ~code_verifier on_success on_error =
     let client_id = Config.get_env "YOUTUBE_CLIENT_ID" |> Option.value ~default:"" in
 
     if client_id = "" then
       on_error "YouTube client ID not configured"
     else
-      let url = Social_google_oauth.get_authorization_url
+      let url = Social_google_oauth.get_authorization_url ?access_type ?prompt
         ~client_id ~redirect_uri ~state ~code_verifier
-        ~scopes:(OAuth.Scopes.write @ OAuth.Scopes.read @ OAuth.Scopes.analytics) in
+        ~scopes:(OAuth.Scopes.write @ OAuth.Scopes.read @ OAuth.Scopes.analytics) () in
       on_success url
   
   (** Exchange OAuth code for access token with PKCE *)
