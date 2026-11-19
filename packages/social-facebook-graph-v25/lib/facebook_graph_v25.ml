@@ -3050,7 +3050,7 @@ module Make_internal (Config : COORDINATED_CONFIG)
     get_page ~path ~access_token ?fields ~cursor parse_data on_result
   
   (** Generic POST request to any Graph API endpoint *)
-  let post ~path ~access_token ~params ?required_permissions on_result =
+  let post_with_error ~http_error ~network_error ~path ~access_token ~params ?required_permissions on_result =
     let url = Printf.sprintf "%s/%s" graph_api_base path in
 
     let all_params = params @
@@ -3076,12 +3076,16 @@ module Make_internal (Config : COORDINATED_CONFIG)
             | Some p -> p
             | None -> permissions_for_path path
           in
-          on_result (Error (parse_api_error_with_permissions
-            ~required_permissions
-            ~status_code:response.status
-            ~response_body:response.body)))
-      (fun err -> on_result (Error (transport_error err)))
+          on_result (Error (http_error ~required_permissions response)))
+      (fun err -> on_result (Error (network_error err)))
   
+  let post ~path ~access_token ~params ?required_permissions on_result =
+    post_with_error ~path ~access_token ~params ?required_permissions
+      ~http_error:(fun ~required_permissions response ->
+        parse_api_error_with_permissions ~required_permissions
+          ~status_code:response.Social_core.status ~response_body:response.body)
+      ~network_error:transport_error on_result
+
   (** Generic DELETE request to any Graph API endpoint *)
   let delete ~path ~access_token ?required_permissions on_result =
     let proof_params = match compute_app_secret_proof ~access_token with
@@ -3486,29 +3490,77 @@ module Make_internal (Config : COORDINATED_CONFIG)
       on_result (Error (invalid_input (name ^ " must not be empty")))
     else k (Uri.pct_encode (String.trim id))
 
+  let parse_comment_reply (response : Social_core.response) =
+    match Yojson.Basic.from_string response.body with
+    | `Assoc fields -> (
+        match List.assoc_opt "id" fields with
+        | Some (`String id) -> Stdlib.Ok id
+        | Some _ | None -> Stdlib.Error "no id")
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "expected a JSON object"
+    | exception Yojson.Json_error message -> Stdlib.Error message
+
+  let detailed_response_error ~required_permissions (response : Social_core.response) =
+    let header name =
+      List.find_map (fun (key, value) ->
+        if String.equal (String.lowercase_ascii key) name then Some value else None)
+        response.headers
+    in
+    let retry_after_seconds =
+      Option.bind (header "retry-after") (fun value ->
+        Option.bind (int_of_string_opt (String.trim value))
+          (fun seconds -> if seconds >= 0 then Some seconds else None))
+    in
+    Social_meta_graph_error.Http_failure
+      (Social_meta_graph_error.response_error
+         ~platform:Platform_types.FacebookPage ~status_code:response.status
+         ~required_permissions ?retry_after_seconds
+         ?request_id:(header "x-fb-trace-id")
+         ~redact:redact_sensitive_text_if_needed response.body)
+
   (** Reply to a comment as the Page ([POST /{comment_id}/comments] with
-      [message]); returns the new comment's id. Facebook shows comments two
+      [message]); returns the new comment's id and retains Graph failure diagnostics.
+      Numeric Retry-After seconds are retained without a fallback delay;
+      HTTP-date Retry-After values are not interpreted. Facebook shows comments two
       levels deep, so reply to a top-level comment (see {!Comments}). Needs
       [pages_manage_engagement].
 
       @see <https://developers.facebook.com/docs/graph-api/reference/object/comments/> *)
+  let reply_to_comment_detailed ~comment_id ~access_token ~message on_result =
+    if String.trim comment_id = "" then
+      on_result (Error (Social_meta_graph_error.Validation_failure
+        (invalid_input "comment_id must not be empty")))
+    else
+      let comment_id = Uri.pct_encode (String.trim comment_id) in
+      post_with_error ~path:(comment_id ^ "/comments") ~access_token
+        ~params:[ ("message", message) ]
+        ~required_permissions:comment_manage_permissions
+        ~http_error:detailed_response_error
+        ~network_error:(fun message -> Social_meta_graph_error.Transport_failure
+          (redact_sensitive_text_if_needed message))
+        (function
+          | Error error -> on_result (Error error)
+          | Ok response ->
+              match parse_comment_reply response with
+              | Stdlib.Ok id -> on_result (Ok id)
+              | Stdlib.Error message ->
+                  on_result (Error (Social_meta_graph_error.Malformed_response
+                    { status_code = response.status;
+                      message = redact_sensitive_text_if_needed
+                        ("Failed to parse reply response: " ^ message) })))
+
+  (** Compatibility API. Use [reply_to_comment_detailed] to retain diagnostics. *)
   let reply_to_comment ~comment_id ~access_token ~message on_result =
     require_id ~name:"comment_id" comment_id on_result (fun comment_id ->
-        post ~path:(comment_id ^ "/comments") ~access_token
-          ~params:[ ("message", message) ]
-          ~required_permissions:comment_manage_permissions
-          (function
-            | Error err -> on_result (Error err)
-            | Ok response -> (
-                match Yojson.Basic.from_string response.body with
-                | `Assoc fields -> (
-                    match List.assoc_opt "id" fields with
-                    | Some (`String id) -> on_result (Ok id)
-                    | Some _ | None -> on_result (Error (parse_failure "reply" "no id")))
-                | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
-                    on_result (Error (parse_failure "reply" "expected a JSON object"))
-                | exception Yojson.Json_error msg ->
-                    on_result (Error (parse_failure "reply" msg)))))
+      post ~path:(comment_id ^ "/comments") ~access_token
+        ~params:[ ("message", message) ]
+        ~required_permissions:comment_manage_permissions
+        (function
+          | Error error -> on_result (Error error)
+          | Ok response ->
+              match parse_comment_reply response with
+              | Stdlib.Ok id -> on_result (Ok id)
+              | Stdlib.Error message -> on_result (Error (parse_failure "reply" message))))
 
   (** Hide ([hidden:true]) or unhide a comment on a Page's post
       ([POST /{comment_id}] with [is_hidden]; Page comments only). Needs

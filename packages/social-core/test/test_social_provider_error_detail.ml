@@ -144,11 +144,46 @@ let test_of_error () =
     (Social_provider_error_detail.of_error
        (Error_types.Network_error Error_types.Timeout) = None)
 
+(* The redactor must see the complete body before the excerpt is cut: a
+   secret crossing the cut, or one appearing only after it, would otherwise
+   survive in the excerpt. The redactor here replaces the whole text when it
+   sees the secret, like the Facebook keyword redactor. *)
+let test_redact_before_excerpt_cut () =
+  Printf.printf "Test: redaction runs before the excerpt cut\n";
+  let contains ~needle haystack =
+    let hay_len = String.length haystack and needle_len = String.length needle in
+    let rec loop i =
+      i + needle_len > hay_len
+      || (String.sub haystack i needle_len = needle || loop (i + 1))
+    in
+    loop 0
+  in
+  let secret = "secret-token-1234567890" in
+  let redact text = if contains ~needle:secret text then "[redacted]" else text in
+  let excerpt body =
+    Option.value ~default:""
+      (Social_provider_error_detail.of_response ~status_code:400 ~redact body).body_excerpt
+  in
+  (* The secret starts before byte 1024 and crosses the cut. *)
+  let crossing =
+    {|{"error":{"message":"|} ^ String.make 1015 'x' ^ secret ^ {|","code":190}}|}
+  in
+  check "crossing secret redacts the whole excerpt"
+    (excerpt crossing = "[redacted]");
+  (* The secret appears only after byte 1024: only a whole-body pass sees it. *)
+  let after = String.make 1100 'y' ^ secret in
+  check "secret after the cut redacts the whole excerpt"
+    (excerpt after = "[redacted]");
+  check "structured fields still parse from the unredacted body"
+    ((Social_provider_error_detail.of_response ~status_code:400 ~redact crossing).code
+     = Some "190")
+
 let () =
   Printf.printf "Running Social_provider_error_detail contract tests\n\n";
   test_envelopes ();
   test_non_json_and_trace ();
   test_of_error ();
+  test_redact_before_excerpt_cut ();
   if !failures > 0 then begin
     Printf.printf "\n%d check(s) failed\n" !failures;
     exit 1

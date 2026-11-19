@@ -297,3 +297,17 @@ commit, allowing consumers to include their own related writes atomically.
 An operation's `Renewed` is provisional until that boundary commits; a failed
 write or commit is an error, never a successful `Renewed` result. Credential-only
 functors do not invoke health callbacks on either path.
+
+### Detailed Facebook comment reply failures
+
+`reply_to_comment_detailed` has the same arguments and success id as
+`reply_to_comment`, with `Social_meta_graph_error.failure` on failure.
+`Http_failure` retains the legacy error kind alongside `detail`, `graph` and
+optional numeric `retry_after_seconds`, including for auth, rate-limit,
+missing-resource and duplicate errors. Use `Social_meta_graph_error.classify`
+on `graph` for provider facts; retry and account-health policy belongs to callers.
+The API does not retry writes. Transport, malformed-response and preflight
+validation failures are separate variants. Diagnostics are redacted with the
+Facebook client's existing sensitive-text redactor and are never logged by
+this API. HTTP-date Retry-After values are not interpreted.
+The legacy API remains supported with its original error contract.

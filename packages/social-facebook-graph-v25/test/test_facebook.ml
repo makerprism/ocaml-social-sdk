@@ -4621,3 +4621,60 @@ let test_coordinated_recovery_reload_failure () =
   assert (!Mock_http.requests = [])
 
 let () = test_coordinated_recovery_reload_failure ()
+
+(* Graph error shapes: https://developers.facebook.com/docs/graph-api/guides/error-handling/ *)
+let () =
+  List.iter (fun (status, code, subcode) ->
+    Mock_http.reset ();
+    let body = Printf.sprintf
+      {|{"error":{"message":"Provider explanation","type":"OAuthException","code":%d,"error_subcode":%d,"fbtrace_id":"trace"}}|}
+      code subcode in
+    Mock_http.set_response { Social_core.status; headers = [("Retry-After", "42")]; body };
+    Facebook.reply_to_comment_detailed ~comment_id:"comment" ~access_token:"pt"
+      ~message:"Reply" (function
+        | Error (Social_meta_graph_error.Http_failure error) ->
+            assert (error.detail.http_status = status);
+            assert (error.detail.code = Some (string_of_int code));
+            assert (error.detail.subcode = Some subcode);
+            assert (error.detail.trace_id = Some "trace");
+            assert (error.detail.message = Some "Provider explanation");
+            assert (Option.is_some error.graph);
+            assert (error.retry_after_seconds = Some 42);
+            (match error.kind with
+             | Error_types.Rate_limited rate -> assert (rate.retry_after_seconds = Some 42)
+             | Error_types.Auth_error _ | Error_types.Resource_not_found _
+             | Error_types.Duplicate_content | Error_types.Api_error _ -> ()
+             | Error_types.Validation_error _ | Error_types.Network_error _
+             | Error_types.Content_policy_violation _ | Error_types.Internal_error _ -> assert false)
+        | Ok _ | Error (Social_meta_graph_error.Transport_failure _
+          | Social_meta_graph_error.Malformed_response _
+          | Social_meta_graph_error.Validation_failure _) -> assert false))
+    [400, 190, 463; 403, 200, 0; 429, 4, 0; 400, 100, 33;
+     400, 506, 0; 503, 2, 0];
+  Mock_http.reset ();
+  Mock_http.set_response { Social_core.status = 200; headers = []; body = "{}" };
+  Facebook.reply_to_comment_detailed ~comment_id:"comment" ~access_token:"pt"
+    ~message:"Reply" (function
+      | Error (Social_meta_graph_error.Malformed_response { status_code; _ }) ->
+          assert (status_code = 200)
+      | Ok _ | Error (Social_meta_graph_error.Http_failure _
+        | Social_meta_graph_error.Transport_failure _
+
+        | Social_meta_graph_error.Validation_failure _) -> assert false);
+  Mock_http.reset ();
+  Mock_http.set_errors ["connection reset"];
+  Facebook.reply_to_comment_detailed ~comment_id:"comment" ~access_token:"pt"
+    ~message:"Reply" (function
+      | Error (Social_meta_graph_error.Transport_failure message) ->
+          assert (String.equal message "connection reset")
+      | Ok _ | Error (Social_meta_graph_error.Http_failure _
+        | Social_meta_graph_error.Malformed_response _
+        | Social_meta_graph_error.Validation_failure _) -> assert false);
+  Mock_http.reset ();
+  Facebook.reply_to_comment_detailed ~comment_id:" " ~access_token:"pt"
+    ~message:"Reply" (function
+      | Error (Social_meta_graph_error.Validation_failure _) -> ()
+      | Ok _ | Error (Social_meta_graph_error.Http_failure _
+        | Social_meta_graph_error.Transport_failure _
+        | Social_meta_graph_error.Malformed_response _) -> assert false);
+  assert (!Mock_http.requests = [])

@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `reply_to_comment_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. Sensitive diagnostics use the existing redactor. The legacy reply API retains its contract; both APIs share request construction and response parsing.
+
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
 
 # Changelog

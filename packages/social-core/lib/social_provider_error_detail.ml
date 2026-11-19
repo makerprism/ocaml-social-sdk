@@ -166,7 +166,7 @@ let excerpt body =
     in
     Some (String.sub body 0 (cut excerpt_max_bytes))
 
-let of_response ~status_code ?request_id body =
+let of_response ~status_code ?request_id ?(redact = Fun.id) body =
   let fields =
     match Yojson.Basic.from_string body with
     | json -> fields_of_json json
@@ -179,7 +179,7 @@ let of_response ~status_code ?request_id body =
     error_type = fields.f_type;
     message = fields.f_message;
     trace_id = first_some [ Option.bind request_id non_empty; fields.f_trace ];
-    body_excerpt = excerpt body;
+    body_excerpt = excerpt (redact body);
   }
 
 let of_api_error (e : Error_types.api_error) =

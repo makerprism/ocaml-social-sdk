@@ -171,3 +171,32 @@ let of_error : Error_types.error -> t option = function
 
 let transport_error message =
   Error_types.Network_error (Error_types.Connection_failed message)
+
+type response_error = {
+  kind : Error_types.error;
+  detail : Social_provider_error_detail.t;
+  graph : t option;
+  retry_after_seconds : int option;
+}
+
+type failure =
+  | Http_failure of response_error
+  | Transport_failure of string
+  | Malformed_response of { status_code : int; message : string }
+  | Validation_failure of Error_types.error
+
+let response_error ~platform ~status_code ~required_permissions
+    ?retry_after_seconds ?request_id ?(redact = Fun.id) body =
+  (* The excerpt redactor sees the complete body before the cut; the message
+     is prose and is redacted after parsing. *)
+  let detail =
+    Social_provider_error_detail.of_response ~status_code ?request_id ~redact body in
+  let graph = Option.map (fun graph ->
+    { graph with message = Option.map redact graph.message;
+      user_title = Option.map redact graph.user_title;
+      user_message = Option.map redact graph.user_message }) (of_body body) in
+  { kind = to_error ~platform ~status_code ~required_permissions
+        ?retry_after_seconds ?request_id ~redact_body:redact ~redact_message:redact body;
+    detail = { detail with message = Option.map redact detail.message };
+    graph; retry_after_seconds }
+
