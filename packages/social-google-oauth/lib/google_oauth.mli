@@ -29,16 +29,40 @@ end
 
 (** {1 Authorization URL} *)
 
+(** Whether the authorization flow returns a refresh token
+    ([access_type]; see
+    {{:https://developers.google.com/identity/protocols/oauth2/web-server#offline}Google:
+    Offline access}). *)
+type access_type =
+  | Online
+  | Offline
+
+(** Whether Google re-prompts for consent or account selection
+    ([prompt]; see
+    {{:https://developers.google.com/identity/protocols/oauth2/web-server#prompt}Google:
+    Prompting for consent}). *)
+type prompt =
+  | No_prompt
+  | Consent
+  | Select_account
+  | Login
+
 (** Build a Google OAuth 2.0 authorization URL with PKCE.
 
-    Forces [access_type=offline] and [prompt=consent] to ensure a refresh
-    token is returned. Caller must supply scopes explicitly. *)
+    Defaults to [access_type=Offline] and [prompt=Consent] so a refresh
+    token is returned even when one was granted before; a consumer that
+    manages its own refresh tokens can pass [~access_type:Online] or
+    [~prompt:No_prompt]. Caller must supply scopes explicitly and apply
+    with [()]. *)
 val get_authorization_url :
+  ?access_type:access_type ->
+  ?prompt:prompt ->
   client_id:string ->
   redirect_uri:string ->
   state:string ->
   code_verifier:string ->
   scopes:string list ->
+  unit ->
   string
 
 (** {1 Typed reads} *)

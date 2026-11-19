@@ -46,7 +46,7 @@ let test_authorization_url () =
   let url =
     Social_google_oauth.get_authorization_url ~client_id:"cid" ~redirect_uri:"https://e.com/cb"
       ~state:"st" ~code_verifier:"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-      ~scopes:[ "openid"; "https://www.googleapis.com/auth/youtube.readonly" ]
+      ~scopes:[ "openid"; "https://www.googleapis.com/auth/youtube.readonly" ] ()
   in
   let uri = Uri.of_string url in
   let param key = Uri.get_query_param uri key in
@@ -55,7 +55,23 @@ let test_authorization_url () =
   assert (param "code_challenge" = Some "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
   assert (param "code_challenge_method" = Some "S256");
   assert (param "access_type" = Some "offline");
+  assert (param "prompt" = Some "consent");
   print_endline "ok: authorization URL carries scopes and the S256 challenge"
+
+let test_authorization_url_overrides () =
+  let url =
+    Social_google_oauth.get_authorization_url
+      ~access_type:Social_google_oauth.Online
+      ~prompt:Social_google_oauth.No_prompt
+      ~client_id:"cid" ~redirect_uri:"https://e.com/cb"
+      ~state:"st" ~code_verifier:"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+      ~scopes:[ "openid" ] ()
+  in
+  let uri = Uri.of_string url in
+  let param key = Uri.get_query_param uri key in
+  assert (param "access_type" = Some "online");
+  assert (param "prompt" = Some "none");
+  print_endline "ok: authorization URL honours access_type and prompt options"
 
 let test_get_userinfo () =
   Mock_http.reset ();
@@ -133,5 +149,6 @@ let test_api_error () =
 
 let () =
   test_authorization_url ();
+  test_authorization_url_overrides ();
   test_get_userinfo ();
   test_api_error ()

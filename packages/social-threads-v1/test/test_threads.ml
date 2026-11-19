@@ -947,6 +947,57 @@ let test_get_me_retry_config_single_attempt () =
           print_endline "ok: retry config single attempt"
       | _ -> failwith "expected immediate failure with single retry attempt")
 
+(* The explicit OPTIONS surface must not read the environment at all: with
+   no THREADS_* keys set and max_read_retry_attempts 1, one transient 500
+   ends the read immediately. *)
+let test_get_me_options_override_retry_without_env () =
+  Mock_config.reset ();
+  Mock_config.credentials_store :=
+    [
+      ( "acct-1",
+        {
+          access_token = "access-xyz";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Bearer;
+          scope = None;
+        } );
+    ];
+  Mock_http.set_responses
+    [
+      {
+        status = 500;
+        headers = [ ("X-FB-Trace-ID", "trace-options") ];
+        body = "{\"error\":{\"message\":\"temporary\",\"code\":1}}";
+      };
+      {
+        status = 200;
+        headers = [];
+        body = "{\"id\":\"user-1\",\"username\":\"alice\"}";
+      };
+    ];
+  let module Threads_one_attempt =
+    Social_threads_v1.Make_with_options (Mock_config)
+      (struct
+        let options () =
+          {
+            Social_threads_v1.max_read_retry_attempts = 1;
+            retry_on_429 = false;
+            retry_on_5xx = true;
+            retry_on_network_error = true;
+            auto_refresh_token = false;
+            token_expiry_skew_seconds = 60;
+          }
+      end)
+  in
+  Threads_one_attempt.get_me ~account_id:"acct-1"
+    (function
+      | Error (Error_types.Api_error _) ->
+          let requests = List.rev !Mock_http.requests in
+          assert (List.length requests = 1);
+          print_endline "ok: options set retry attempts without env"
+      | _ -> failwith "expected single attempt from explicit options")
+
 let test_get_me_retry_config_clamps_low_to_one () =
   Mock_config.reset ();
   Mock_config.env_vars := [ ("THREADS_MAX_READ_RETRY_ATTEMPTS", "0") ];
@@ -5453,6 +5504,7 @@ let () =
   test_get_me_malformed_payload_returns_internal_error ();
   test_get_me_retries_500_then_succeeds ();
   test_get_me_retry_config_single_attempt ();
+  test_get_me_options_override_retry_without_env ();
   test_get_me_retry_config_clamps_low_to_one ();
   test_get_me_retry_config_clamps_high_to_ten ();
   test_get_me_retry_config_invalid_falls_back_to_default ();
