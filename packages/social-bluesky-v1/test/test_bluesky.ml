@@ -34,6 +34,10 @@ type video_upload_mode =
   | Video_rejected_no_fallback
 let video_upload_mode = ref Video_direct_blob
 let video_job_status_polls = ref 0
+(* Thread partial-failure injection: fail createRecord calls from the
+   Nth one onwards (1-based); 0 disables it. *)
+let fail_create_record_from = ref 0
+let create_record_requests = ref 0
 let profile_read_mode = ref Read_normal
 let thread_read_mode = ref Read_normal
 let timeline_read_mode = ref Read_normal
@@ -674,6 +678,20 @@ module Mock_http : Social_core.HTTP_CLIENT = struct
         body = {|{"blob": {"$type": "blob", "ref": {"$link": "bafkreimockblob123"}, "mimeType": "image/jpeg", "size": 12345}}|};
       }
     (* Mock post creation response *)
+    else if string_contains_substr url "com.atproto.repo.createRecord" then (
+      incr create_record_requests;
+      if !fail_create_record_from > 0 && !create_record_requests >= !fail_create_record_from then
+        on_success {
+          Social_core.status = 500;
+          headers = [("content-type", "application/json")];
+          body = {|{"error":"InternalServerError"}|};
+        }
+      else
+        on_success {
+          Social_core.status = 200;
+          headers = [("content-type", "application/json")];
+          body = {|{"uri": "at://did:plc:test/app.bsky.feed.post/abc123", "cid": "bafytest"}|};
+        })
     else
       on_success {
         Social_core.status = 200;
@@ -4766,3 +4784,149 @@ let test_legacy_session_cache_does_not_reload_credentials () =
   assert (!loads = 1 && !completed = 2)
 
 let () = test_legacy_session_cache_does_not_reload_credentials ()
+
+(* --- Typed publish outcomes (strong refs, audit P7) --- *)
+
+let test_post_single_ref_returns_strong_ref () =
+  print_endline "  Testing post_single_ref returns a typed strong ref...";
+  Bluesky.invalidate_session ~account_id:"typed_ref_account";
+  let result = ref None in
+  Bluesky.post_single_ref ~account_id:"typed_ref_account" ~text:"Typed outcome" ~media_urls:[]
+    (fun outcome -> result := Some outcome);
+  (match !result with
+   | Some (Error_types.Success { uri; cid }) ->
+       (* The mock createRecord answers with these exact values. *)
+       assert (uri = "at://did:plc:test/app.bsky.feed.post/abc123");
+       assert (cid = "bafytest")
+   | Some (Error_types.Partial_success _) ->
+       failwith "post_single_ref: unexpected warnings"
+   | Some (Error_types.Failure err) ->
+       failwith ("post_single_ref failed: " ^ Error_types.error_to_string err)
+   | None -> failwith "post_single_ref didn't complete");
+  print_endline "    ✓ Typed strong ref returned"
+
+let test_post_single_legacy_id_codec () =
+  print_endline "  Testing post_single still returns the uri|cid id...";
+  Bluesky.invalidate_session ~account_id:"typed_ref_account";
+  let result = ref None in
+  Bluesky.post_single ~account_id:"typed_ref_account" ~text:"Legacy outcome" ~media_urls:[]
+    (fun outcome -> result := Some outcome);
+  (match !result with
+   | Some (Error_types.Success id) ->
+       assert (id = "at://did:plc:test/app.bsky.feed.post/abc123|bafytest");
+       assert (
+         Social_bluesky_v1.strong_ref_of_post_id id
+         = Some { uri = "at://did:plc:test/app.bsky.feed.post/abc123"; cid = "bafytest" })
+   | Some (Error_types.Partial_success _) ->
+       failwith "post_single: unexpected warnings"
+   | Some (Error_types.Failure err) ->
+       failwith ("post_single failed: " ^ Error_types.error_to_string err)
+   | None -> failwith "post_single didn't complete");
+  print_endline "    ✓ Legacy id format preserved"
+
+let test_reply_to_post_ref_returns_strong_ref () =
+  print_endline "  Testing reply_to_post_ref returns a typed strong ref...";
+  Bluesky.invalidate_session ~account_id:"typed_ref_account";
+  let reply_to =
+    {
+      root = { uri = "at://did:plc:test/app.bsky.feed.post/root"; cid = "bafyroot" };
+      parent = { uri = "at://did:plc:test/app.bsky.feed.post/parent"; cid = "bafyparent" };
+    }
+  in
+  let result = ref None in
+  Bluesky.reply_to_post_ref ~account_id:"typed_ref_account" ~reply_to ~text:"Typed reply" ~media_urls:[]
+    (fun outcome -> result := Some outcome);
+  (match !result with
+   | Some (Error_types.Success { uri; cid }) ->
+       assert (uri = "at://did:plc:test/app.bsky.feed.post/abc123");
+       assert (cid = "bafytest");
+       (* The reply record must carry the typed refs unchanged. *)
+       let body = Yojson.Basic.from_string (Option.value !last_post_body ~default:"{}") in
+       let open Yojson.Basic.Util in
+       let reply = body |> member "record" |> member "reply" in
+       assert (reply |> member "root" |> member "uri" |> to_string
+               = "at://did:plc:test/app.bsky.feed.post/root");
+       assert (reply |> member "parent" |> member "cid" |> to_string = "bafyparent")
+   | Some (Error_types.Partial_success _) ->
+       failwith "reply_to_post_ref: unexpected warnings"
+   | Some (Error_types.Failure err) ->
+       failwith ("reply_to_post_ref failed: " ^ Error_types.error_to_string err)
+   | None -> failwith "reply_to_post_ref didn't complete");
+  print_endline "    ✓ Typed reply ref returned"
+
+let test_post_thread_refs_returns_strong_refs () =
+  print_endline "  Testing post_thread_refs returns typed strong refs...";
+  Bluesky.invalidate_session ~account_id:"typed_ref_account";
+  let result = ref None in
+  Bluesky.post_thread_refs ~account_id:"typed_ref_account"
+    ~texts:[ "first"; "second" ] ~media_urls_per_post:[ []; [] ]
+    (fun outcome -> result := Some outcome);
+  (match !result with
+   | Some (Error_types.Success thread) ->
+       assert (List.length thread.posted_refs = 2);
+       assert (thread.failed_at_index = None);
+       assert (thread.total_requested = 2);
+       assert (
+         List.for_all
+           (fun { uri; _ } -> uri = "at://did:plc:test/app.bsky.feed.post/abc123")
+           thread.posted_refs)
+   | Some (Error_types.Partial_success _) ->
+       failwith "post_thread_refs: unexpected warnings"
+   | Some (Error_types.Failure err) ->
+       failwith ("post_thread_refs failed: " ^ Error_types.error_to_string err)
+   | None -> failwith "post_thread_refs didn't complete");
+  print_endline "    ✓ Typed thread refs returned"
+
+let test_post_thread_legacy_ids () =
+  print_endline "  Testing post_thread still returns uri|cid ids...";
+  Bluesky.invalidate_session ~account_id:"typed_ref_account";
+  let result = ref None in
+  Bluesky.post_thread ~account_id:"typed_ref_account"
+    ~texts:[ "first"; "second" ] ~media_urls_per_post:[ []; [] ]
+    (fun outcome -> result := Some outcome);
+  (match !result with
+   | Some (Error_types.Success thread) ->
+       assert (
+         thread.Error_types.posted_ids
+         = [ "at://did:plc:test/app.bsky.feed.post/abc123|bafytest";
+             "at://did:plc:test/app.bsky.feed.post/abc123|bafytest" ])
+   | Some (Error_types.Partial_success _) ->
+       failwith "post_thread: unexpected warnings"
+   | Some (Error_types.Failure err) ->
+       failwith ("post_thread failed: " ^ Error_types.error_to_string err)
+   | None -> failwith "post_thread didn't complete");
+  print_endline "    ✓ Legacy thread ids preserved"
+
+let test_post_thread_refs_partial_failure_keeps_typed_refs () =
+  print_endline
+    "  Testing a thread that fails part-way still exposes typed refs...";
+  Bluesky.invalidate_session ~account_id:"typed_ref_account";
+  create_record_requests := 0;
+  fail_create_record_from := 2;
+  let result = ref None in
+  Bluesky.post_thread_refs ~account_id:"typed_ref_account"
+    ~texts:[ "one"; "two" ] ~media_urls_per_post:[ []; [] ]
+    (fun outcome -> result := Some outcome);
+  fail_create_record_from := 0;
+  (match !result with
+   | Some (Error_types.Partial_success { result = thread; warnings = _ }) ->
+       assert (List.length thread.posted_refs = 1);
+       assert (thread.failed_at_index = Some 1);
+       assert (thread.total_requested = 2);
+       assert (
+         List.for_all
+           (fun { uri; _ } -> uri = "at://did:plc:test/app.bsky.feed.post/abc123")
+           thread.posted_refs)
+   | Some (Error_types.Success _) -> failwith "second post should have failed"
+   | Some (Error_types.Failure err) ->
+       failwith ("expected partial success, got: " ^ Error_types.error_to_string err)
+   | None -> failwith "post_thread_refs didn't complete");
+  print_endline "    ✓ Partial thread keeps typed refs"
+
+let () =
+  test_post_single_ref_returns_strong_ref ();
+  test_post_single_legacy_id_codec ();
+  test_reply_to_post_ref_returns_strong_ref ();
+  test_post_thread_refs_returns_strong_refs ();
+  test_post_thread_legacy_ids ();
+  test_post_thread_refs_partial_failure_keeps_typed_refs ()
