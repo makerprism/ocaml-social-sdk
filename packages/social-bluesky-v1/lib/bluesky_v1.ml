@@ -1382,14 +1382,14 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         [Auth.refresh_session]; an attacker who exfiltrated a refresh_jwt
         becomes useless after our next refresh. *)
   include (struct
-  let ensure_valid_token_unlocked ~account_id on_success on_error =
+  let ensure_valid_token_unlocked ~require_persistence ~reused ~renewed ~account_id on_success on_error =
     let module AuthMake = Auth.Make (Http) in
     let cache_and_succeed ~did ~access_jwt =
       Hashtbl.replace session_cache account_id (did, access_jwt, Unix.gettimeofday ());
       Config.update_health_status ~account_id
         ~status:(Health_status.to_string Health_status.Healthy) ~error_message:None
-        (fun () -> on_success access_jwt)
-        (fun _ -> on_success access_jwt)
+        (fun () -> on_success (renewed access_jwt))
+        (fun _ -> on_success (renewed access_jwt))
     in
     let on_token_revoked () =
       invalidate_session ~account_id;
@@ -1425,7 +1425,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     match Hashtbl.find_opt session_cache account_id with
     | Some (_did, access_jwt, created_at)
       when now -. created_at < session_max_age_seconds ->
-        on_success access_jwt
+        on_success (reused access_jwt)
     | _ ->
         Config.get_credentials ~account_id
           (fun creds ->
@@ -1458,7 +1458,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                         Config.update_credentials ~account_id ~credentials:new_creds
                           (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                           (fun _ ->
-                            if Persistence.required then
+                            if Persistence.required || require_persistence then
                               on_error (Error_types.Network_error
                                 (Error_types.Connection_failed "Failed to persist refreshed session"))
                             else cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
@@ -1487,7 +1487,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                           Config.update_credentials ~account_id ~credentials:rotated
                             (fun () -> cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
                             (fun _ ->
-                              if Persistence.required then
+                              if Persistence.required || require_persistence then
                                 on_error (Error_types.Network_error
                                   (Error_types.Connection_failed "Failed to persist rotated session"))
                               else cache_and_succeed ~did:session.did ~access_jwt:session.access_jwt)
@@ -1499,11 +1499,11 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
   
   let ensure_valid_token ~account_id on_success on_error =
     if not Persistence.required then
-      ensure_valid_token_unlocked ~account_id on_success on_error
+      ensure_valid_token_unlocked ~require_persistence:false ~reused:Fun.id ~renewed:Fun.id ~account_id on_success on_error
     else
     Config.with_refresh_lock ~account_id
       (fun on_locked_success on_locked_error ->
-        ensure_valid_token_unlocked ~account_id
+        ensure_valid_token_unlocked ~require_persistence:false ~reused:Fun.id ~renewed:Fun.id ~account_id
           (fun access_jwt ->
             Config.get_credentials ~account_id
               (fun credentials ->
@@ -1520,7 +1520,23 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         invalidate_session ~account_id;
         on_error error)
 
+  let ensure_valid_token_with_outcome ~with_refresh_lock ~account_id on_success on_error =
+    with_refresh_lock ~account_id
+      (fun success failure ->
+        ensure_valid_token_unlocked ~require_persistence:true
+          ~reused:(fun token -> Social_credential_outcome.Reused token)
+          ~renewed:(fun token -> Social_credential_outcome.Renewed token)
+          ~account_id success failure)
+      on_success
+      (fun error -> invalidate_session ~account_id; on_error error)
+
   end : sig
+    val ensure_valid_token_with_outcome :
+      with_refresh_lock:(account_id:string ->
+        ((string Social_credential_outcome.t -> unit) -> (Error_types.error -> unit) -> unit) ->
+        (string Social_credential_outcome.t -> unit) -> (Error_types.error -> unit) -> unit) ->
+      account_id:string -> (string Social_credential_outcome.t -> unit) ->
+      (Error_types.error -> unit) -> unit
     val ensure_valid_token :
       account_id:string -> (string -> unit) ->
       (Error_types.error -> unit) -> unit

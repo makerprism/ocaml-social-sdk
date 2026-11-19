@@ -1,3 +1,7 @@
+# Unreleased
+
+- Add runtime-agnostic `Social_credential_outcome` (`Reused` / `Renewed`) with projection helpers and documented persistence semantics.
+
 # Changelog
 
 - Add an opt-in path to disable legacy account-health callbacks without changing credential results.

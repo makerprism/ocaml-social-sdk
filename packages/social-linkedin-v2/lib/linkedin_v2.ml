@@ -1487,7 +1487,7 @@ module Make_coordinated_with_options (Config : COORDINATED_CONFIG) (Options : OP
     )
   
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
-  let ensure_valid_token ~account_id on_success on_error =
+  let acquire_credentials ~with_refresh_lock ~reused ~renewed ~account_id on_success on_error =
     let user_friendly_refresh_error err =
       if String.length err > 100
          &&
@@ -1517,8 +1517,8 @@ module Make_coordinated_with_options (Config : COORDINATED_CONFIG) (Options : OP
               let message = user_friendly_refresh_error err in
               on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed message)))
     in
-    Social_refresh.Orchestrator.ensure_valid_access_token
-      ~with_refresh_lock:Config.with_refresh_lock
+    Social_refresh.Orchestrator.ensure_with_result ~reused ~renewed
+      ~with_refresh_lock
       ~reload_credentials:Config.get_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = 604800 }
       ~account_id
@@ -1526,8 +1526,18 @@ module Make_coordinated_with_options (Config : COORDINATED_CONFIG) (Options : OP
       ~perform_refresh
       ~persist_credentials:Config.update_credentials
       ~update_health:Config.update_health_status
-      (fun credentials -> on_success credentials.Social_core.access_token)
-      on_error
+      on_success on_error
+
+  let ensure_valid_token ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock:Config.with_refresh_lock
+      ~reused:Fun.id ~renewed:Fun.id ~account_id
+      (fun credentials -> on_success credentials.Social_core.access_token) on_error
+
+  let ensure_valid_token_with_outcome ~with_refresh_lock ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock
+      ~reused:(fun credentials -> Social_credential_outcome.Reused credentials.Social_core.access_token)
+      ~renewed:(fun credentials -> Social_credential_outcome.Renewed credentials.Social_core.access_token)
+      ~account_id on_success on_error
   
   (** Get person URN for posting *)
   let get_person_urn ~access_token on_success on_error =

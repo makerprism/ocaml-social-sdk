@@ -955,7 +955,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                [("Authorization", Printf.sprintf "Bearer %s" credentials.access_token)] }
 
   (** Ensure valid OAuth 2.0 access token, refreshing if needed *)
-  let ensure_token ?(force_refresh = false) ~account_id on_success on_error =
+  let acquire_credentials ~with_refresh_lock ~reused ~renewed ?(force_refresh = false) ~account_id on_success on_error =
     let client_id = Config.get_env "TWITTER_CLIENT_ID" |> Option.value ~default:"" in
     let client_secret = Config.get_env "TWITTER_CLIENT_SECRET" |> Option.value ~default:"" in
     let perform_refresh ~credentials on_refresh_success on_refresh_error =
@@ -977,8 +977,8 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                  })
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
-    Social_refresh.Orchestrator.ensure_valid_access_token
-      ~with_refresh_lock:Config.with_refresh_lock ~force_refresh
+    Social_refresh.Orchestrator.ensure_with_result ~reused ~renewed
+      ~with_refresh_lock ~force_refresh
       ~reload_credentials:Config.get_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = 1800 }
       ~account_id
@@ -986,14 +986,34 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       ~perform_refresh
       ~persist_credentials:Config.update_credentials
       ~update_health:Config.update_health_status
+      on_success on_error
+
+  let ensure_token ?force_refresh ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock:Config.with_refresh_lock
+      ~reused:Fun.id ~renewed:Fun.id ?force_refresh ~account_id
       (fun credentials ->
         match make_auth_context credentials with
         | Ok auth_ctx -> on_success auth_ctx
         | Error msg -> on_error (Error_types.Auth_error (Error_types.Refresh_failed msg)))
       on_error
-  
+
   let ensure_valid_token ~account_id on_success on_error =
     ensure_token ~account_id on_success on_error
+
+  let ensure_valid_token_with_outcome ~with_refresh_lock ~account_id on_success on_error =
+    with_refresh_lock ~account_id
+      (fun on_success on_error ->
+        acquire_credentials
+          ~with_refresh_lock:(fun ~account_id:_ run success error -> run success error)
+          ~reused:(fun credentials -> Social_credential_outcome.Reused credentials)
+          ~renewed:(fun credentials -> Social_credential_outcome.Renewed credentials)
+          ~account_id
+          (fun outcome ->
+            match make_auth_context (Social_credential_outcome.value outcome) with
+            | Ok auth -> on_success (Social_credential_outcome.map (fun _ -> auth.access_token) outcome)
+            | Error message -> on_error (Error_types.Auth_error (Error_types.Refresh_failed message)))
+          on_error)
+      on_success on_error
 
   (** Retry-on-401 wrapper.
 

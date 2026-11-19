@@ -4674,6 +4674,8 @@ let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
         on_success { Social_core.status = 200; headers = [];
           body = {|{"did":"did:plc:fixture","handle":"fixture.test","accessJwt":"access-jwt","refreshJwt":"eyJ-rotated-refresh"}|} }
     end
+    let update_health_status ~account_id:_ ~status:_ ~error_message:_ _ _ =
+      failwith "credential acquisition must not write health"
     let get_credentials ~account_id:_ on_success _ =
       assert !locked;
       on_success !stored
@@ -4701,19 +4703,19 @@ let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
       in
       if !locked then Queue.add start waiting else start ()
   end in
-  let module First = Social_bluesky_v1.Make_coordinated (Config) in
-  let module Second = Social_bluesky_v1.Make_coordinated (Config) in
-  let success token = assert (token = "access-jwt"); incr completed in
+  let module First = Social_bluesky_v1.Make_credentials_only (Config) in
+  let module Second = Social_bluesky_v1.Make_credentials_only (Config) in
+  let success outcome = assert (outcome = Social_credential_outcome.Renewed "access-jwt"); incr completed in
   let failure error =
     if fail_write || fail_commit then incr failed else failwith (Error_types.error_to_string error)
   in
-  First.ensure_valid_token ~account_id:"account" success failure;
-  if not fail_write && not fail_commit then Second.ensure_valid_token ~account_id:"account" success failure;
+  First.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure;
+  if not fail_write && not fail_commit then Second.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure;
   assert (!requests = 1 && !completed = 0 && !locked);
   (match !persist with Some finish -> finish () | None -> assert false);
   if fail_commit then (
     assert (!failed = 1 && !completed = 0 && not !locked);
-    First.ensure_valid_token ~account_id:"account" success failure;
+    First.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure;
     assert (!requests = 2 && !locked);
     (match !persist with Some finish -> finish () | None -> assert false);
     assert (!failed = 2 && !completed = 0 && not !locked)

@@ -5734,10 +5734,17 @@ let test_coordinated_refresh () =
         body = "{\"id\":\"user-1\",\"username\":\"alice\"}";
       };
     ];
-  Provider.ensure_account_credentials ~refresh_window_seconds:604800
+  Provider.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock
+    ~refresh_window_seconds:604800
     ~account_id:"acct-1"
-    (fun credentials ->
-      assert (credentials.access_token = "new-access");
+    (fun outcome ->
+      assert (outcome = Social_credential_outcome.Renewed "new-access");
+      incr completed)
+    (fun error -> failwith (Error_types.error_to_string error));
+  Provider.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock
+    ~refresh_window_seconds:604800 ~account_id:"acct-1"
+    (fun outcome ->
+      assert (outcome = Social_credential_outcome.Reused "new-access");
       incr completed)
     (fun error -> failwith (Error_types.error_to_string error));
   Provider.get_me ~account_id:"acct-1" (function
@@ -5755,7 +5762,7 @@ let test_coordinated_refresh () =
   assert !locked;
   assert (List.length !Mock_http.requests = 1);
   (match !persist with Some finish -> finish () | None -> assert false);
-  assert (!completed = 3);
+  assert (!completed = 4);
   assert (not !locked);
   assert (List.length !Mock_http.requests = 4);
   assert (

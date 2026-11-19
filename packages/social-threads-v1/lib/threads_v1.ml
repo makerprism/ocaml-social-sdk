@@ -1060,7 +1060,7 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
          | Ok refresh_needed -> refresh_needed
          | Error _ -> true)
 
-  let ensure_account_credentials ?refresh_window_seconds ?(force_refresh = false)
+  let acquire_credentials ~with_refresh_lock ~reused ~renewed ?refresh_window_seconds ?(force_refresh = false)
       ?(allow_refresh = auto_refresh_token_enabled ()) ~account_id on_success
       on_error =
     let map_credentials_error err =
@@ -1094,8 +1094,8 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
       Config.update_health_status ~account_id ~status ~error_message on_health_ok
         on_health_error
     in
-    Social_refresh.Orchestrator.ensure_valid_access_token
-      ~with_refresh_lock:Config.with_refresh_lock ~force_refresh
+    Social_refresh.Orchestrator.ensure_with_result ~reused ~renewed
+      ~with_refresh_lock ~force_refresh
       ~reload_credentials:load_credentials
       ~policy:
         {
@@ -1106,6 +1106,19 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
         }
       ~map_load_error:map_credentials_error ~account_id ~load_credentials
       ~perform_refresh ~persist_credentials ~update_health on_success on_error
+
+  let ensure_account_credentials ?refresh_window_seconds ?force_refresh
+      ?allow_refresh ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock:Config.with_refresh_lock
+      ~reused:Fun.id ~renewed:Fun.id ?refresh_window_seconds ?force_refresh
+      ?allow_refresh ~account_id on_success on_error
+
+  let ensure_valid_token_with_outcome ~with_refresh_lock ?refresh_window_seconds
+      ?force_refresh ?allow_refresh ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock
+      ~reused:(fun credentials -> Social_credential_outcome.Reused credentials.Social_core.access_token)
+      ~renewed:(fun credentials -> Social_credential_outcome.Renewed credentials.Social_core.access_token)
+      ?refresh_window_seconds ?force_refresh ?allow_refresh ~account_id on_success on_error
 
   let with_valid_credentials ~account_id on_success on_error =
     ensure_account_credentials ~account_id on_success on_error
