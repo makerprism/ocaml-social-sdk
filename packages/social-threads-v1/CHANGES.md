@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
+
 - Add `Make_credentials_only` for coordinated credential operations without account-health callbacks. Legacy functors retain their behavior.
 
 - Add Make_coordinated with a completion-aware account lock for worker, read and publish refresh. Reload and recheck expiry under the lock; preserve Make compatibility.

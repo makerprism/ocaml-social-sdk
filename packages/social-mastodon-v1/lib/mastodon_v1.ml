@@ -1261,6 +1261,13 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_error (Error_types.Auth_error (Error_types.Refresh_failed err))))
       (fun err -> on_error (Error_types.Network_error (Error_types.Connection_failed err)))
 
+  let ensure_valid_token_with_outcome ~with_refresh_lock ~account_id on_success on_error =
+    with_refresh_lock ~account_id
+      (fun success failure ->
+        ensure_valid_token ~account_id
+          (fun credentials -> success (Social_credential_outcome.Reused credentials.access_token)) failure)
+      on_success on_error
+
   (** Get resolved instance limits for current account instance *)
   let get_instance_limits ~account_id ?(force_refresh=false) on_result =
     ensure_valid_token ~account_id

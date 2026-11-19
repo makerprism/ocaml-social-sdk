@@ -4648,7 +4648,7 @@ let () =
   print_endline "";
   print_endline "Total: 154 test functions"
 
-let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
+let test_coordinated_sessions ?(same_instance = false) ?(fail_commit = false) ~fail_write () =
   let stored = ref {
     Social_core.access_token = "did:plc:fixture";
     refresh_token = Some "eyJ-original-refresh";
@@ -4674,6 +4674,8 @@ let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
         on_success { Social_core.status = 200; headers = [];
           body = {|{"did":"did:plc:fixture","handle":"fixture.test","accessJwt":"access-jwt","refreshJwt":"eyJ-rotated-refresh"}|} }
     end
+    let update_health_status ~account_id:_ ~status:_ ~error_message:_ _ _ =
+      failwith "credential acquisition must not write health"
     let get_credentials ~account_id:_ on_success _ =
       assert !locked;
       on_success !stored
@@ -4701,19 +4703,24 @@ let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
       in
       if !locked then Queue.add start waiting else start ()
   end in
-  let module First = Social_bluesky_v1.Make_coordinated (Config) in
-  let module Second = Social_bluesky_v1.Make_coordinated (Config) in
-  let success token = assert (token = "access-jwt"); incr completed in
+  let module First = Social_bluesky_v1.Make_credentials_only (Config) in
+  let module Second = Social_bluesky_v1.Make_credentials_only (Config) in
+  let success outcome = assert (outcome = Social_credential_outcome.Renewed "access-jwt"); incr completed in
   let failure error =
     if fail_write || fail_commit then incr failed else failwith (Error_types.error_to_string error)
   in
-  First.ensure_valid_token ~account_id:"account" success failure;
-  if not fail_write && not fail_commit then Second.ensure_valid_token ~account_id:"account" success failure;
+  First.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure;
+  if same_instance then
+    First.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure
+  else if not fail_write && not fail_commit then
+    Second.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure;
   assert (!requests = 1 && !completed = 0 && !locked);
   (match !persist with Some finish -> finish () | None -> assert false);
   if fail_commit then (
-    assert (!failed = 1 && !completed = 0 && not !locked);
-    First.ensure_valid_token ~account_id:"account" success failure;
+    assert (!failed = 1 && !completed = 0);
+    if not same_instance then (
+      assert (not !locked);
+      First.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock ~account_id:"account" success failure);
     assert (!requests = 2 && !locked);
     (match !persist with Some finish -> finish () | None -> assert false);
     assert (!failed = 2 && !completed = 0 && not !locked)
@@ -4724,13 +4731,20 @@ let test_coordinated_sessions ?(fail_commit = false) ~fail_write () =
     assert (!requests = 2 && !completed = 1 && !locked);
     (match !persist with Some finish -> finish () | None -> assert false);
     assert (!completed = 2 && not !locked);
-    assert ((!stored).Social_core.refresh_token = Some "eyJ-rotated-refresh")
+    assert ((!stored).Social_core.refresh_token = Some "eyJ-rotated-refresh");
+    First.ensure_valid_token_with_outcome ~with_refresh_lock:Config.with_refresh_lock
+      ~account_id:"account"
+      (fun outcome -> assert (outcome = Social_credential_outcome.Reused "access-jwt"); incr completed)
+      failure;
+    assert (!completed = 3 && !requests = 2)
   )
 
 let () =
   test_coordinated_sessions ~fail_write:false ();
   test_coordinated_sessions ~fail_write:true ();
-  test_coordinated_sessions ~fail_commit:true ~fail_write:false ()
+  test_coordinated_sessions ~fail_commit:true ~fail_write:false ();
+  test_coordinated_sessions ~same_instance:true ~fail_commit:true ~fail_write:false ();
+  test_coordinated_sessions ~same_instance:true ~fail_write:false ()
 
 let test_legacy_session_cache_does_not_reload_credentials () =
   let loads = ref 0 in

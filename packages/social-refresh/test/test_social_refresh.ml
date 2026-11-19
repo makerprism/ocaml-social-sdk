@@ -517,3 +517,46 @@ let () =
     ~persist_credentials:(fun ~account_id:_ ~credentials:_ _ _ -> assert false)
     (fun actual -> assert (actual = credentials))
     (fun _ -> assert false)
+
+(* A successful HTTP refresh may return the same access-token text. Persistence,
+   rather than string comparison, determines the acquisition outcome. *)
+let () =
+  let fresh = make_credentials ~expires_at:(rfc3339_in_seconds 4000) "same-token" in
+  let expired = { fresh with Social_core.expires_at = Some (rfc3339_in_seconds (-10)) } in
+  let run ~initial ~reload ~save_ok ~commit_ok =
+    let saved = ref false in
+    let locked = ref false in
+    let result = ref None in
+    Social_refresh.Orchestrator.ensure_credentials_with_outcome
+      ~account_id:"outcome"
+      ~with_refresh_lock:(fun ~account_id:_ operation success failure ->
+        locked := true;
+        operation
+          (fun outcome ->
+            (match outcome with
+            | Social_credential_outcome.Reused _ -> assert (not !saved)
+            | Social_credential_outcome.Renewed _ -> assert !saved);
+            locked := false;
+            if commit_ok then success outcome
+            else failure (Error_types.Internal_error "commit failed"))
+          (fun error -> locked := false; failure error))
+      ~load_credentials:(fun ~account_id:_ success _ -> assert !locked; success initial)
+      ~reload_credentials:(fun ~account_id:_ success _ -> assert !locked; success reload)
+      ~perform_refresh:(fun ~credentials:_ success _ -> assert !locked; success fresh)
+      ~persist_credentials:(fun ~account_id:_ ~credentials:_ success failure ->
+        assert !locked;
+        if save_ok then (saved := true; success ()) else failure "write failed")
+      (fun outcome -> assert (not !locked); result := Some (Ok outcome))
+      (fun error -> assert (not !locked); result := Some (Error error));
+    !result
+  in
+  assert (run ~initial:fresh ~reload:fresh ~save_ok:true ~commit_ok:true
+    = Some (Ok (Social_credential_outcome.Reused fresh)));
+  assert (run ~initial:expired ~reload:fresh ~save_ok:true ~commit_ok:true
+    = Some (Ok (Social_credential_outcome.Reused fresh)));
+  assert (run ~initial:expired ~reload:expired ~save_ok:true ~commit_ok:true
+    = Some (Ok (Social_credential_outcome.Renewed fresh)));
+  (match run ~initial:expired ~reload:expired ~save_ok:false ~commit_ok:true with
+  | Some (Error _) -> () | Some (Ok _) | None -> assert false);
+  assert (run ~initial:expired ~reload:expired ~save_ok:true ~commit_ok:false
+    = Some (Error (Error_types.Internal_error "commit failed")))

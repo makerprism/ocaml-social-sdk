@@ -725,7 +725,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
          | Error _ -> false)
   
   (** Ensure valid access token, refreshing when near expiry *)
-  let ensure_valid_token ~account_id on_success on_error =
+  let acquire_credentials ~with_refresh_lock ~reused ~renewed ~account_id on_success on_error =
     let load_credentials ~account_id on_loaded on_load_error =
       Config.get_credentials ~account_id
         (fun creds ->
@@ -754,8 +754,8 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               on_refresh_success
               (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
     in
-    Social_refresh.Orchestrator.ensure_valid_access_token
-      ~with_refresh_lock:Config.with_refresh_lock
+    Social_refresh.Orchestrator.ensure_with_result ~reused ~renewed
+      ~with_refresh_lock
       ~reload_credentials:load_credentials
       ~policy:{ Social_refresh.refresh_window_seconds = OAuth.Metadata.refresh_buffer_seconds }
       ~map_persist_error:(fun err -> Error_types.Auth_error (Error_types.Refresh_failed err))
@@ -764,8 +764,18 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       ~perform_refresh
       ~persist_credentials:Config.update_credentials
       ~update_health:Config.update_health_status
-      (fun credentials -> on_success credentials.Social_core.access_token)
-      on_error
+      on_success on_error
+
+  let ensure_valid_token ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock:Config.with_refresh_lock
+      ~reused:Fun.id ~renewed:Fun.id ~account_id
+      (fun credentials -> on_success credentials.Social_core.access_token) on_error
+
+  let ensure_valid_token_with_outcome ~with_refresh_lock ~account_id on_success on_error =
+    acquire_credentials ~with_refresh_lock
+      ~reused:(fun credentials -> Social_credential_outcome.Reused credentials.Social_core.access_token)
+      ~renewed:(fun credentials -> Social_credential_outcome.Renewed credentials.Social_core.access_token)
+      ~account_id on_success on_error
 
   type analytics_totals = {
     impression: int option;

@@ -41,7 +41,7 @@ let is_blank value = String.trim value = ""
     platform as needing reconnection while the scheduler was still retrying it
     with backoff. Consumers treat [refresh_failed] as terminal, so a transient
     blip disconnected accounts with no path back. *)
-let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
+let ensure_with_result ~reused ~renewed ?(policy = Refresh_types.default_policy)
     ?(map_load_error =
       fun err -> Error_types.Network_error (Error_types.Connection_failed err))
     ?(map_persist_error =
@@ -109,7 +109,7 @@ let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
                       ~error_message:None
                       (fun () ->
                         on_refresh_success ~attempt merged;
-                        on_success merged)
+                        on_success (renewed merged))
                       (fun err -> on_error (map_health_error err)))
                   (fun err -> on_error (map_persist_error err)))
             (fun err ->
@@ -134,7 +134,7 @@ let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
             update_health ~account_id
               ~status:Health_status.(to_string Healthy)
               ~error_message:None
-              (fun () -> on_success credentials)
+              (fun () -> on_success (reused credentials))
               (fun err -> on_error (map_health_error err))
         | Refresh_types.Refresh_required -> (
             match reload_credentials with
@@ -147,7 +147,7 @@ let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
                         update_health ~account_id
                           ~status:Health_status.(to_string Healthy)
                           ~error_message:None
-                          (fun () -> on_success latest_credentials)
+                          (fun () -> on_success (reused latest_credentials))
                           (fun err -> on_error (map_health_error err))
                     | Refresh_types.Refresh_required ->
                         refresh_with_retry
@@ -157,6 +157,21 @@ let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
       with_account_lock ~account_id (fun () ->
           load_credentials ~account_id run_with_loaded_credentials (fun err ->
               on_error (map_load_error err))))
+    on_success on_error
+
+let ensure_valid_access_token ?policy ?map_load_error ?map_persist_error ?map_health_error
+    ?with_refresh_lock ?force_refresh ?reload_credentials ?with_account_lock
+    ?max_refresh_attempts ?should_retry_refresh_error ?sleep_before_retry
+    ?map_refresh_error_to_health ?on_refresh_attempt ?on_refresh_success
+    ?on_refresh_failure ~account_id ~load_credentials ~perform_refresh
+    ~persist_credentials ~update_health
+    on_success on_error =
+  ensure_with_result ~reused:Fun.id ~renewed:Fun.id ?policy ?map_load_error ?map_persist_error ?map_health_error
+    ?with_refresh_lock ?force_refresh ?reload_credentials ?with_account_lock
+    ?max_refresh_attempts ?should_retry_refresh_error ?sleep_before_retry
+    ?map_refresh_error_to_health ?on_refresh_attempt ?on_refresh_success
+    ?on_refresh_failure ~account_id ~load_credentials ~perform_refresh
+    ~persist_credentials ~update_health
     on_success on_error
 
 (** Acquire credentials without account-health notifications. Existing
@@ -174,3 +189,20 @@ let ensure_credentials ?policy ?map_load_error ?map_persist_error
     ?on_refresh_attempt ?on_refresh_success ?on_refresh_failure
     ~account_id ~load_credentials ~perform_refresh ~persist_credentials
     ~update_health:Health_status.ignore_updates on_success on_error
+
+(** Health-free acquisition facts across an explicitly typed lock boundary. *)
+let ensure_credentials_with_outcome ?policy ?map_load_error ?map_persist_error
+    ?with_refresh_lock ?force_refresh ?reload_credentials ?with_account_lock
+    ?max_refresh_attempts ?should_retry_refresh_error ?sleep_before_retry
+    ?on_refresh_attempt ?on_refresh_success ?on_refresh_failure
+    ~account_id ~load_credentials ~perform_refresh ~persist_credentials
+    on_success on_error =
+  ensure_with_result
+    ~reused:(fun value -> Social_credential_outcome.Reused value)
+    ~renewed:(fun value -> Social_credential_outcome.Renewed value)
+    ?policy ?map_load_error ?map_persist_error ?with_refresh_lock ?force_refresh
+    ?reload_credentials ?with_account_lock ?max_refresh_attempts
+    ?should_retry_refresh_error ?sleep_before_retry ?on_refresh_attempt
+    ?on_refresh_success ?on_refresh_failure ~account_id ~load_credentials
+    ~perform_refresh ~persist_credentials ~update_health:Health_status.ignore_updates
+    on_success on_error

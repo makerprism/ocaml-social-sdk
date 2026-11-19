@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `Orchestrator.ensure_credentials_with_outcome` for explicit reuse versus persisted renewal, without health callbacks; retain the original API.
+
 - Add `Orchestrator.ensure_credentials` without health callbacks, preserving the legacy function signature and behavior.
 
 - Add a completion-aware with_refresh_lock hook spanning load, reload, refresh, persistence and health callbacks, plus force_refresh for explicit refresh operations.

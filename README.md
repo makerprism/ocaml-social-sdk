@@ -279,3 +279,21 @@ points retain coordinated token refresh and persistence but never invoke
 lock. Existing `Make`/`Make_coordinated` entry points retain legacy health
 notifications for compatibility. A successful token lookup can reuse local
 credentials without contacting the provider; it is not proof of account health.
+
+For an explicit acquisition fact, use
+`Orchestrator.ensure_credentials_with_outcome` or a provider's
+`ensure_valid_token_with_outcome ~with_refresh_lock`. The latter returns
+`string Social_credential_outcome.t`: `Reused token` performed no write;
+`Renewed token` follows successful renewal and persistence, even when the
+provider returns identical token text. Existing plain-result APIs are unchanged.
+Threads accepts the same refresh-window, force-refresh and allow-refresh options.
+Facebook and Mastodon acquisition only reports reuse.
+
+The outcome API takes its lock callback explicitly because the compatibility
+`CONFIG.with_refresh_lock` is typed for the original credential result.
+The supplied boundary must hold the lock through persistence and deliver final
+success only after commit. Its operation receives the typed outcome before
+commit, allowing consumers to include their own related writes atomically.
+An operation's `Renewed` is provisional until that boundary commits; a failed
+write or commit is an error, never a successful `Renewed` result. Credential-only
+functors do not invoke health callbacks on either path.

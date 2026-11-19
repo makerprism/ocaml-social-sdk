@@ -4,6 +4,7 @@
  (wrapped false)
  (modules
   social_core
+  social_credential_outcome
   social_public_host
   analytics_types
   analytics_normalization
