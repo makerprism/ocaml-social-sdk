@@ -967,6 +967,17 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
             required = ["tweet.write"];
             platform_message = Some detail;
           })
+        else if contains_sub detail "duplicate content" then
+          (* X answers a re-post of identical text with HTTP 403 and the
+             problem+json body
+             {"title":"Forbidden","detail":"You are not allowed to create a
+             Tweet with duplicate content.","type":"about:blank","status":403}
+             — the 403 shape POST /2/tweets documents for other posting
+             restrictions (e.g. the long-video cap),
+             https://docs.x.com/x-api/posts/creation-of-a-post. The status
+             alone says nothing about the grant: the content was refused, so
+             this is Duplicate_content, not Insufficient_permissions. *)
+          Error_types.Duplicate_content
         else
           Error_types.make_api_error
             ~platform:Platform_types.Twitter
