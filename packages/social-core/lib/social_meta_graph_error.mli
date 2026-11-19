@@ -125,3 +125,30 @@ val transport_error : string -> Error_types.error
 (** [Network_error (Connection_failed msg)]: the request never produced a
     response, which says nothing about the account. Callers redact [msg]
     first if it may contain a URL with a token. *)
+
+(** Additive failure envelope for operations that retain Graph diagnostics.
+    The original HTTP status, code, subcode and trace survive classification.
+    No response body or headers are automatically logged. *)
+
+type response_error = {
+  kind : Error_types.error;
+  detail : Social_provider_error_detail.t;
+  graph : t option;
+  retry_after_seconds : int option;
+}
+
+type failure =
+  | Http_failure of response_error
+  | Transport_failure of string
+  | Malformed_response of { status_code : int; message : string }
+  | Validation_failure of Error_types.error
+
+val response_error :
+  platform:Platform_types.platform -> status_code:int ->
+  required_permissions:string list -> ?retry_after_seconds:int ->
+  ?request_id:string -> ?redact:(string -> string) -> string -> response_error
+(** Parses the documented Graph error envelope (error-handling guide above).
+    [redact] is applied to message prose and body excerpts before retention;
+    structured codes and trace identifiers remain available. Callers control
+    diagnostic disclosure. The default preserves the supplied body. *)
+

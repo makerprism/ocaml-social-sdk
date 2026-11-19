@@ -275,12 +275,39 @@ let test_health_evidence () =
   check "transport failure -> no health write"
     (Health_status.of_error (Social_meta_graph_error.transport_error "timeout") = None)
 
+(* The additive failure envelope keeps the classification reachable while the
+   original status, codes and trace survive, and hands every prose field to
+   the caller's redactor before retaining it. *)
+let test_response_error () =
+  Printf.printf "Test: response_error keeps detail and redacts prose\n";
+  let error =
+    Social_meta_graph_error.response_error ~platform:Platform_types.FacebookPage
+      ~status_code:400 ~required_permissions:[] ~redact:(fun _ -> "[redacted]")
+      {|{"error":{"message":"secret","code":190,"error_subcode":463,"fbtrace_id":"trace"}}|}
+  in
+  check "190/463 detail keeps status, code, subcode and trace"
+    (error.detail.http_status = 400 && error.detail.code = Some "190"
+     && error.detail.subcode = Some 463 && error.detail.trace_id = Some "trace");
+  check "kind classifies as token_expired"
+    (error.kind = Error_types.Auth_error Error_types.Token_expired);
+  check "graph classification survives with the message redacted"
+    (match error.graph with
+     | Some graph ->
+         graph.message = Some "[redacted]"
+         && Social_meta_graph_error.classify graph
+            = Social_meta_graph_error.Token_invalid Social_meta_graph_error.Expired
+     | None -> false);
+  check "message and body excerpt pass through the redactor"
+    (error.detail.message = Some "[redacted]"
+     && error.detail.body_excerpt = Some "[redacted]")
+
 let () =
   Printf.printf "Running Social_meta_graph_error contract tests\n\n";
   test_classification_per_code ();
   test_of_body ();
   test_to_error ();
   test_health_evidence ();
+  test_response_error ();
   if !failures > 0 then begin
     Printf.printf "\n%d check(s) failed\n" !failures;
     exit 1
