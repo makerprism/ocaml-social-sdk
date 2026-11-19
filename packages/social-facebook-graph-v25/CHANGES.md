@@ -1,4 +1,6 @@
 # Unreleased
+
+- Add `like_object_detailed`, `get_comments_page_detailed` and `get_page_posts_page_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. A 2xx answer the operation cannot read (`{"success":false}`, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Sensitive diagnostics use the existing redactor. The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.
 - Parse typed comments and Page posts with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged (nonempty strings, strict integers).
 
 - Add `reply_to_comment_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. Sensitive diagnostics use the existing redactor. The legacy reply API retains its contract; both APIs share request construction and response parsing.

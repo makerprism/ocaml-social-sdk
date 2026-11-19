@@ -4678,3 +4678,124 @@ let () =
         | Social_meta_graph_error.Transport_failure _
         | Social_meta_graph_error.Malformed_response _) -> assert false);
   assert (!Mock_http.requests = [])
+
+(* Detail-preserving comment moderation and listings. Response shapes:
+     - a like answer is 200 with {"success":true} ({"success":false} means
+       Facebook withheld the like);
+     - Graph errors are {"error":{"message","type","code","error_subcode",
+       "fbtrace_id"}}
+       (https://developers.facebook.com/docs/graph-api/guides/error-handling/);
+     - a comments / page-posts page is 200 with
+       {"data":[...],"paging":{"cursors":{...}[,"next":url]}}. *)
+let () =
+  Mock_config.reset ();
+  (* A like answered with success is Ok; {"success":false} is a 2xx the SDK
+     cannot read as the like having happened. *)
+  Mock_http.set_response { status = 200; headers = []; body = {|{"success":true}|} };
+  Facebook.like_object_detailed ~object_id:"122105_9001" ~access_token:"pt"
+    (function
+      | Ok () -> ()
+      | Error _ -> assert false);
+  Mock_http.set_response { status = 200; headers = []; body = {|{"success":false}|} };
+  Facebook.like_object_detailed ~object_id:"122105_9001" ~access_token:"pt"
+    (function
+      | Error (Social_meta_graph_error.Malformed_response { status_code; message }) ->
+          assert (status_code = 200);
+          assert (String.equal message "Facebook did not like the object")
+      | Ok _ | Error _ -> assert false);
+  (* A permission-denied like keeps its Graph classification. *)
+  Mock_http.set_response
+    { status = 403; headers = [ ("x-fb-trace-id", "AvFbL") ];
+      body =
+        {|{"error":{"message":"(#10) Not allowed to like","type":"OAuthException","code":10,"fbtrace_id":"AvFbB"}}|} };
+  Facebook.like_object_detailed ~object_id:"122105_9001" ~access_token:"pt"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 403);
+          assert (error.detail.code = Some "10");
+          assert (error.detail.trace_id = Some "AvFbL");
+          (match error.graph with
+           | Some graph ->
+               assert (
+                 Social_meta_graph_error.classify graph
+                 = Social_meta_graph_error.Permission_denied)
+           | None -> assert false)
+      | Ok _ | Error _ -> assert false);
+  (* An empty object id is refused before any request. *)
+  Mock_http.reset ();
+  Facebook.like_object_detailed ~object_id:" " ~access_token:"pt"
+    (function
+      | Error (Social_meta_graph_error.Validation_failure _) -> ()
+      | Ok _ | Error _ -> assert false);
+  assert (!Mock_http.requests = [])
+
+let () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  (* The comments page keeps the legacy shape. *)
+  Mock_http.set_response
+    { status = 200; headers = []; body = stream_comments_body ~next:None };
+  Facebook.get_comments_page_detailed ~object_id:"104857_122105"
+    ~access_token:"page-token" ~filter:Comments.Stream
+    ~order:Comments.Reverse_chronological ~limit:3
+    (function
+      | Ok page ->
+          assert (List.length page.data = 3);
+          assert (page.next_url = None);
+          (match page.paging with
+           | Some { Social_meta_graph_paging.after = Some "WTI5dGJXVnV"; _ } -> ()
+           | Some _ | None -> assert false)
+      | Error _ -> assert false);
+  (* A 190 token error keeps status, codes, trace and the classification. *)
+  Mock_http.set_response
+    { status = 400; headers = [ ("Retry-After", "23") ];
+      body =
+        {|{"error":{"message":"Session has expired","type":"OAuthException","code":190,"error_subcode":463,"fbtrace_id":"AvFbE"}}|} };
+  Facebook.get_comments_page_detailed ~object_id:"104857_122105"
+    ~access_token:"page-token"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 400);
+          assert (error.detail.subcode = Some 463);
+          assert (error.detail.trace_id = Some "AvFbE");
+          assert (error.retry_after_seconds = Some 23);
+          assert (error.kind = Error_types.Auth_error Error_types.Token_expired)
+      | Ok _ | Error _ -> assert false);
+  (* A 2xx body that is not a page keeps its status as malformed. *)
+  Mock_http.set_response { status = 200; headers = []; body = "<html>" };
+  Facebook.get_comments_page_detailed ~object_id:"104857_122105"
+    ~access_token:"page-token"
+    (function
+      | Error (Social_meta_graph_error.Malformed_response { status_code; _ }) ->
+          assert (status_code = 200)
+      | Ok _ | Error _ -> assert false);
+  (* A foreign paging URL is refused before any request. *)
+  Mock_http.reset ();
+  Facebook.get_comments_page_detailed ~object_id:"104857_122105"
+    ~access_token:"page-token"
+    ~position:(Social_meta_graph_paging.Page_url "https://evil.example/comments?access_token=t")
+    (function
+      | Error (Social_meta_graph_error.Validation_failure _) -> ()
+      | Ok _ | Error _ -> assert false);
+  assert (!Mock_http.requests = [])
+
+let () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "app-secret";
+  Mock_http.set_response
+    { status = 200; headers = []; body = page_posts_body ~next:(Some page_posts_next_url) };
+  Facebook.get_page_posts_page_detailed ~page_id:"104857" ~access_token:"page-token"
+    ~limit:500
+    (function
+      | Ok page ->
+          assert (List.length page.data = 3);
+          assert (page.next_url = Some page_posts_next_url)
+      | Error _ -> assert false);
+  (* A transport failure is reported without an HTTP status. *)
+  Mock_http.reset ();
+  Mock_http.set_errors [ "connection reset" ];
+  Facebook.get_page_posts_page_detailed ~page_id:"104857" ~access_token:"page-token"
+    (function
+      | Error (Social_meta_graph_error.Transport_failure message) ->
+          assert (String.equal message "connection reset")
+      | Ok _ | Error _ -> assert false)

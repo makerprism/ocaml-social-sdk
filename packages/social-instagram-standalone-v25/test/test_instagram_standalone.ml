@@ -46,6 +46,9 @@ module Mock_http = struct
   let set_responses responses =
     response_queue := responses
 
+  let set_errors errors =
+    error_queue := errors
+
   let get_next_response () =
     match !response_queue with
     | [] -> None
@@ -2397,3 +2400,180 @@ let test_coordinated_refresh () =
   assert (List.length !Mock_http.requests = 1)
 
 let () = test_coordinated_refresh ()
+
+(* Detail-preserving comment operations. Response shapes:
+     - a reply answer is 200 with {"id":"..."}; a Graph error is
+       {"error":{"message","type","code","error_subcode","fbtrace_id"}}
+       (https://developers.facebook.com/docs/graph-api/guides/error-handling/);
+     - a comments / replies / media page is 200 with
+       {"data":[...],"paging":{"cursors":{...}[,"next":url]}}. *)
+let graph_error_body ?subcode ?(error_type = "OAuthException") ~message code =
+  Printf.sprintf {|{"error":{"message":%S,"type":%S,"code":%d%s,"fbtrace_id":"AvIg9"}}|}
+    message error_type code
+    (match subcode with Some s -> Printf.sprintf {|,"error_subcode":%d|} s | None -> "")
+
+let test_reply_to_comment_detailed () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"id":"17858893269000420"}|} } ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Ok id -> assert (String.equal id "17858893269000420")
+      | Error _ -> failwith "expected the reply id");
+  (* A 190/463 keeps status, codes, trace and the Graph classification. *)
+  Mock_http.set_responses
+    [ { status = 400; headers = [ ("x-fb-trace-id", "AvIgT"); ("Retry-After", "9") ];
+        body = graph_error_body ~subcode:463 ~message:"Session has expired" 190 } ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 400);
+          assert (error.detail.code = Some "190");
+          assert (error.detail.subcode = Some 463);
+          assert (error.detail.trace_id = Some "AvIgT");
+          assert (error.kind = Error_types.Auth_error Error_types.Token_expired);
+          assert (error.retry_after_seconds = Some 9);
+          (match error.graph with
+           | Some graph ->
+               assert (
+                 Social_meta_graph_error.classify graph
+                 = Social_meta_graph_error.Token_invalid
+                     Social_meta_graph_error.Expired)
+           | None -> failwith "expected the Graph classification")
+      | Ok _ | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected an HTTP failure envelope");
+  (* A token-like secret in Meta's own error text is redacted from the
+     retained excerpt; the structured code still parses. *)
+  Mock_http.set_responses
+    [ { status = 400; headers = [];
+        body =
+          graph_error_body ~message:"Invalid access_token=IG-secret-token-value" 190 } ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.code = Some "190");
+          (match error.detail.body_excerpt with
+           | Some excerpt ->
+               assert (not (string_contains excerpt "IG-secret-token-value"));
+               assert (string_contains excerpt "REDACTED")
+           | None -> assert false);
+          (match error.detail.message with
+           | Some message ->
+               assert (not (string_contains message "IG-secret-token-value"))
+           | None -> assert false)
+      | Ok _ | Error _ -> failwith "expected an HTTP failure envelope");
+  (* A normal Graph error keeps Meta's own text: the marker redactor must
+     match only real secrets, not everything it is handed. *)
+  Mock_http.set_responses
+    [ { status = 400; headers = [];
+        body = graph_error_body ~subcode:463 ~message:"Session has expired" 190 } ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.message = Some "Session has expired");
+          (match error.detail.body_excerpt with
+           | Some excerpt -> assert (string_contains excerpt "Session has expired")
+           | None -> assert false)
+      | Ok _ | Error _ -> failwith "expected an HTTP failure envelope");
+  (* A 2xx answer without the created id keeps its status. *)
+  Mock_http.set_responses [ { status = 200; headers = []; body = "{}" } ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Malformed_response { status_code; _ }) ->
+          assert (status_code = 200)
+      | Ok _ | Error _ -> failwith "expected a malformed response");
+  (* No answer at all is a transport failure; an empty id sends nothing. *)
+  Mock_http.set_responses [];
+  Mock_http.set_errors [ "connection reset" ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Transport_failure message) ->
+          assert (String.equal message "connection reset")
+      | Ok _ | Error _ -> failwith "expected a transport failure");
+  Mock_http.reset ();
+  Instagram.reply_to_comment_detailed ~comment_id:" " ~access_token:"ig-token"
+    ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Validation_failure _) -> ()
+      | Ok _ | Error _ -> failwith "expected a validation failure");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ reply_to_comment_detailed keeps Graph detail and redacts"
+
+let test_comment_pages_detailed () =
+  Mock_config.reset ();
+  Mock_config.set_env "INSTAGRAM_APP_SECRET" "app_secret";
+  (* The paging page keeps the legacy shape. *)
+  Mock_http.set_responses [ { status = 200; headers = []; body = media_comments_body } ];
+  Instagram.get_comments_page_detailed ~media_id:"17900000000000001"
+    ~access_token:"ig-token" ~replies_limit:1 ~limit:2
+    (function
+      | Ok page ->
+          assert (List.length page.data = 2);
+          assert (Social_meta_graph_paging.next_after page = Some "QVFIUmG")
+      | Error _ -> failwith "expected a comments page");
+  (* A permission error keeps its Graph classification for the caller. *)
+  Mock_http.set_responses
+    [ { status = 403; headers = [];
+        body =
+          graph_error_body
+            ~message:"(#10) Permission denied or invalid request" 10 } ];
+  Instagram.get_comments_page_detailed ~media_id:"17900000000000001"
+    ~access_token:"ig-token"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 403);
+          assert (error.detail.code = Some "10");
+          (match error.graph with
+           | Some graph ->
+               assert (
+                 Social_meta_graph_error.classify graph
+                 = Social_meta_graph_error.Permission_denied)
+           | None -> failwith "expected the Graph classification")
+      | Ok _ | Error _ -> failwith "expected an HTTP failure envelope");
+  (* A replies follow-up page answers the same shape. *)
+  let replies_body =
+    {|{"data":[{"id":"17858893269000102","text":"+1","username":"carol.example","timestamp":"2026-11-16T10:09:00+0000","hidden":false,"parent_id":"17858893269000001","like_count":0}],"paging":{"cursors":{"before":"QVFIUnL","after":"QVFIUnL"}}}|}
+  in
+  Mock_http.set_responses [ { status = 200; headers = []; body = replies_body } ];
+  Instagram.get_comment_replies_page_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token"
+    (function
+      | Ok page -> assert (List.length page.data = 1)
+      | Error _ -> failwith "expected a replies page");
+  (* A 2xx body that is not a page keeps its status as malformed. *)
+  Mock_http.set_responses [ { status = 200; headers = []; body = "<html>" } ];
+  Instagram.get_comment_replies_page_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token"
+    (function
+      | Error (Social_meta_graph_error.Malformed_response { status_code; _ }) ->
+          assert (status_code = 200)
+      | Ok _ | Error _ -> failwith "expected a malformed response");
+  (* A media page read keeps the legacy items; a foreign paging URL sends
+     nothing. *)
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"data":[],"paging":{}}|} } ];
+  Instagram.get_user_media_page_detailed ~ig_user_id:"17841400000000000"
+    ~access_token:"ig-token" ~fields:"id,caption,timestamp,permalink,media_type,media_url,thumbnail_url,media_product_type"
+    (function
+      | Ok page -> assert (page.data = [])
+      | Error _ -> failwith "expected a media page");
+  Mock_http.reset ();
+  Instagram.get_user_media_page_detailed ~ig_user_id:"17841400000000000"
+    ~access_token:"ig-token" ~fields:"id"
+    ~position:(Social_meta_graph_paging.Page_url "https://evil.example/media?access_token=t")
+    (function
+      | Error (Social_meta_graph_error.Validation_failure _) -> ()
+      | Ok _ | Error _ -> failwith "expected a validation failure");
+  assert (!Mock_http.requests = []);
+  print_endline "✓ detailed comment and media pages keep Graph detail"
+
+let () = test_reply_to_comment_detailed ()
+let () = test_comment_pages_detailed ()

@@ -1051,6 +1051,52 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
     |> Str.global_replace (Str.regexp "access_token=[^&[:space:]]+") "access_token=[REDACTED]"
     |> Str.global_replace (Str.regexp "appsecret_proof=[^&[:space:]]+") "appsecret_proof=[REDACTED]"
 
+  let header_value headers name =
+    List.find_map (fun (key, value) ->
+        if String.equal (String.lowercase_ascii key) name then Some value else None)
+      headers
+
+  (* Redaction for diagnostics retained in the detail-preserving envelope:
+     whole text when it carries a secret, as the Facebook and Threads
+     packages do. The value-regex [redact_transport_error] cannot take a
+     secret embedded in Meta's own prose (it stops at the letters of its
+     character class), so the envelope does not use it. *)
+  let redact_sensitive_diagnostics text =
+    let lower = String.lowercase_ascii text in
+    let contains marker =
+      let marker_len = String.length marker in
+      let text_len = String.length lower in
+      let rec loop i =
+        if i + marker_len > text_len then false
+        else String.sub lower i marker_len = marker || loop (i + 1)
+      in
+      loop 0
+    in
+    if List.exists contains [ "access_token"; "refresh_token"; "client_secret"; "authorization" ]
+    then "[REDACTED_SENSITIVE_TEXT]"
+    else text
+
+  (* The detail-preserving counterpart of [api_error_of_response]: a non-2xx
+     answer keeps its Graph classification, status, provider codes, trace and
+     a body excerpt. [redact_sensitive_diagnostics] replaces text that
+     carries a secret before anything is retained; structured codes and
+     traces are not prose and stay. *)
+  let detailed_response_error ~required_permissions (response : Social_core.response) =
+    let retry_after_seconds =
+      Option.bind (header_value response.headers "retry-after") (fun value ->
+          Option.bind (int_of_string_opt (String.trim value))
+            (fun seconds -> if seconds >= 0 then Some seconds else None))
+    in
+    Social_meta_graph_error.Http_failure
+      (Social_meta_graph_error.response_error
+         ~platform:Platform_types.Instagram ~status_code:response.status
+         ~required_permissions ?retry_after_seconds
+         ?request_id:(header_value response.headers "x-fb-trace-id")
+         ~redact:redact_sensitive_diagnostics response.body)
+
+  let detailed_transport_failure message =
+    Social_meta_graph_error.Transport_failure (redact_transport_error message)
+
   (** Check if token is expired or expiring soon *)
   let is_token_expired_buffer ~buffer_seconds expires_at_opt =
     Social_token_expiry.is_expired ~buffer_seconds expires_at_opt
@@ -2325,18 +2371,32 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   let bearer access_token = [ ("Authorization", Printf.sprintf "Bearer %s" access_token) ]
 
   (* GET an absolute URL: the token goes in the Authorization header, the
-     app secret proof (if configured) into the query. *)
-  let get_comment_json ?(required_permissions = ["instagram_business_manage_comments"])
+     app secret proof (if configured) into the query. [http_error] builds
+     the error of a non-2xx answer, [network_error] the error of a request
+     that got no answer; the detail-preserving operations pass
+     {!detailed_response_error} and {!detailed_transport_failure}, every
+     other GET the legacy typed error. *)
+  let get_comment_json_with_error ~http_error ~network_error
+      ?(required_permissions = ["instagram_business_manage_comments"])
       ~uri ~access_token on_result =
     let uri = Uri.add_query_params uri (with_proof ~access_token []) in
     Config.Http.get ~headers:(bearer access_token) (Uri.to_string uri)
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then on_result (Ok response)
-        else on_result (Error (api_error_of_response ~required_permissions response)))
-      (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
+        else on_result (Error (http_error ~required_permissions response)))
+      (fun err -> on_result (Error (network_error err)))
 
-  let post_comment_form ~path ~access_token ~params on_result =
+  let get_comment_json ?(required_permissions = ["instagram_business_manage_comments"])
+      ~uri ~access_token on_result =
+    get_comment_json_with_error ~required_permissions ~uri ~access_token
+      ~http_error:(fun ~required_permissions response ->
+        api_error_of_response ~required_permissions response)
+      ~network_error:(fun err -> network_error_of_string (redact_transport_error err))
+      on_result
+
+  let post_comment_form_with_error ~http_error ~network_error ~path ~access_token ~params
+      ~required_permissions on_result =
     let proof =
       match compute_app_secret_proof ~access_token with
       | Some proof -> [ ("appsecret_proof", proof) ]
@@ -2350,8 +2410,16 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       (fun response ->
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then on_result (Ok response)
-        else on_result (Error (api_error_of_response ~required_permissions:["instagram_business_manage_comments"] response)))
-      (fun err -> on_result (Error (network_error_of_string (redact_transport_error err))))
+        else on_result (Error (http_error ~required_permissions response)))
+      (fun err -> on_result (Error (network_error err)))
+
+  let post_comment_form ~path ~access_token ~params on_result =
+    post_comment_form_with_error ~path ~access_token ~params
+      ~required_permissions:[ "instagram_business_manage_comments" ]
+      ~http_error:(fun ~required_permissions response ->
+        api_error_of_response ~required_permissions response)
+      ~network_error:(fun err -> network_error_of_string (redact_transport_error err))
+      on_result
 
   (* Instagram answers hide and delete with {"success": true|false}. *)
   let expect_success ~what (response : Social_core.response) =
@@ -2399,17 +2467,33 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                (Printf.sprintf "%s/%s/%s?%s" graph_api_base
                   (Uri.pct_encode (String.trim id)) edge (Uri.encoded_of_query params)))
 
+  (* [refused] lifts the error of a request the SDK would not send (an empty
+     id, a [Page_url] on another host or edge) into the operation's error
+     type. *)
+  let get_comment_edge_page_with_error ~http_error ~network_error ~malformed ~refused
+      ~edge ~id_name ~id ~fields ~access_token ~limit position on_result =
+    match comment_edge_uri ~edge ~id_name ~id ~fields ~limit position with
+    | Error err -> on_result (Error (refused err))
+    | Ok uri ->
+        get_comment_json_with_error ~http_error ~network_error ~uri ~access_token
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match
+                  Social_meta_graph_paging.of_body ~item:Comments.parse_comment response.body
+                with
+                | Ok page -> on_result (Ok page)
+                | Error msg -> on_result (Error (malformed ~status_code:response.status msg))))
+
   let get_comment_edge_page ~edge ~id_name ~id ~fields ~access_token ~limit
       position on_result =
-    match comment_edge_uri ~edge ~id_name ~id ~fields ~limit position with
-    | Error err -> on_result (Error err)
-    | Ok uri ->
-        get_comment_json ~uri ~access_token (function
-          | Error err -> on_result (Error err)
-          | Ok response -> (
-              match Social_meta_graph_paging.of_body ~item:Comments.parse_comment response.body with
-              | Ok page -> on_result (Ok page)
-              | Error msg -> on_result (Error (parse_failure edge msg))))
+    get_comment_edge_page_with_error ~edge ~id_name ~id ~fields ~access_token ~limit
+      ~http_error:(fun ~required_permissions response ->
+        api_error_of_response ~required_permissions response)
+      ~network_error:(fun err -> network_error_of_string (redact_transport_error err))
+      ~malformed:(fun ~status_code:_ msg -> parse_failure edge msg)
+      ~refused:Fun.id
+      position on_result
 
   (** Token-based [GET /{ig-user-id}/media]. [fields] must include [id]. See
       {!Posts} for the documented response and paging contract. *)
@@ -2435,6 +2519,47 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               | Error message -> on_result (Error (parse_failure "media" message))
               ))
 
+  (** {!get_user_media_page} retaining Graph failure diagnostics: a non-2xx
+      answer becomes a [Social_meta_graph_error.Http_failure] envelope, a 2xx
+      body the reader cannot parse a [Malformed_response] that keeps the
+      status, and a paging URL on another host or edge a
+      [Validation_failure] that sends no request. *)
+  let get_user_media_page_detailed ~ig_user_id ~access_token ~fields
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
+    match
+      comment_edge_uri ~edge:"media" ~id_name:"ig_user_id" ~id:ig_user_id ~fields
+        ~limit position
+    with
+    | Error err ->
+        on_result (Error (Social_meta_graph_error.Validation_failure err))
+    | Ok uri ->
+        get_comment_json_with_error
+          ~required_permissions:[ "instagram_business_basic" ]
+          ~http_error:detailed_response_error
+          ~network_error:detailed_transport_failure
+          ~uri ~access_token
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                let item json =
+                  match Posts.of_json json with
+                  | Ok post -> post
+                  | Error message -> failwith message
+                in
+                match Social_meta_graph_paging.of_body ~item response.body with
+                | Ok page -> on_result (Ok page)
+                | Error message ->
+                    on_result
+                      (Error
+                         (Social_meta_graph_error.Malformed_response
+                            {
+                              status_code = response.status;
+                              message =
+                                redact_transport_error
+                                  ("Failed to parse media response: " ^ message);
+                            }))
+                ))
+
   (** One page of top-level comments on a media object
       ([GET /{media_id}/comments]), newest first, each with the first page of
       its replies ([replies.limit(replies_limit)], default 50).
@@ -2454,6 +2579,25 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       ~fields:(Comments.comment_fields ~replies_limit:(max 1 replies_limit))
       ~access_token ~limit position on_result
 
+  (** {!get_comments_page} retaining Graph failure diagnostics, as
+      {!get_user_media_page_detailed}. *)
+  let get_comments_page_detailed ~media_id ~access_token ?(replies_limit = 50)
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
+    get_comment_edge_page_with_error
+      ~http_error:detailed_response_error
+      ~network_error:detailed_transport_failure
+      ~malformed:(fun ~status_code message ->
+        Social_meta_graph_error.Malformed_response
+          {
+            status_code;
+            message =
+              redact_transport_error ("Failed to parse comments response: " ^ message);
+          })
+      ~refused:(fun err -> Social_meta_graph_error.Validation_failure err)
+      ~edge:"comments" ~id_name:"media_id" ~id:media_id
+      ~fields:(Comments.comment_fields ~replies_limit:(max 1 replies_limit))
+      ~access_token ~limit position on_result
+
   (** One page of replies to a top-level comment
       ([GET /{comment_id}/replies], fields {!Comments.reply_fields}).
       [limit] and [position] as {!get_comments_page}; a [replies.paging.next]
@@ -2464,6 +2608,35 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       ?(position = Social_meta_graph_paging.First) ?limit on_result =
     get_comment_edge_page ~edge:"replies" ~id_name:"comment_id" ~id:comment_id
       ~fields:Comments.reply_fields ~access_token ~limit position on_result
+
+  (** {!get_comment_replies_page} retaining Graph failure diagnostics, as
+      {!get_user_media_page_detailed}. *)
+  let get_comment_replies_page_detailed ~comment_id ~access_token
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
+    get_comment_edge_page_with_error
+      ~http_error:detailed_response_error
+      ~network_error:detailed_transport_failure
+      ~malformed:(fun ~status_code message ->
+        Social_meta_graph_error.Malformed_response
+          {
+            status_code;
+            message =
+              redact_transport_error ("Failed to parse replies response: " ^ message);
+          })
+      ~refused:(fun err -> Social_meta_graph_error.Validation_failure err)
+      ~edge:"replies" ~id_name:"comment_id" ~id:comment_id
+      ~fields:Comments.reply_fields ~access_token ~limit position on_result
+
+  (* The id of a created reply, as the reason it could not be read. *)
+  let parse_reply_id body =
+    match Yojson.Basic.from_string body with
+    | `Assoc fields -> (
+        match List.assoc_opt "id" fields with
+        | Some (`String id) -> Stdlib.Ok id
+        | Some _ | None -> Stdlib.Error "no id")
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "expected a JSON object"
+    | exception Yojson.Json_error message -> Stdlib.Error message
 
   (** Reply to a top-level comment ([POST /{comment_id}/replies] with
       [message]); returns the new comment's id. Instagram adds a reply to a
@@ -2477,15 +2650,44 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
           (function
             | Error err -> on_result (Error err)
             | Ok response -> (
-                match Yojson.Basic.from_string response.body with
-                | `Assoc fields -> (
-                    match List.assoc_opt "id" fields with
-                    | Some (`String id) -> on_result (Ok id)
-                    | Some _ | None -> on_result (Error (parse_failure "reply" "no id")))
-                | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
-                    on_result (Error (parse_failure "reply" "expected a JSON object"))
-                | exception Yojson.Json_error msg ->
+                match parse_reply_id response.body with
+                | Stdlib.Ok id -> on_result (Ok id)
+                | Stdlib.Error msg ->
                     on_result (Error (parse_failure "reply" msg)))))
+
+  (** {!reply_to_comment} retaining Graph failure diagnostics: a non-2xx
+      answer becomes a [Social_meta_graph_error.Http_failure] envelope with
+      token-like text redacted, an empty id a [Validation_failure], and a 2xx
+      body without the created id a [Malformed_response] that keeps the
+      status. *)
+  let reply_to_comment_detailed ~comment_id ~access_token ~message on_result =
+    if String.trim comment_id = "" then
+      on_result
+        (Error
+           (Social_meta_graph_error.Validation_failure
+              (invalid_input "comment_id must not be empty")))
+    else
+      let comment_id = Uri.pct_encode (String.trim comment_id) in
+      post_comment_form_with_error ~path:(comment_id ^ "/replies") ~access_token
+        ~params:[ ("message", message) ]
+        ~required_permissions:[ "instagram_business_manage_comments" ]
+        ~http_error:detailed_response_error
+        ~network_error:detailed_transport_failure
+        (function
+          | Error err -> on_result (Error err)
+          | Ok response -> (
+              match parse_reply_id response.body with
+              | Stdlib.Ok id -> on_result (Ok id)
+              | Stdlib.Error msg ->
+                  on_result
+                    (Error
+                       (Social_meta_graph_error.Malformed_response
+                          {
+                            status_code = response.status;
+                            message =
+                              redact_transport_error
+                                ("Failed to parse reply response: " ^ msg);
+                          }))))
 
   (** Hide ([hidden:true]) or unhide a comment on the account's media
       ([POST /{comment_id}] with [hide]). Not supported on live video.

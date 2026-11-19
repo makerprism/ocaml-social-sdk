@@ -266,6 +266,36 @@ let parse_api_error ~status_code ~headers ~response_body =
 let network_error err =
   Social_meta_graph_error.transport_error (sanitize_text_if_sensitive err)
 
+(* Redaction for diagnostics retained in the detail-preserving envelope:
+     whole text when it carries a secret, as the Facebook package does.
+     Unlike {!sanitize_text_if_sensitive} the marker list omits ["\"code\""]:
+     in a Graph error body ["code"] is the numeric error-code key, not a
+     leaked authorization code, and a marker a body always matches would
+     always blank the retained excerpt. *)
+let redact_sensitive_diagnostics text =
+  let lower = String.lowercase_ascii text in
+  if List.exists (contains_substring lower)
+       [ "access_token"; "refresh_token"; "client_secret"; "authorization" ]
+  then "[REDACTED_SENSITIVE_TEXT]"
+  else text
+
+(* The detail-preserving counterpart of [parse_api_error]: the Graph
+   classification, HTTP status, provider codes, trace and a body excerpt
+   survive in the envelope instead of being reduced to one typed error. *)
+let detailed_http_failure ~(required_permissions : string list)
+    (response : Social_core.response) =
+  Social_meta_graph_error.Http_failure
+    (Social_meta_graph_error.response_error
+       ~platform:Platform_types.Threads
+       ~status_code:response.status
+       ~required_permissions
+       ?retry_after_seconds:(parse_retry_after response.headers)
+       ?request_id:(request_id_of_headers response.headers)
+       ~redact:redact_sensitive_diagnostics response.body)
+
+let detailed_transport_failure message =
+  Social_meta_graph_error.Transport_failure (sanitize_text_if_sensitive message)
+
 module OAuth = struct
   (** Thread OAuth scopes as an ADT with string fallback for future scopes.
       Use [Custom s] for scopes not yet modeled in the ADT.
@@ -1396,6 +1426,72 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
       (key, String.trim option_text)
     ) options
 
+  (* The form body of a text container, shared by the legacy and the
+     detail-preserving create so both post the same fields. *)
+  let text_container_form_body
+      ~access_token
+      ~text
+      ?reply_to_id
+      ?idempotency_key
+      ?reply_control
+      ?topic_tag
+      ?quoted_post_id
+      ?location_id
+      ~is_ghost_post
+      ~auto_publish
+      ?poll_options
+      () =
+    let normalized_text = String.trim text in
+    let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
+    Social_core.form_urlencode_kvs
+      ([ ("media_type", "TEXT");
+         ("text", normalized_text);
+         ("access_token", access_token) ]
+       @
+       (match reply_to_id with
+        | Some id -> [ ("reply_to_id", id) ]
+        | None -> [])
+       @
+       (match reply_control with
+        | Some v when String.trim v <> "" -> [ ("reply_control", String.trim v) ]
+        | _ -> [])
+       @
+       (match topic_tag with
+        | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
+        | _ -> [])
+       @
+       (match normalized_idempotency_key with
+        | Some key -> [ ("client_request_id", key) ]
+        | None -> [])
+       @
+       (match quoted_post_id with
+        | Some id when String.trim id <> "" -> [ ("quoted_post_id", String.trim id) ]
+        | _ -> [])
+       @
+       (match location_id with
+        | Some id when String.trim id <> "" -> [ ("location_id", String.trim id) ]
+        | _ -> [])
+       @
+       (if is_ghost_post then [ ("is_ghost_post", "true") ] else [])
+       @
+       (if auto_publish then [ ("auto_publish_text", "true") ] else [])
+       @
+       (match poll_options with
+        | Some options -> encode_poll_options options
+        | None -> []))
+
+  (* The id a container or publish answer carries, as the reason it could
+     not be read. *)
+  let parse_graph_id body =
+    match Yojson.Basic.from_string body with
+    | `Assoc fields -> (
+        match List.assoc_opt "id" fields with
+        | Some (`String id) -> Stdlib.Ok id
+        | Some _ | None -> Stdlib.Error "no id")
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "expected a JSON object"
+    | exception Yojson.Json_error message -> Stdlib.Error message
+
   let create_text_container
       ~access_token
       ~user_id
@@ -1410,58 +1506,23 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
       ?(auto_publish = false)
       ?poll_options
       on_result =
-    let normalized_text = String.trim text in
-    let normalized_idempotency_key = normalize_idempotency_key idempotency_key in
     let body =
-      Social_core.form_urlencode_kvs
-        ([ ("media_type", "TEXT");
-           ("text", normalized_text);
-           ("access_token", access_token) ]
-         @
-         (match reply_to_id with
-          | Some id -> [ ("reply_to_id", id) ]
-          | None -> [])
-         @
-         (match reply_control with
-          | Some v when String.trim v <> "" -> [ ("reply_control", String.trim v) ]
-          | _ -> [])
-         @
-         (match topic_tag with
-          | Some tag when String.trim tag <> "" -> [ ("text_post_app_tags", String.trim tag) ]
-          | _ -> [])
-         @
-         (match normalized_idempotency_key with
-          | Some key -> [ ("client_request_id", key) ]
-          | None -> [])
-         @
-         (match quoted_post_id with
-          | Some id when String.trim id <> "" -> [ ("quoted_post_id", String.trim id) ]
-          | _ -> [])
-         @
-         (match location_id with
-          | Some id when String.trim id <> "" -> [ ("location_id", String.trim id) ]
-          | _ -> [])
-         @
-         (if is_ghost_post then [ ("is_ghost_post", "true") ] else [])
-         @
-         (if auto_publish then [ ("auto_publish_text", "true") ] else [])
-         @
-         (match poll_options with
-          | Some options -> encode_poll_options options
-          | None -> []))
+      text_container_form_body ~access_token ~text ?reply_to_id ?idempotency_key
+        ?reply_control ?topic_tag ?quoted_post_id ?location_id ~is_ghost_post
+        ~auto_publish ?poll_options ()
     in
     let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
     let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
     http_post_no_retry ~headers ~body url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
-          try
-            let json = Yojson.Basic.from_string response.body in
-            let open Yojson.Basic.Util in
-            let creation_id = json |> member "id" |> to_string in
-            on_result (Ok creation_id)
-          with exn ->
-            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse container response: %s" (Printexc.to_string exn))))
+          match parse_graph_id response.body with
+          | Stdlib.Ok creation_id -> on_result (Ok creation_id)
+          | Stdlib.Error reason ->
+              on_result
+                (Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse container response: %s" reason)))
         else
           on_result
             (Error
@@ -1470,6 +1531,48 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
                   ~headers:response.headers
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
+
+  let create_text_container_detailed
+      ~access_token
+      ~user_id
+      ~text
+      ?reply_to_id
+      ?idempotency_key
+      ?reply_control
+      ?topic_tag
+      ?quoted_post_id
+      ?location_id
+      ?(is_ghost_post = false)
+      ?(auto_publish = false)
+      ?poll_options
+      on_result =
+    let body =
+      text_container_form_body ~access_token ~text ?reply_to_id ?idempotency_key
+        ?reply_control ?topic_tag ?quoted_post_id ?location_id ~is_ghost_post
+        ~auto_publish ?poll_options ()
+    in
+    let url = Printf.sprintf "%s/%s/threads" threads_api_base user_id in
+    let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+    http_post_no_retry ~headers ~body url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          match parse_graph_id response.body with
+          | Stdlib.Ok creation_id -> on_result (Ok creation_id)
+          | Stdlib.Error reason ->
+              on_result
+                (Error
+                   (Social_meta_graph_error.Malformed_response
+                      {
+                        status_code = response.status;
+                        message =
+                          sanitize_text_if_sensitive
+                            ("Failed to parse container response: " ^ reason);
+                      }))
+        else
+          on_result
+            (Error (detailed_http_failure ~required_permissions:[ "threads_basic" ] response)))
+      (fun err ->
+        on_result (Error (detailed_transport_failure err)))
 
   let create_media_container
       ~access_token
@@ -1625,13 +1728,13 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
     http_post_no_retry ~headers ~body url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
-          try
-            let json = Yojson.Basic.from_string response.body in
-            let open Yojson.Basic.Util in
-            let post_id = json |> member "id" |> to_string in
-            on_result (Ok post_id)
-          with exn ->
-            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse publish response: %s" (Printexc.to_string exn))))
+          match parse_graph_id response.body with
+          | Stdlib.Ok post_id -> on_result (Ok post_id)
+          | Stdlib.Error reason ->
+              on_result
+                (Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse publish response: %s" reason)))
         else
           on_result
             (Error
@@ -1640,6 +1743,69 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
                   ~headers:response.headers
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
+
+  let publish_container_detailed ~access_token ~user_id ~creation_id on_result =
+    let body =
+      Social_core.form_urlencode_kvs
+        [ ("creation_id", creation_id);
+          ("access_token", access_token) ]
+    in
+    let url = Printf.sprintf "%s/%s/threads_publish" threads_api_base user_id in
+    let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
+    http_post_no_retry ~headers ~body url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          match parse_graph_id response.body with
+          | Stdlib.Ok post_id -> on_result (Ok post_id)
+          | Stdlib.Error reason ->
+              on_result
+                (Error
+                   (Social_meta_graph_error.Malformed_response
+                      {
+                        status_code = response.status;
+                        message =
+                          sanitize_text_if_sensitive
+                            ("Failed to parse publish response: " ^ reason);
+                      }))
+        else
+          on_result
+            (Error (detailed_http_failure ~required_permissions:[ "threads_basic" ] response)))
+      (fun err ->
+        on_result (Error (detailed_transport_failure err)))
+
+  (* The status of a container answer, with the reason a body could not be
+     read. A missing status is an empty [Error_status], as before. *)
+  let parse_container_status body =
+    match Yojson.Basic.from_string body with
+    | `Assoc fields -> (
+        let status =
+          match List.assoc_opt "status" fields with
+          | Some (`String status) -> status
+          | Some _ | None -> ""
+        in
+        let error_message =
+          match List.assoc_opt "error_message" fields with
+          | Some (`String message) -> Some message
+          | Some _ | None -> None
+        in
+        let container_status =
+          match String.uppercase_ascii status with
+          | "FINISHED" -> Finished
+          | "IN_PROGRESS" -> In_progress
+          | "PUBLISHED" -> Published
+          | "EXPIRED" -> Expired
+          | _ ->
+              let msg =
+                match error_message with
+                | Some m when m <> "" -> m
+                | _ -> status
+              in
+              Error_status msg
+        in
+        Stdlib.Ok container_status)
+    | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+        Stdlib.Error "expected a JSON object"
+    | exception Yojson.Json_error message -> Stdlib.Error message
 
   let check_container_status ~access_token ~container_id on_result =
     let query =
@@ -1651,34 +1817,13 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
     http_get_with_retry url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
-          try
-            let json = Yojson.Basic.from_string response.body in
-            let open Yojson.Basic.Util in
-            let status =
-              try json |> member "status" |> to_string
-              with _ -> ""
-            in
-            let error_message =
-              try Some (json |> member "error_message" |> to_string)
-              with _ -> None
-            in
-            let container_st =
-              match String.uppercase_ascii status with
-              | "FINISHED" -> Finished
-              | "IN_PROGRESS" -> In_progress
-              | "PUBLISHED" -> Published
-              | "EXPIRED" -> Expired
-              | _ ->
-                  let msg =
-                    match error_message with
-                    | Some m when m <> "" -> m
-                    | _ -> status
-                  in
-                  Error_status msg
-            in
-            on_result (Ok container_st)
-          with exn ->
-            on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse container status response: %s" (Printexc.to_string exn))))
+          match parse_container_status response.body with
+          | Stdlib.Ok container_status -> on_result (Ok container_status)
+          | Stdlib.Error reason ->
+              on_result
+                (Error
+                   (Error_types.Internal_error
+                      (Printf.sprintf "Failed to parse container status response: %s" reason)))
         else
           on_result
             (Error
@@ -1687,6 +1832,34 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
                   ~headers:response.headers
                   ~response_body:response.body)))
       (fun err -> on_result (Error (network_error err)))
+
+  let check_container_status_detailed ~access_token ~container_id on_result =
+    let query =
+      Uri.encoded_of_query
+        [ ("fields", ["status,error_message"]);
+          ("access_token", [access_token]) ]
+    in
+    let url = Printf.sprintf "%s/%s?%s" threads_api_base container_id query in
+    http_get_with_retry url
+      (fun response ->
+        if response.status >= 200 && response.status < 300 then
+          match parse_container_status response.body with
+          | Stdlib.Ok container_status -> on_result (Ok container_status)
+          | Stdlib.Error reason ->
+              on_result
+                (Error
+                   (Social_meta_graph_error.Malformed_response
+                      {
+                        status_code = response.status;
+                        message =
+                          sanitize_text_if_sensitive
+                            ("Failed to parse container status response: " ^ reason);
+                      }))
+        else
+          on_result
+            (Error (detailed_http_failure ~required_permissions:[ "threads_basic" ] response)))
+      (fun err ->
+        on_result (Error (detailed_transport_failure err)))
 
   (** Poll [check_container_status] until the container is ready to publish.
 
@@ -2073,6 +2246,45 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
                       ~headers:response.headers ~response_body:response.body)))
           (fun err -> on_result (Error (network_error err)))
 
+  (** {!get_user_posts_page} retaining Graph failure diagnostics, as
+      {!get_conversation_page_detailed}. *)
+  let get_user_posts_page_detailed ~threads_user_id ~access_token ~fields
+      ?(position = Social_meta_graph_paging.First) ?(limit = 20) on_result =
+    match
+      reply_edge_url ~edge:"threads" ~fields ~extra_params:[] ~access_token
+        ~media_id:(Uri.pct_encode (String.trim threads_user_id))
+        ~position ~limit ()
+    with
+    | Error err ->
+        on_result (Error (Social_meta_graph_error.Validation_failure err))
+    | Ok url ->
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              let item json =
+                match Posts.of_json json with
+                | Ok post -> post
+                | Error message -> failwith message
+              in
+              match Social_meta_graph_paging.of_body ~item response.body with
+              | Ok page -> on_result (Ok (reply_page_with_cursor ~url page))
+              | Error message ->
+                  on_result
+                    (Error
+                       (Social_meta_graph_error.Malformed_response
+                          {
+                            status_code = response.status;
+                            message =
+                              sanitize_text_if_sensitive
+                                ("Failed to parse threads response: " ^ message);
+                          }))
+            else
+              on_result
+                (Error
+                   (detailed_http_failure ~required_permissions:[ "threads_basic" ] response)))
+          (fun err ->
+            on_result (Error (detailed_transport_failure err)))
+
   let pending_replies_extra_params = function
     | Some status ->
         [ ("approval_status", [ string_of_reply_approval_status status ]) ]
@@ -2103,6 +2315,43 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
     get_reply_edge_page ~edge:"conversation" ~fields:reply_fields
       ~extra_params:[] ~access_token ~media_id ?position ?reverse ?limit
       on_result
+
+  (** {!get_conversation_page} retaining Graph failure diagnostics: a
+      non-2xx answer becomes a [Social_meta_graph_error.Http_failure]
+      envelope, a 2xx body the reader cannot parse a [Malformed_response]
+      that keeps the status, and a paging URL on another host or edge a
+      [Validation_failure] that sends no request. Reads retry (5xx, network)
+      before answering; the envelope describes the last attempt. *)
+  let get_conversation_page_detailed ~access_token ~media_id
+      ?(position = Social_meta_graph_paging.First) ?reverse ?(limit = 20) on_result =
+    match
+      reply_edge_url ~edge:"conversation" ~fields:reply_fields ~extra_params:[]
+        ~access_token ~media_id ~position ?reverse ~limit ()
+    with
+    | Error err ->
+        on_result (Error (Social_meta_graph_error.Validation_failure err))
+    | Ok url ->
+        http_get_with_retry url
+          (fun response ->
+            if response.status >= 200 && response.status < 300 then
+              match Social_meta_graph_paging.of_body ~item:parse_thread_post response.body with
+              | Ok page -> on_result (Ok (reply_page_with_cursor ~url page))
+              | Error message ->
+                  on_result
+                    (Error
+                       (Social_meta_graph_error.Malformed_response
+                          {
+                            status_code = response.status;
+                            message =
+                              sanitize_text_if_sensitive
+                                ("Failed to parse conversation response: " ^ message);
+                          }))
+            else
+              on_result
+                (Error
+                   (detailed_http_failure ~required_permissions:[ "threads_basic" ] response)))
+          (fun err ->
+            on_result (Error (detailed_transport_failure err)))
 
   (** One page of the replies held for approval on a post that has reply
       approvals enabled ([GET /{media_id}/pending_replies], fields

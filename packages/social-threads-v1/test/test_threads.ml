@@ -5827,3 +5827,214 @@ let test_coordinated_explicit_refresh_without_expiry () =
   assert (List.length !Mock_http.requests = 1)
 
 let () = test_coordinated_explicit_refresh_without_expiry ()
+
+(* Detail-preserving Engage operations. Response shapes:
+     - container create / publish answer 200 with {"id":"..."}; a Graph
+       error is {"error":{"message","type","code","error_subcode","fbtrace_id"}}
+       (https://developers.facebook.com/docs/graph-api/guides/error-handling/);
+     - container status answers 200 with {"status":"IN_PROGRESS"|"FINISHED"
+       |"PUBLISHED"|"EXPIRED"|"ERROR"[,"error_message":...]};
+     - a /threads or /conversation page answers 200 with
+       {"data":[...],"paging":{"cursors":{...}[,"next":url]}}. *)
+let test_detailed_engage_operations () =
+  let expired_190 = graph_error_body ~subcode:463 ~message:"Session has expired" 190 in
+  (* A 190/463 publish failure keeps status, codes, trace and the Graph
+     classification, and classifies as an auth error. *)
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 400; headers = [ ("x-fb-trace-id", "AvT1"); ("Retry-After", "17") ];
+        body = expired_190 } ];
+  Threads.publish_container_detailed ~access_token:"t" ~user_id:"me"
+    ~creation_id:"17890000000000001"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 400);
+          assert (error.detail.code = Some "190");
+          assert (error.detail.subcode = Some 463);
+          assert (error.detail.trace_id = Some "AvT1");
+          assert (Option.is_some error.graph);
+          (match error.graph with
+           | Some graph ->
+               assert (
+                 Social_meta_graph_error.classify graph
+                 = Social_meta_graph_error.Token_invalid
+                     Social_meta_graph_error.Expired)
+           | None -> ());
+          assert (error.kind = Error_types.Auth_error Error_types.Token_expired);
+          assert (error.retry_after_seconds = Some 17)
+      | Ok _ | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected an HTTP failure envelope");
+  (* A 2xx publish answer without an id is a Malformed_response that keeps
+     the status; the request was answered, so the status matters. *)
+  Mock_http.set_responses [ { status = 200; headers = []; body = "{}" } ];
+  Threads.publish_container_detailed ~access_token:"t" ~user_id:"me"
+    ~creation_id:"17890000000000001"
+    (function
+      | Error (Social_meta_graph_error.Malformed_response { status_code; _ }) ->
+          assert (status_code = 200)
+      | Ok _ | Error (Social_meta_graph_error.Http_failure _)
+      | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected a malformed response");
+  (* A rate-limited create keeps the numeric Retry-After advice. *)
+  Mock_http.set_responses
+    [ { status = 429; headers = [ ("Retry-After", "31") ];
+        body = graph_error_body ~message:"Application request limit reached" 4 } ];
+  Threads.create_text_container_detailed ~access_token:"t" ~user_id:"me"
+    ~text:"Thanks!" ~reply_to_id:"18040000000000001"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 429);
+          assert (error.detail.code = Some "4");
+          (match error.kind with
+           | Error_types.Rate_limited rate ->
+               assert (rate.retry_after_seconds = Some 31)
+           | _ -> failwith "429 should stay a rate limit");
+          assert (error.retry_after_seconds = Some 31)
+      | Ok _ | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected an HTTP failure envelope");
+  (* The happy create answers the container id, as the legacy API. *)
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"id":"17890000000000002"}|} } ];
+  Threads.create_text_container_detailed ~access_token:"t" ~user_id:"me"
+    ~text:"Thanks!" ~reply_to_id:"18040000000000001"
+    (function
+      | Ok id -> assert (id = "17890000000000002")
+      | Error _ -> failwith "expected the container id");
+  (* No answer at all is a transport failure. *)
+  Mock_http.set_responses [];
+  Mock_http.set_errors [ "connection reset" ];
+  Threads.create_text_container_detailed ~access_token:"t" ~user_id:"me"
+    ~text:"Thanks!" ~reply_to_id:"18040000000000001"
+    (function
+      | Error (Social_meta_graph_error.Transport_failure message) ->
+          assert (String.equal message "connection reset")
+      | Ok _ | Error (Social_meta_graph_error.Http_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected a transport failure");
+  (* A container status read keeps the Graph answer of an unknown
+     container: code 24 / subcode 4279009 stays classifiable by callers. *)
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 404; headers = []; body = graph_error_body ~subcode:4279009
+          ~error_type:"THApiException" ~message:"The requested resource does not exist" 24 } ];
+  Threads.check_container_status_detailed ~access_token:"t"
+    ~container_id:"17890000000000003"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 404);
+          (match error.graph with
+           | Some { Social_meta_graph_error.code = Some 24; subcode = Some 4279009; _ }
+             -> ()
+           | Some _ | None -> failwith "expected code 24 / subcode 4279009")
+      | Ok _ | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected an HTTP failure envelope");
+  (* The status itself is read as the legacy API reads it. *)
+  Mock_http.set_responses
+    [
+      { status = 200; headers = []; body = {|{"status":"IN_PROGRESS"}|} };
+      { status = 200; headers = []; body = {|{"status":"ERROR","error_message":"UNKNOWN"}|} };
+    ];
+  Threads.check_container_status_detailed ~access_token:"t"
+    ~container_id:"17890000000000003"
+    (function
+      | Ok Social_threads_v1.In_progress -> ()
+      | Ok _ | Error _ -> failwith "expected IN_PROGRESS");
+  Threads.check_container_status_detailed ~access_token:"t"
+    ~container_id:"17890000000000003"
+    (function
+      | Ok (Social_threads_v1.Error_status message) ->
+          assert (String.equal message "UNKNOWN")
+      | Ok _ | Error _ -> failwith "expected an ERROR status");
+  print_endline "ok: detailed container create/publish/status failures"
+
+(* Detail-preserving listing reads: paging stays the legacy shape, a Graph
+   failure keeps its detail, a secret in the retained excerpt redacts the
+   whole excerpt, and a paging URL on another host is a validation
+   failure that sends nothing. *)
+let test_detailed_listing_reads () =
+  Mock_config.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = conversation_page_body ~next:None } ];
+  Threads.get_conversation_page_detailed ~access_token:"t"
+    ~media_id:"18040000000000001" ~reverse:true ~limit:2
+    (function
+      | Ok page ->
+          assert (List.length page.data = 2);
+          (* Cursors-only nonempty pages still get a followable next_url. *)
+          (match page.next_url with
+           | Some url -> assert (String.equal (query_param url "after") "QVFIUkF")
+           | None -> failwith "expected a built next_url");
+          assert (Social_meta_graph_paging.next_after page = Some "QVFIUkF")
+      | Error _ -> failwith "expected a conversation page");
+  (match !Mock_http.requests with
+   | [ ("GET", url, _, _) ] -> assert_reply_fields_requested url
+   | _ -> failwith "expected one GET");
+  Mock_http.set_responses
+    [ { status = 401; headers = []; body = graph_error_body ~subcode:463 ~message:"Session has expired" 190 } ];
+  Threads.get_conversation_page_detailed ~access_token:"t"
+    ~media_id:"18040000000000001"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.http_status = 401);
+          assert (error.kind = Error_types.Auth_error Error_types.Token_expired);
+          assert (
+            Option.is_some (
+              let ( >>= ) o f = Option.bind o f in
+              Some error >>= fun _ -> error.graph))
+      | Ok _ | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected an HTTP failure envelope");
+  (* A token-like secret in Meta's own error text redacts the whole
+     retained excerpt; the structured codes still parse. *)
+  Mock_http.set_responses
+    [ { status = 400; headers = [];
+        body =
+          graph_error_body ~message:"Invalid access_token=TH-secret-token-value" 190 } ];
+  Threads.get_user_posts_page_detailed ~threads_user_id:"17841400000000000"
+    ~access_token:"t" ~fields:"id,text,timestamp"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.code = Some "190");
+          (match error.detail.body_excerpt with
+           | Some excerpt -> assert (not (string_contains excerpt "TH-secret-token-value"))
+           | None -> assert false)
+      | Ok _ | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _)
+      | Error (Social_meta_graph_error.Validation_failure _) ->
+          failwith "expected an HTTP failure envelope");
+  (* A normal Graph error keeps Meta's own text for the excerpt. *)
+  Mock_http.set_responses
+    [ { status = 400; headers = []; body = graph_error_body ~message:"Session has expired" 190 } ];
+  Threads.get_user_posts_page_detailed ~threads_user_id:"17841400000000000"
+    ~access_token:"t" ~fields:"id,text,timestamp"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (
+            match error.detail.body_excerpt with
+            | Some excerpt -> string_contains excerpt "Session has expired"
+            | None -> false)
+      | Ok _ | Error _ -> failwith "expected an HTTP failure envelope");
+  (* A paging URL on another host is refused before any request. *)
+  Mock_http.reset ();
+  Threads.get_conversation_page_detailed ~access_token:"t" ~media_id:"18040000000000001"
+    ~position:(Social_meta_graph_paging.Page_url "https://evil.example/conversation?access_token=t")
+    (function
+      | Error (Social_meta_graph_error.Validation_failure _) -> ()
+      | Ok _ | Error (Social_meta_graph_error.Http_failure _)
+      | Error (Social_meta_graph_error.Transport_failure _)
+      | Error (Social_meta_graph_error.Malformed_response _) ->
+          failwith "expected a validation failure");
+  assert (!Mock_http.requests = []);
+  print_endline "ok: detailed conversation and threads listing reads"
+
+let () = test_detailed_engage_operations ()
+let () = test_detailed_listing_reads ()
