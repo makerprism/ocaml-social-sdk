@@ -4256,3 +4256,52 @@ let test_coordinated_recovery_persist_failure () =
   assert ((List.assoc "account" !Mock_config.credentials_store).Social_core.access_token = "old-access")
 
 let () = test_coordinated_recovery_persist_failure ()
+
+let test_coordinated_recovery_reload_failure () =
+  Mock_config.reset ();
+  Mock_http.reset ();
+  Mock_config._set_page_id ~account_id:"account" ~page_id:"page";
+  Mock_config.credentials_store :=
+    [
+      ( "account",
+        {
+          Social_core.access_token = "old-access";
+          refresh_token = None;
+          expires_at = None;
+          auth_type = Social_core.Bearer;
+          scope = None;
+        } );
+    ];
+  let reads = ref 0 in
+  let result = ref None in
+  let module Config = struct
+    include Mock_config
+
+    let get_credentials ~account_id on_success on_error =
+      incr reads;
+      if !reads = 2 then on_error "storage unavailable"
+      else Mock_config.get_credentials ~account_id on_success on_error
+
+    let with_refresh_lock ~account_id:_ run on_success on_error =
+      run on_success on_error
+  end in
+  let module Provider = Social_facebook_graph_v25.Make_coordinated (Config) in
+  Mock_http.set_response
+    {
+      Social_core.status = 200;
+      headers = [];
+      body = {|{"data":[{"id":"page","access_token":"new-access"}]}|};
+    };
+  Provider.recover_page_access_token ~account_id:"account"
+    ~current_access_token:"old-access"
+    (fun page token -> result := Some (Ok (page, token)))
+    (fun error -> result := Some (Error error));
+  assert (
+    !result
+    = Some
+        (Error
+           (Error_types.Network_error
+              (Error_types.Connection_failed "storage unavailable"))));
+  assert (!Mock_http.requests = [])
+
+let () = test_coordinated_recovery_reload_failure ()

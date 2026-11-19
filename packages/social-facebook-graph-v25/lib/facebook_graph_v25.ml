@@ -1483,9 +1483,12 @@ module Make_internal (Config : COORDINATED_CONFIG)
               dedupe_non_empty (current_access_token :: (match creds.refresh_token with Some t -> [t] | None -> []))
             in
             try_candidate_tokens ~stored_creds:(Some creds) ~last_error:None candidate_user_tokens)
-          (fun _ ->
-            let candidate_user_tokens = dedupe_non_empty [current_access_token] in
-            try_candidate_tokens ~stored_creds:None ~last_error:None candidate_user_tokens))
+          (fun error ->
+            if Coordination.enabled then
+              on_error (Error_types.Network_error (Error_types.Connection_failed error))
+            else
+              let candidate_user_tokens = dedupe_non_empty [current_access_token] in
+              try_candidate_tokens ~stored_creds:None ~last_error:None candidate_user_tokens))
       (fun err -> on_error (Error_types.Internal_error err))
 
   let recover_page_access_token ~account_id ~current_access_token on_success on_error =
