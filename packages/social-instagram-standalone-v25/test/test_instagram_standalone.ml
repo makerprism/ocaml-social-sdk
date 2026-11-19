@@ -2467,6 +2467,20 @@ let test_reply_to_comment_detailed () =
                assert (not (string_contains message "IG-secret-token-value"))
            | None -> assert false)
       | Ok _ | Error _ -> failwith "expected an HTTP failure envelope");
+  (* A normal Graph error keeps Meta's own text: the marker redactor must
+     match only real secrets, not everything it is handed. *)
+  Mock_http.set_responses
+    [ { status = 400; headers = [];
+        body = graph_error_body ~subcode:463 ~message:"Session has expired" 190 } ];
+  Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"
+    ~access_token:"ig-token" ~message:"Thanks!"
+    (function
+      | Error (Social_meta_graph_error.Http_failure error) ->
+          assert (error.detail.message = Some "Session has expired");
+          (match error.detail.body_excerpt with
+           | Some excerpt -> assert (string_contains excerpt "Session has expired")
+           | None -> assert false)
+      | Ok _ | Error _ -> failwith "expected an HTTP failure envelope");
   (* A 2xx answer without the created id keeps its status. *)
   Mock_http.set_responses [ { status = 200; headers = []; body = "{}" } ];
   Instagram.reply_to_comment_detailed ~comment_id:"17858893269000001"

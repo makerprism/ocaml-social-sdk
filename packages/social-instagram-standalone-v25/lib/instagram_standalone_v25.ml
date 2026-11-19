@@ -1067,8 +1067,8 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       let marker_len = String.length marker in
       let text_len = String.length lower in
       let rec loop i =
-        i + marker_len > text_len
-        || (String.sub lower i marker_len = marker || loop (i + 1))
+        if i + marker_len > text_len then false
+        else String.sub lower i marker_len = marker || loop (i + 1)
       in
       loop 0
     in
