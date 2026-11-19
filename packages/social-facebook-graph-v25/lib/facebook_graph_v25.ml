@@ -929,7 +929,18 @@ module type CONFIG = sig
 end
 
 (** Make functor to create Facebook provider with given configuration *)
-module Make (Config : CONFIG) = struct
+module type COORDINATED_CONFIG = sig
+  include CONFIG
+
+  val with_refresh_lock :
+    account_id:string ->
+    ((Social_core.credentials -> unit) -> (Error_types.error -> unit) -> unit) ->
+    (Social_core.credentials -> unit) ->
+    (Error_types.error -> unit) -> unit
+end
+
+module Make_internal (Config : COORDINATED_CONFIG)
+    (Coordination : sig val enabled : bool end) = struct
   (* Aliases of the top-level constants, kept for code that referenced them
      through the functor. *)
   let graph_api_version = api_version
@@ -1332,7 +1343,8 @@ module Make (Config : CONFIG) = struct
 
   let should_try_next_recovery_token = is_page_token_auth_error
 
-  let recover_page_access_token ~account_id ~current_access_token on_success on_error =
+  include (struct
+  let recover_page_access_token_unlocked ~account_id ~current_access_token on_success on_error =
     Config.get_page_id ~account_id
       (fun page_id ->
         let report_recovery_status status message cont =
@@ -1449,7 +1461,10 @@ module Make (Config : CONFIG) = struct
                       } in
                       Config.update_credentials ~account_id ~credentials:updated_credentials
                         complete_success
-                        (fun _ -> complete_success ())
+                        (fun error ->
+                          if Coordination.enabled then
+                            on_error (Error_types.Network_error (Error_types.Connection_failed error))
+                          else complete_success ())
                   | None ->
                       complete_success ())
                 (fun err ->
@@ -1468,10 +1483,46 @@ module Make (Config : CONFIG) = struct
               dedupe_non_empty (current_access_token :: (match creds.refresh_token with Some t -> [t] | None -> []))
             in
             try_candidate_tokens ~stored_creds:(Some creds) ~last_error:None candidate_user_tokens)
-          (fun _ ->
-            let candidate_user_tokens = dedupe_non_empty [current_access_token] in
-            try_candidate_tokens ~stored_creds:None ~last_error:None candidate_user_tokens))
+          (fun error ->
+            if Coordination.enabled then
+              on_error (Error_types.Network_error (Error_types.Connection_failed error))
+            else
+              let candidate_user_tokens = dedupe_non_empty [current_access_token] in
+              try_candidate_tokens ~stored_creds:None ~last_error:None candidate_user_tokens))
       (fun err -> on_error (Error_types.Internal_error err))
+
+  let recover_page_access_token ~account_id ~current_access_token on_success on_error =
+    if not Coordination.enabled then
+      recover_page_access_token_unlocked ~account_id ~current_access_token on_success on_error
+    else
+    let load on_loaded on_error =
+      Config.get_credentials ~account_id on_loaded
+        (fun error -> on_error (Error_types.Network_error
+          (Error_types.Connection_failed error)))
+    in
+    Config.with_refresh_lock ~account_id
+      (fun on_saved on_error ->
+        load
+          (fun credentials ->
+            if not (String.equal credentials.Social_core.access_token current_access_token) then
+              on_saved credentials
+            else
+              recover_page_access_token_unlocked ~account_id
+                ~current_access_token:credentials.Social_core.access_token
+                (fun _page_id _access_token -> load on_saved on_error)
+                on_error)
+          on_error)
+      (fun credentials ->
+        Config.get_page_id ~account_id
+          (fun page_id -> on_success page_id credentials.Social_core.access_token)
+          (fun error -> on_error (Error_types.Internal_error error)))
+      on_error
+
+  end : sig
+    val recover_page_access_token :
+      account_id:string -> current_access_token:string ->
+      (string -> string -> unit) -> (Error_types.error -> unit) -> unit
+  end)
 
   let with_posting_page_context ~account_id on_success on_error =
     ensure_valid_token ~account_id
@@ -3450,3 +3501,12 @@ module Make (Config : CONFIG) = struct
               on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse page info response: %s" (Printexc.to_string e)))))
         | Error e -> on_result (Error e))
 end
+
+module Make (Config : CONFIG) = Make_internal (struct
+  include Config
+  let with_refresh_lock ~account_id:_ run on_success on_error =
+    run on_success on_error
+end) (struct let enabled = false end)
+
+module Make_coordinated (Config : COORDINATED_CONFIG) =
+  Make_internal (Config) (struct let enabled = true end)
