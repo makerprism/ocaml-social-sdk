@@ -711,6 +711,55 @@ module OAuth = struct
   end
 end
 
+(** {1 Content Posting API error semantics}
+
+    TikTok reports machine-readable failures as an [error.code] in the
+    API v2 error object
+    ({{:https://developers.tiktok.com/doc/tiktok-api-v2-error-handling}}).
+    The operations keep the response body on [Api_error.raw_response], so
+    the code reported can be read back out and given a typed meaning,
+    preserving the exact code and message for display and logging. *)
+module Error = struct
+  (** The code and message TikTok reported, exactly as sent. *)
+  type detail = {
+    code : string;
+    message : string option;
+  }
+
+  type reason =
+    | Client_not_audited of detail
+        (** [unaudited_client_can_only_post_to_private_accounts]: the app is
+            not audited, so a [DIRECT_POST] only reaches private accounts
+            ({{:https://developers.tiktok.com/doc/content-posting-api-get-started}Content
+             Posting API audit rules}). An inbox ([MEDIA_UPLOAD]) upload is
+            the workflow that still works. *)
+    | Source_url_not_verified of detail
+        (** [url_ownership_unverified]: a [PULL_FROM_URL] source was
+            rejected because the URL prefix is not a verified URL prefix of
+            the app
+            ({{:https://developers.tiktok.com/doc/content-posting-api-get-started}URL
+             ownership}). *)
+    | Unrecognized of detail
+        (** Any other code; nothing is known about it beyond what TikTok
+            reported. *)
+
+  (** The typed reason of an error that carries a TikTok error code, or
+      [None] for errors without one (transport failures, token-endpoint
+      errors, unreadable bodies). Classification is exact: only the
+      documented code spells match, and every other code stays
+      [Unrecognized] with its exact text preserved. *)
+  let reason_of_error (e : Error_types.error) : reason option =
+    match Social_provider_error_detail.of_error e with
+    | Some { Social_provider_error_detail.code = Some code; message; _ } ->
+        let detail = { code; message } in
+        if String.equal code "unaudited_client_can_only_post_to_private_accounts" then
+          Some (Client_not_audited detail)
+        else if String.equal code "url_ownership_unverified" then
+          Some (Source_url_not_verified detail)
+        else Some (Unrecognized detail)
+    | Some { Social_provider_error_detail.code = None; _ } | None -> None
+end
+
 (** {1 Types} *)
 
 (** Privacy level for posts *)
