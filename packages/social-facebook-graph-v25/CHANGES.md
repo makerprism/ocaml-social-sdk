@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Added
+
+- **Typed metric descriptors and projections (`Insights`)**: `typed_metric` constructors (`Page_follows`, `Page_daily_follows_unique`, `Page_media_view`, `Page_unique_viewers`, `Post_media_view`, `Post_unique_viewers`, `Post_organic_unique_viewers`, `Post_reactions_by_type_total`, `Post_clicks`, `Post_clicks_by_type`, `Reel_plays`) with `descriptor` (request name, deprecated aliases that still report the same figure, unit, `Running_total`/`Per_period`/`Lifetime_value` aggregation, accepting edges), `typed_metric_of_name`, `request_names`, and `series` (the response series reporting a typed metric, resolved by descriptor order so a rename cannot flip which figure wins). Projections over a response: `reel_plays` (the first count of the Reel plays family, with the provider metric that answered) plus `reel_plays_metrics` (its request list: `fb_reels_total_plays`, then `fb_reels_total_views` (not in the video insights reference but observed in responses), then `blue_reels_play_count` (documented to exclude replays while `fb_reels_total_plays` includes them)), and `follower_totals_by_day` (`page_follows` reports the follower total as of each day, so every point is an absolute; the day is the date part of `end_time`). Additive; the name-based helpers are unchanged. Sources: https://developers.facebook.com/docs/graph-api/reference/video/video_insights, https://developers.facebook.com/docs/platforminsights/page/deprecated-metrics
+
 ### Analytics correction
 
 - Facebook `post_total_media_view_unique` now normalizes to `Reach`, preserving it alongside total `post_media_view` (`Views`) instead of losing one series. The deprecated legacy metric keeps its previous mapping.
