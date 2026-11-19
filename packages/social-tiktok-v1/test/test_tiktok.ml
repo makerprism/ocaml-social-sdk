@@ -3307,6 +3307,62 @@ let test_validate_video_accepts_large_file_under_4gb () =
   | Ok () -> print_endline "PASSED"
   | Error msg -> failwith ("Expected Ok for 3GB file, got Error: " ^ msg)
 
+(* User-field scope knowledge is a platform fact: the enum's name/scope
+   mapping stays exhaustive and the grant filter drops only fields whose
+   scope beyond user.info.basic was not granted (asking for an ungranted
+   field fails the whole read). *)
+let test_user_field_scope_mapping () =
+  print_string "Test: user field scope mapping... ";
+  let name = Social_tiktok_v1.OAuth.user_field_name in
+  let scope = Social_tiktok_v1.OAuth.user_field_scope in
+  assert (name Social_tiktok_v1.OAuth.Username = "username");
+  assert (scope Social_tiktok_v1.OAuth.Username = Some "user.info.profile");
+  assert (scope Social_tiktok_v1.OAuth.Bio_description = Some "user.info.profile");
+  assert (scope Social_tiktok_v1.OAuth.Follower_count = Some "user.info.stats");
+  assert (scope Social_tiktok_v1.OAuth.Video_count = Some "user.info.stats");
+  assert (scope Social_tiktok_v1.OAuth.Open_id = None);
+  assert (scope Social_tiktok_v1.OAuth.Display_name = None);
+  (* The string group lists derive from the enum, so they cannot drift. *)
+  assert (
+    Social_tiktok_v1.OAuth.user_fields_basic
+    = [ "open_id"; "union_id"; "avatar_url"; "avatar_url_100"; "avatar_large_url"; "display_name" ]);
+  assert (
+    Social_tiktok_v1.OAuth.user_fields_profile
+    = [ "bio_description"; "profile_deep_link"; "is_verified"; "username" ]);
+  assert (
+    Social_tiktok_v1.OAuth.user_fields_stats
+    = [ "follower_count"; "following_count"; "likes_count"; "video_count" ]);
+  print_endline "PASSED"
+
+let test_requestable_user_fields_partial_grant () =
+  print_string "Test: requestable user fields with a partial grant... ";
+  let open Social_tiktok_v1.OAuth in
+  assert (
+    requestable_user_fields ~granted_scopes:[ "user.info.basic" ]
+      [ Open_id; Display_name; Avatar_url; Username ]
+    = [ "open_id"; "display_name"; "avatar_url" ]);
+  (* A granted profile scope keeps the username; comparison is
+     case-insensitive, like Social_oauth_scope.mem. *)
+  assert (
+    requestable_user_fields ~granted_scopes:[ "USER.INFO.PROFILE" ]
+      [ Open_id; Username ]
+    = [ "open_id"; "username" ]);
+  (* The typed scope set mirrors the string helper. *)
+  assert (
+    user_field_scopes [ Open_id; Username; Follower_count ]
+    = [ "user.info.basic"; "user.info.profile"; "user.info.stats" ]);
+  assert (
+    scopes_for_user_fields [ "open_id"; "username"; "follower_count" ]
+    = [ "user.info.basic"; "user.info.profile"; "user.info.stats" ]);
+  print_endline "PASSED"
+
+let test_publish_scope_set () =
+  print_string "Test: publish scope set... ";
+  assert (
+    Social_tiktok_v1.OAuth.Scopes.publish
+    = [ "user.info.basic"; "video.publish"; "video.upload" ]);
+  print_endline "PASSED"
+
 let () =
   print_endline "\n=== TikTok Provider Tests ===\n";
 
@@ -3455,6 +3511,11 @@ let () =
   test_video_source_string_roundtrip ();
   test_post_mode_string_values ();
   test_media_type_string_values ();
+
+  print_endline "\n--- OAuth Scopes & User Fields ---";
+  test_user_field_scope_mapping ();
+  test_requestable_user_fields_partial_grant ();
+  test_publish_scope_set ();
 
   print_endline "\n--- Video Size Limit Fix ---";
   test_max_video_size_is_4gb ();

@@ -314,6 +314,18 @@ module OAuth = struct
 
     (** Scopes for read + content publishing *)
     let write = content_publish
+
+    (** Scopes the account and media insights endpoints need, as scope
+        strings for comparing against a granted-scope string
+        ({{:https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login}Instagram
+         API with Instagram Login permissions}). *)
+    let insights = [ Instagram_business_manage_insights ] |> List.map scope_to_string
+
+    (** Scopes reading comments on the account's media and managing them
+        (replying, hiding) need, as scope strings for comparing against a
+        granted-scope string. *)
+    let comment_management =
+      [ Instagram_business_manage_comments ] |> List.map scope_to_string
   end
 
   (** Generate authorization URL for Instagram Standalone OAuth 2.0 flow
@@ -2202,7 +2214,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
   *)
   let get_user_media ~ig_user_id ~access_token ?limit ?after on_result =
     let params = [
-      ("fields", ["id,caption,timestamp,media_type,media_url,thumbnail_url,permalink,media_product_type"]);
+      ("fields", [Posts.list_fields]);
       ("access_token", [access_token]);
     ] @
     (match limit with
@@ -2495,9 +2507,10 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       ~refused:Fun.id
       position on_result
 
-  (** Token-based [GET /{ig-user-id}/media]. [fields] must include [id]. See
-      {!Posts} for the documented response and paging contract. *)
-  let get_user_media_page ~ig_user_id ~access_token ~fields
+  (** Token-based [GET /{ig-user-id}/media]. [fields] must include [id] and
+      defaults to {!Posts.list_fields}. See {!Posts} for the documented
+      response and paging contract. *)
+  let get_user_media_page ~ig_user_id ~access_token ?(fields = Posts.list_fields)
       ?(position = Social_meta_graph_paging.First) ?limit on_result =
     match
       comment_edge_uri ~edge:"media" ~id_name:"ig_user_id" ~id:ig_user_id ~fields
@@ -2524,7 +2537,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
       body the reader cannot parse a [Malformed_response] that keeps the
       status, and a paging URL on another host or edge a
       [Validation_failure] that sends no request. *)
-  let get_user_media_page_detailed ~ig_user_id ~access_token ~fields
+  let get_user_media_page_detailed ~ig_user_id ~access_token ?(fields = Posts.list_fields)
       ?(position = Social_meta_graph_paging.First) ?limit on_result =
     match
       comment_edge_uri ~edge:"media" ~id_name:"ig_user_id" ~id:ig_user_id ~fields

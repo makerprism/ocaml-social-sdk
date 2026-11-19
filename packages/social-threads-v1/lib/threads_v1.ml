@@ -342,6 +342,18 @@ module OAuth = struct
     let publish = ["threads_basic"; "threads_content_publish"]
     let publish_with_analytics = ["threads_basic"; "threads_content_publish"; "threads_manage_insights"; "threads_location_tagging"]
     let read = ["threads_basic"]
+
+    (** Scopes the profile insights endpoints need
+        ({{:https://developers.facebook.com/docs/threads/retrieve-and-analyze-data/retrieve-insights}Threads
+         insights}). *)
+    let insights = ["threads_manage_insights"]
+
+    (** Scopes reading replies to the user's threads and managing them
+        (replying, hiding) need
+        ({{:https://developers.facebook.com/docs/threads/retrieve-and-manage-replies/replies-and-conversations}Threads
+         replies}). Both are needed together: reading uses
+        [threads_read_replies], writing uses [threads_manage_replies]. *)
+    let reply_management = ["threads_read_replies"; "threads_manage_replies"]
   end
 
   let authorization_endpoint = oauth_authorize_url
@@ -2199,9 +2211,11 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
                       ~response_body:response.body)))
           (fun err -> on_result (Error (network_error err)))
 
-  (** Token-based [GET /{threads-user-id}/threads]. [fields] must include [id].
-      See {!Posts} for the documented response and paging contract. *)
-  let get_user_posts_page ~threads_user_id ~access_token ~fields
+  (** Token-based [GET /{threads-user-id}/threads]. [fields] must include
+      [id] and defaults to {!Posts.list_fields}, which fills every field of
+      the typed [Posts.post]. See {!Posts} for the documented response and
+      paging contract. *)
+  let get_user_posts_page ~threads_user_id ~access_token ?(fields = Posts.list_fields)
       ?(position = Social_meta_graph_paging.First) ?(limit = 20) on_result =
     match
       reply_edge_url ~edge:"threads" ~fields ~extra_params:[] ~access_token
@@ -2234,7 +2248,7 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
 
   (** {!get_user_posts_page} retaining Graph failure diagnostics, as
       {!get_conversation_page_detailed}. *)
-  let get_user_posts_page_detailed ~threads_user_id ~access_token ~fields
+  let get_user_posts_page_detailed ~threads_user_id ~access_token ?(fields = Posts.list_fields)
       ?(position = Social_meta_graph_paging.First) ?(limit = 20) on_result =
     match
       reply_edge_url ~edge:"threads" ~fields ~extra_params:[] ~access_token

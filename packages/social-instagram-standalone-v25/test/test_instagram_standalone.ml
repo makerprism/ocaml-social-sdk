@@ -2579,3 +2579,35 @@ let test_comment_pages_detailed () =
 
 let () = test_reply_to_comment_detailed ()
 let () = test_comment_pages_detailed ()
+
+(* Per-operation scope requirements are platform facts (epic #1945 step 12);
+   the sets match Meta's Instagram Business Login permissions. *)
+let () =
+  assert (
+    Social_instagram_standalone_v25.OAuth.Scopes.insights
+    = [ "instagram_business_manage_insights" ]);
+  assert (
+    Social_instagram_standalone_v25.OAuth.Scopes.comment_management
+    = [ "instagram_business_manage_comments" ]);
+  print_endline "Instagram scope requirement sets ok"
+
+(* The media listing defaults to the typed reader's field selection, so
+   callers stop carrying their own fields literals. *)
+let () =
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { Social_core.status = 200; headers = []; body = {|{"data":[],"paging":{}}|} } ];
+  Instagram.get_user_media_page_detailed ~ig_user_id:"17841400000000000"
+    ~access_token:"ig-token"
+    (function
+      | Ok page -> assert (page.data = [])
+      | Error (Social_meta_graph_error.Http_failure { detail; _ }) ->
+          failwith (Option.value ~default:"?" detail.message)
+      | Error _ -> failwith "expected a media page");
+  (match !Mock_http.requests with
+  | [ ("GET", url, _, _) ] ->
+      assert (
+        Uri.get_query_param (Uri.of_string url) "fields"
+        = Some Social_instagram_standalone_v25.Posts.list_fields)
+  | [] | _ :: _ -> failwith "expected one GET");
+  print_endline "media listing defaults to Posts.list_fields ok"

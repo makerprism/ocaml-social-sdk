@@ -1,4 +1,6 @@
 # Unreleased
+- The token exchange reads the granted `scope` string with the `social-core` `Social_oauth_scope` tokenizer instead of a local comma/space splitter: any comma or whitespace separation counts, and comparison is case-insensitive like every other package. Previously only comma- or space-separated exact-case matches were recognized.
+
 - Parse analytics reports with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged.
 
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.

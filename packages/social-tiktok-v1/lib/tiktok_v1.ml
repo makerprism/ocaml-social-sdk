@@ -70,7 +70,17 @@ module OAuth = struct
       "user.info.basic";
       "video.publish";
     ]
-    
+
+    (** Scopes publishing in either source mode needs: [video.publish] for
+        the publish-init endpoints and [video.upload] for the chunked file
+        upload endpoint that [FILE_UPLOAD] sources (inbox drafts) require
+        ({{:https://developers.tiktok.com/doc/tiktok-api-scopes}}). *)
+    let publish = [
+      "user.info.basic";
+      "video.publish";
+      "video.upload";
+    ]
+
     (** All commonly used scopes *)
     let all = [
       "user.info.basic";
@@ -272,15 +282,93 @@ module OAuth = struct
     video_count : int option;  (** [user.info.stats] *)
   }
 
+  (** User fields of [GET /v2/user/info/] as a closed set, so the scope
+      each field needs is total and stays exhaustive when TikTok adds a
+      field
+      ({{:https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info}}). *)
+  type user_field =
+    | Open_id
+    | Union_id
+    | Avatar_url
+    | Avatar_url_100
+    | Avatar_large_url
+    | Display_name
+    | Bio_description
+    | Profile_deep_link
+    | Is_verified
+    | Username
+    | Follower_count
+    | Following_count
+    | Likes_count
+    | Video_count
+
+  (** Wire name of a user field, as the [fields] query parameter spells it. *)
+  let user_field_name = function
+    | Open_id -> "open_id"
+    | Union_id -> "union_id"
+    | Avatar_url -> "avatar_url"
+    | Avatar_url_100 -> "avatar_url_100"
+    | Avatar_large_url -> "avatar_large_url"
+    | Display_name -> "display_name"
+    | Bio_description -> "bio_description"
+    | Profile_deep_link -> "profile_deep_link"
+    | Is_verified -> "is_verified"
+    | Username -> "username"
+    | Follower_count -> "follower_count"
+    | Following_count -> "following_count"
+    | Likes_count -> "likes_count"
+    | Video_count -> "video_count"
+
+  (** The scope a user field needs beyond [user.info.basic], which gates
+      the endpoint itself. [None] for the basic fields. *)
+  let user_field_scope = function
+    | Bio_description | Profile_deep_link | Is_verified | Username ->
+        Some "user.info.profile"
+    | Follower_count | Following_count | Likes_count | Video_count ->
+        Some "user.info.stats"
+    | Open_id | Union_id | Avatar_url | Avatar_url_100 | Avatar_large_url
+    | Display_name ->
+        None
+
   (** Fields readable with [user.info.basic]. *)
   let user_fields_basic =
-    [ "open_id"; "union_id"; "avatar_url"; "avatar_url_100"; "avatar_large_url"; "display_name" ]
+    [ Open_id; Union_id; Avatar_url; Avatar_url_100; Avatar_large_url; Display_name ]
+    |> List.map user_field_name
 
   (** Fields that need [user.info.profile]. *)
-  let user_fields_profile = [ "bio_description"; "profile_deep_link"; "is_verified"; "username" ]
+  let user_fields_profile =
+    [ Bio_description; Profile_deep_link; Is_verified; Username ]
+    |> List.map user_field_name
 
   (** Fields that need [user.info.stats]. *)
-  let user_fields_stats = [ "follower_count"; "following_count"; "likes_count"; "video_count" ]
+  let user_fields_stats =
+    [ Follower_count; Following_count; Likes_count; Video_count ]
+    |> List.map user_field_name
+
+  (** Wire names to request for [wanted], omitting every field whose scope
+      beyond [user.info.basic] is not in [granted_scopes]: asking for an
+      ungranted field fails the whole read, so a caller that tolerates an
+      absent optional field passes it and lets this drop it instead.
+      Basic fields are always kept; [user.info.basic] gates the endpoint
+      itself. Comparison is case-insensitive, like
+      {!Social_oauth_scope.mem}. *)
+  let requestable_user_fields ~(granted_scopes : string list) (wanted : user_field list) :
+      string list =
+    wanted
+    |> List.filter (fun field ->
+         match user_field_scope field with
+         | None -> true
+         | Some scope -> Social_oauth_scope.mem scope granted_scopes)
+    |> List.map user_field_name
+
+  (** Scopes a user info request for these fields needs. *)
+  let user_field_scopes (fields : user_field list) =
+    let needs scope =
+      List.exists (fun field -> user_field_scope field = Some scope) fields
+    in
+    [ "user.info.basic" ]
+    @ (if needs "user.info.profile" then [ "user.info.profile" ] else [])
+    @ (if needs "user.info.stats" then [ "user.info.stats" ] else [])
 
   (** The SDK error for a TikTok API v2 error object
       ({{:https://developers.tiktok.com/doc/tiktok-api-v2-error-handling}}):

@@ -34,3 +34,8 @@ type post = {
 
 val of_json : Yojson.Basic.t -> (post, string) result
 (** Requires a nonempty string [id]; other fields are optional. *)
+
+val list_fields : string
+(** The [fields] parameter the user media listing requests, as a
+    comma-joined string: every field of [post] except [username]. The
+    listing operations use it as their default selection. *)

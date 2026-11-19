@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `Posts.list_fields`: the fields parameter that fills every field of the typed `Posts.post` from the `/{threads-user-id}/threads` edge. `get_user_posts_page` and `get_user_posts_page_detailed` take `~fields` optionally and default to it. Explicit `~fields` callers are unchanged.
+- Add `OAuth.Scopes.insights` (`threads_manage_insights`) and `OAuth.Scopes.reply_management` (`threads_read_replies`, `threads_manage_replies`): per-operation scope requirements as scope strings, for comparing against a granted-scope string.
 - Text and alt-text validation count characters the way Threads documents ("Text posts are limited to 500 characters. Emojis are counted as the number of UTF-8 bytes." / "The maximum length of alt_text is 1,000 characters.") through social-core `Social_text_counter`: accented text is no longer over-counted (200 `é` are 200 characters, not 400 bytes) and astral emoji count as their 4 UTF-8 bytes instead of raw bytes for every character.
 
 - Add the typed `thumbnail_url` field (video poster frame) to `Posts.post`, so user-post listings no longer need raw-JSON re-parsing for callers that show a video poster. Field additions are additive; existing readers and `raw` are unchanged.

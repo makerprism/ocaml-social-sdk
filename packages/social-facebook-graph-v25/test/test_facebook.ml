@@ -4799,3 +4799,16 @@ let () =
       | Error (Social_meta_graph_error.Transport_failure message) ->
           assert (String.equal message "connection reset")
       | Ok _ | Error _ -> assert false)
+
+(* Per-operation scope requirements are platform facts (epic #1945 step 12).
+   Page insights need both read permissions together with read_insights:
+   the endpoints answer permission error (#10) until pages_read_user_content
+   joins pages_read_engagement. *)
+let () =
+  assert (
+    OAuth.Scopes.page_insights
+    = [ "pages_read_engagement"; "pages_read_user_content"; "read_insights" ]);
+  assert (
+    OAuth.Scopes.page_comment_management
+    = [ "pages_read_engagement"; "pages_read_user_content"; "pages_manage_engagement" ]);
+  print_endline "Facebook scope requirement sets ok"
