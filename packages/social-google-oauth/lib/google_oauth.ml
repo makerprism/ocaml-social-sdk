@@ -105,8 +105,16 @@ let parse_userinfo body : (userinfo, string) result =
     - other 403: [Auth_error (Insufficient_permissions {required =
       required_scopes; ...})];
     - 404: [Resource_not_found];
-    - otherwise [Api_error] with the body kept. *)
-let api_error ~platform ~required_scopes ~status_code body =
+    - otherwise [Api_error] with the body kept.
+
+    [Rate_limited] carries the response's [Retry-After] as
+    [retry_after_seconds] when [~headers] is given and the header is a
+    usable delay ({{:https://www.rfc-editor.org/rfc/rfc9110#field.retry-after}RFC 9110};
+    Google sets it on quota rejections so clients stop asking until it
+    says, {{:https://cloud.google.com/storage/docs/retry-strategy}}).
+    Without [~headers], or with an unusable header, [retry_after_seconds]
+    stays [None] and the caller applies its own default. *)
+let api_error ?(headers = []) ~platform ~required_scopes ~status_code body =
   let error_fields =
     match Yojson.Basic.from_string body with
     | `Assoc fields -> (
@@ -133,7 +141,12 @@ let api_error ~platform ~required_scopes ~status_code body =
         List.mem reason [ "quotaExceeded"; "rateLimitExceeded"; "userRateLimitExceeded"; "dailyLimitExceeded" ])
       reasons
   in
-  let rate_limited = Error_types.make_rate_limited ~remaining:0 () in
+  let retry_advice =
+    Social_http_retry.delay_header_seconds ~max_seconds:86400.0 headers "retry-after"
+  in
+  let rate_limited =
+    Error_types.make_rate_limited ?retry_after_seconds:retry_advice ~remaining:0 ()
+  in
   match status_code with
   | 401 -> Error_types.Auth_error Error_types.Token_invalid
   | 429 -> rate_limited

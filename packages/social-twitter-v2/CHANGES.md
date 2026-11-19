@@ -1,5 +1,7 @@
 # Unreleased
 
+- One shared read-retry policy for every remote media download (post, thread, quote, reply) through `social-core` `Social_http_retry.read_with_retry`, replacing four private copies that disagreed: transport failures are now retried on every path, permanent 4xx answers fail on the first response instead of being retried, and 429/5xx waits run exponential backoff (0.5 s doubling, 8 s per delay, 20 s total) honoring a 429's `Retry-After` up to 10 s. Failure messages keep the URL: `Failed to fetch media from <url> (status: <n>)` / `... : <transport error>`.
+
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
 
 # Changelog

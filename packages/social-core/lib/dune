@@ -23,6 +23,7 @@
   social_token_expiry
   social_json_reader
   social_http_request
+  social_http_retry
   social_meta_debug_token)
  (libraries
   ipaddr

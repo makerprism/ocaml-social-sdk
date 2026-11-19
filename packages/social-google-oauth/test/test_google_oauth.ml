@@ -102,6 +102,29 @@ let test_api_error () =
   (match error 500 "oops" with
    | Error_types.Api_error { status_code = 500; raw_response = Some "oops"; _ } -> ()
    | _ -> failwith "500");
+  (* A 429 keeps the response's Retry-After as the retry advice; without
+     headers the advice stays None for the caller to default. *)
+  (match
+     Social_google_oauth.api_error ~headers:[ ("Retry-After", "120") ] ~platform
+       ~required_scopes:[ "s" ] ~status_code:429 "body"
+   with
+   | Error_types.Rate_limited { retry_after_seconds = Some 120; _ } -> ()
+   | _ -> failwith "429 with Retry-After");
+  (match
+     Social_google_oauth.api_error ~headers:[ ("retry-after", "1.5") ] ~platform
+       ~required_scopes:[ "s" ] ~status_code:429 "body"
+   with
+   | Error_types.Rate_limited { retry_after_seconds = Some 2; _ } -> ()
+   | _ -> failwith "429 with fractional Retry-After rounds up");
+  (match
+     Social_google_oauth.api_error ~headers:[ ("Retry-After", "soon") ] ~platform
+       ~required_scopes:[ "s" ] ~status_code:429 "body"
+   with
+   | Error_types.Rate_limited { retry_after_seconds = None; _ } -> ()
+   | _ -> failwith "429 with unusable Retry-After keeps None");
+  (match error 429 "body" with
+   | Error_types.Rate_limited { retry_after_seconds = None; _ } -> ()
+   | _ -> failwith "429 without headers keeps None");
   Mock_http.reset ();
   Google.get_userinfo ~platform ~access_token:"tok" (function
     | Error (Error_types.Network_error _) -> ()

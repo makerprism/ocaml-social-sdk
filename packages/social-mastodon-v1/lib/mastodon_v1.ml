@@ -31,11 +31,7 @@ let redact_sensitive_text text =
   |> replace_form_field "client_secret"
   |> replace_form_field "token"
 
-let header_value_case_insensitive headers key =
-  let target = String.lowercase_ascii key in
-  headers
-  |> List.find_map (fun (k, v) ->
-         if String.equal (String.lowercase_ascii k) target then Some v else None)
+let header_value_case_insensitive = Social_http_retry.find_header
 
 (** Query pairs for a Rails array parameter: one [name[]=value] pair per
     value. [Uri.with_query] joins a value list with commas

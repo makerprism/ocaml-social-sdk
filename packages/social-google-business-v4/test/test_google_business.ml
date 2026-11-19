@@ -350,9 +350,28 @@ let test_error_429_rate_limit () =
     ~media_urls:[]
     (fun outcome ->
       match outcome with
-      | Error_types.Failure (Error_types.Rate_limited _) ->
+      | Error_types.Failure (Error_types.Rate_limited { retry_after_seconds = Some 60; _ }) ->
           print_endline "PASS 429 rate limit handled"
-      | _ -> failwith "Expected rate limit error")
+      | _ -> failwith "Expected rate limit error with the 60 s fallback");
+
+  Mock_http.reset ();
+  Mock_config.reset ();
+  set_valid_credentials ~account_id:"test_account";
+  Mock_config.set_env "GOOGLE_BUSINESS_LOCATION_NAME" "locations/12345";
+  Mock_http.set_responses
+    [ { status = 429; body = {|{"error":{"code":429,"message":"Rate limit exceeded"}}|};
+        headers = [ ("Retry-After", "120") ] } ];
+
+  GoogleBusiness.post_single
+    ~account_id:"test_account"
+    ~location_name:"locations/12345"
+    ~text:"Test post"
+    ~media_urls:[]
+    (fun outcome ->
+      match outcome with
+      | Error_types.Failure (Error_types.Rate_limited { retry_after_seconds = Some 120; _ }) ->
+          print_endline "PASS 429 keeps the advertised Retry-After"
+      | _ -> failwith "Expected rate limit error carrying Retry-After")
 
 (** Test: Error handling - 400 bad request *)
 let test_error_400_bad_request () =
@@ -618,8 +637,17 @@ let test_token_based_discovery () =
   Mock_http.reset ();
   Mock_http.set_responses [ { status = 429; body = {|{"error":{"code":429,"message":"slow down"}}|}; headers = [] } ];
   Gbp_oauth.list_all_accounts ~access_token:"tok" (function
-    | Stdlib.Error (Error_types.Rate_limited _) -> ()
-    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited");
+    | Stdlib.Error (Error_types.Rate_limited { retry_after_seconds = None; _ }) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited without advice");
+  (* Google sets Retry-After on quota rejections; discovery must keep it
+     instead of discarding the server's advice. *)
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 429; body = {|{"error":{"code":429,"message":"slow down"}}|};
+        headers = [ ("Retry-After", "120") ] } ];
+  Gbp_oauth.list_all_accounts ~access_token:"tok" (function
+    | Stdlib.Error (Error_types.Rate_limited { retry_after_seconds = Some 120; _ }) -> ()
+    | Stdlib.Error _ | Stdlib.Ok _ -> failwith "expected Rate_limited carrying Retry-After");
   print_endline "✓ token-based account and location discovery follows nextPageToken"
 
 let test_discovery_limit_is_an_error () =

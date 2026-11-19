@@ -680,7 +680,55 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
              | None -> true)
       | _ -> false
     with _ -> false
-  
+
+  (* Remote media download ahead of upload: one shared read-retry policy
+     for every posting path (single post, thread, quote, reply). Transport
+     failures and transient statuses (429, 5xx) back off exponentially; a
+     permanent 4xx (404 for a gone image, 403 for a hotlink-blocked one)
+     is final on the first answer. A 429's Retry-After is honored up to
+     10 s, so the loop waits for the server's advice instead of retrying
+     into it. The sum of all waits is bounded to 20 s. *)
+  let remote_media_retry_policy : Social_http_retry.read_retry_policy =
+    let backoff attempt = min 8.0 (0.5 *. (2.0 ** float_of_int (attempt - 1))) in
+    {
+      Social_http_retry.max_attempts = 4;
+      is_retryable_status = (fun status -> status = 429 || status >= 500);
+      retry_transport_error = true;
+      delay_seconds =
+        (fun trigger attempt ->
+          let advertised =
+            match trigger with
+            | Social_http_retry.Retryable_status response when response.status = 429 ->
+                Social_http_retry.delay_header_seconds ~max_seconds:10.0 response.headers
+                  "retry-after"
+            | _ -> None
+          in
+          (match advertised with
+          | Some seconds when float_of_int seconds > backoff attempt -> float_of_int seconds
+          | _ -> backoff attempt));
+      max_total_delay_seconds = 20.0;
+    }
+
+  (* Download one remote media URL for upload. Retries per
+     [remote_media_retry_policy]; the final failure keeps the URL and the
+     transport error text so callers can surface where the download
+     failed. *)
+  let fetch_remote_media ~url on_success on_error =
+    if not (is_safe_remote_media_url url) then
+      on_error "Unsafe media URL; only public http(s) URLs are allowed"
+    else
+      Social_http_retry.read_with_retry
+        ~policy:remote_media_retry_policy
+        ~sleep:Config.sleep
+        ~request:(fun on_response on_error -> Config.Http.get url on_response on_error)
+        ~on_response:(fun response ->
+          if response.status >= 200 && response.status < 300 then on_success response
+          else
+            on_error
+              (Printf.sprintf "Failed to fetch media from %s (status: %d)" url response.status))
+        ~on_transport_error:(fun error ->
+          on_error (Printf.sprintf "Failed to fetch media from %s: %s" url error))
+
   let check_rate_limit () =
     let now = Ptime_clock.now () in
     let window_duration = Ptime.Span.of_int_s (24 * 3600) in
@@ -1397,32 +1445,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
             ensure_valid_token ~account_id
               (fun auth_ctx ->
                 let accumulated_warnings = ref [] in
-                
-                (* Helper to fetch media with retry logic *)
-                let fetch_media_with_retry url max_retries on_success on_err =
-                  if not (is_safe_remote_media_url url) then
-                    on_err "Unsafe media URL; only public http(s) URLs are allowed"
-                  else
-                    let rec attempt retry_count =
-                      Config.Http.get url
-                        (fun media_resp ->
-                          if media_resp.status >= 200 && media_resp.status < 300 then
-                            on_success media_resp
-                          else if retry_count < max_retries && 
-                                  (media_resp.status >= 500 || media_resp.status = 429) then
-                            attempt (retry_count + 1)
-                          else
-                            on_err (Printf.sprintf "Failed to fetch media from %s (status: %d)" 
-                              url media_resp.status))
-                        (fun err ->
-                          if retry_count < max_retries then
-                            attempt (retry_count + 1)
-                          else
-                            on_err (Printf.sprintf "Failed to fetch media from %s: %s" url err))
-                    in
-                    attempt 0
-                in
-                
+
                 (* Pair URLs with alt text - use None if alt text list is shorter *)
                 let urls_with_alt = List.mapi (fun i url ->
                   let alt_text = try List.nth alt_texts i with _ -> None in
@@ -1441,7 +1464,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                   match urls_with_alt with
                   | [] -> on_complete (List.rev acc)
                   | (url, alt_text) :: rest ->
-                      fetch_media_with_retry url 3
+                      fetch_remote_media ~url
                         (fun media_resp ->
                           let mime_type = 
                             List.assoc_opt "content-type" media_resp.headers 
@@ -1746,26 +1769,6 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
             let total_requested = List.length texts in
             let accumulated_warnings = ref [] in
             
-            (* Helper to fetch media with retry logic *)
-            let fetch_media_with_retry url max_retries on_success on_err =
-              if not (is_safe_remote_media_url url) then
-                on_err "Unsafe media URL; only public http(s) URLs are allowed"
-              else
-                let rec attempt retry_count =
-                  Config.Http.get url
-                    (fun media_resp ->
-                      if media_resp.status >= 200 && media_resp.status < 300 then
-                        on_success media_resp
-                      else if retry_count < max_retries && 
-                              (media_resp.status >= 500 || media_resp.status = 429) then
-                        attempt (retry_count + 1)
-                      else
-                        on_err (Printf.sprintf "Failed to fetch media from %s (status: %d)" url media_resp.status))
-                    on_err
-                in
-                attempt 0
-            in
-            
             (* Helper to determine media type from MIME type *)
             let media_type_of_mime mime_type =
               if String.starts_with ~prefix:"video/" mime_type then Platform_types.Video
@@ -1778,7 +1781,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               match urls_with_alt with
               | [] -> on_complete (List.rev acc)
               | (url, alt_text) :: rest ->
-                  fetch_media_with_retry url 3
+                  fetch_remote_media ~url
                     (fun media_resp ->
                       let mime_type = 
                         List.assoc_opt "content-type" media_resp.headers 
@@ -2852,30 +2855,11 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
     | Ok () ->
         ensure_valid_token ~account_id
           (fun auth_ctx ->
-            (* Helper to fetch and upload media *)
-            let fetch_media_with_retry url max_retries on_success on_err =
-              if not (is_safe_remote_media_url url) then
-                on_err "Unsafe media URL; only public http(s) URLs are allowed"
-              else
-                let rec attempt retry_count =
-                  Config.Http.get url
-                    (fun media_resp ->
-                      if media_resp.status >= 200 && media_resp.status < 300 then
-                        on_success media_resp
-                      else if retry_count < max_retries then
-                        attempt (retry_count + 1)
-                      else
-                        on_err (Printf.sprintf "Failed to fetch media: %d" media_resp.status))
-                    on_err
-                in
-                attempt 0
-            in
-            
             let rec upload_media_seq urls acc on_complete on_err =
               match urls with
               | [] -> on_complete (List.rev acc)
               | url :: rest ->
-                  fetch_media_with_retry url 3
+                  fetch_remote_media ~url
                     (fun media_resp ->
                       let mime_type = 
                         List.assoc_opt "content-type" media_resp.headers 
@@ -2942,29 +2926,11 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
     | Ok () ->
         ensure_valid_token ~account_id
           (fun auth_ctx ->
-            let fetch_media_with_retry url max_retries on_success on_err =
-              if not (is_safe_remote_media_url url) then
-                on_err "Unsafe media URL; only public http(s) URLs are allowed"
-              else
-                let rec attempt retry_count =
-                  Config.Http.get url
-                    (fun media_resp ->
-                      if media_resp.status >= 200 && media_resp.status < 300 then
-                        on_success media_resp
-                      else if retry_count < max_retries then
-                        attempt (retry_count + 1)
-                      else
-                        on_err (Printf.sprintf "Failed to fetch media: %d" media_resp.status))
-                    on_err
-                in
-                attempt 0
-            in
-            
             let rec upload_media_seq urls acc on_complete on_err =
               match urls with
               | [] -> on_complete (List.rev acc)
               | url :: rest ->
-                  fetch_media_with_retry url 3
+                  fetch_remote_media ~url
                     (fun media_resp ->
                       let mime_type = 
                         List.assoc_opt "content-type" media_resp.headers 

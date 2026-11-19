@@ -113,12 +113,9 @@ let error_of_response ?now ~status_code ~headers body =
            { required = [ "tweet.read"; "users.read" ]; platform_message = detail_of body })
   | 429 ->
       let retry_after_seconds =
-        let reset =
-          List.find_map
-            (fun (key, value) ->
-              if String.lowercase_ascii key = "x-rate-limit-reset" then int_of_string_opt value else None)
-            headers
-        in
+        (* X's reset is an epoch timestamp, not a delay: the wait is the
+           distance from now, floored at one second. *)
+        let reset = Social_http_retry.header_int headers "x-rate-limit-reset" in
         Option.map (fun reset ->
           let now = match now with Some now -> now | None -> Unix.time () in
           max 1 (reset - int_of_float now)) reset

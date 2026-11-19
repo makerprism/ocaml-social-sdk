@@ -1,4 +1,6 @@
 # Unreleased
+
+- `mastodon_v1.header_value_case_insensitive` and `Mastodon_entities.header_value` delegate to `social-core` `Social_http_retry.find_header` instead of two package-private copies of the same case-insensitive lookup. No behavior change.
 - Build Rails array query parameters and Bearer headers through the new `social-core` `Social_http_request` primitives. No request bytes change.
 
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.

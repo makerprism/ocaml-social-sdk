@@ -87,38 +87,14 @@ let parse_credentials_from_json json =
   with exn ->
     Error (Printf.sprintf "invalid OAuth response payload: %s" (Printexc.to_string exn))
 
-let find_header headers key =
-  let key_lower = String.lowercase_ascii key in
-  headers
-  |> List.find_map (fun (k, v) ->
-         if String.lowercase_ascii k = key_lower then Some v else None)
+(* Case-insensitive header lookup is an HTTP mechanic shared with every
+   other client; see Social_http_retry. *)
+let find_header = Social_http_retry.find_header
 
+(* Retry-After in seconds, whole, fractional rounded up, clamped to one
+   day; garbage advice is no advice (None). *)
 let parse_retry_after headers =
-  let clamp_retry_after seconds =
-    if seconds < 0 then 0 else if seconds > 86400 then 86400 else seconds
-  in
-  let parse_retry_after_float value =
-    match classify_float value with
-    | FP_nan -> None
-    | FP_infinite ->
-        if value > 0.0 then Some 86400 else Some 0
-    | FP_zero | FP_normal | FP_subnormal ->
-        let rounded = if value > 0.0 then ceil value else value in
-        if rounded >= 86400.0 then Some 86400
-        else if rounded <= 0.0 then Some 0
-        else Some (int_of_float rounded)
-  in
-  match find_header headers "retry-after" with
-  | Some raw ->
-      (try
-         let value = int_of_string (String.trim raw) in
-         Some (clamp_retry_after value)
-       with _ ->
-         (try
-            let value = float_of_string (String.trim raw) in
-            parse_retry_after_float value
-          with _ -> None))
-  | None -> None
+  Social_http_retry.delay_header_seconds ~max_seconds:86400.0 headers "retry-after"
 
 let request_id_of_headers headers =
   match find_header headers "x-fb-trace-id" with

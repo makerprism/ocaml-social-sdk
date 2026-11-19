@@ -1,6 +1,7 @@
 # Unreleased
 
 - Add `create_text_container_detailed`, `publish_container_detailed`, `check_container_status_detailed`, `get_conversation_page_detailed` and `get_user_posts_page_detailed`, preserving Graph error details for every HTTP error kind, clamped numeric Retry-After and trace headers. A 2xx answer the operation cannot read (no id, unreadable status, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Retained diagnostics redact whole text carrying a secret (`redact_sensitive_diagnostics`). Read retries keep their existing configuration and the envelope describes the last attempt. The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.
+- `find_header` and `parse_retry_after` delegate to `social-core` `Social_http_retry` (same semantics: case-insensitive lookup; whole or fractional `Retry-After` rounded up, clamped to one day, numeric negatives clamp to 0) instead of package-private copies. No request or error bytes change.
 - Parse typed posts and insights with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged (whole-number floats still accepted for insight counts).
 
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
