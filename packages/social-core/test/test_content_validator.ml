@@ -72,8 +72,41 @@ let test_url_file_extension () =
     "https://example.com/v2.0/media/12345";
   Printf.printf "  ✓ url_file_extension tests passed\n"
 
+let test_validate_video_duration_fractional () =
+  let constraints =
+    Platform_types.
+      { max_images = 0;
+        max_videos = 1;
+        max_image_size_mb = 0.0;
+        max_video_size_mb = 0.0;
+        max_video_duration_seconds = 60;
+        supported_image_formats = [];
+        supported_video_formats = [ "video/mp4" ];
+        max_width = None;
+        max_height = None;
+        min_width = None;
+        min_height = None }
+  in
+  (* 60.9 seconds exceeds a 60-second cap; truncating the float first let it
+     pass. *)
+  (match
+     Content_validator.validate_video ~mime_type:"video/mp4"
+       ~file_size_bytes:0 ~duration_seconds:60.9 ~constraints
+   with
+  | Error msg ->
+      if not (String.length msg > 0) then failwith "expected a message"
+  | Ok () -> failwith "60.9s must exceed a 60s cap");
+  (match
+     Content_validator.validate_video ~mime_type:"video/mp4"
+       ~file_size_bytes:0 ~duration_seconds:60.0 ~constraints
+   with
+  | Ok () -> ()
+  | Error msg -> failwith ("60.0s must fit: " ^ msg));
+  print_endline "PASS content_validator fractional duration exceeds the cap"
+
 let () =
   Printf.printf "\n=== Content Validator Tests ===\n\n";
   test_url_path ();
   test_url_file_extension ();
+  test_validate_video_duration_fractional ();
   Printf.printf "\n✅ All content validator tests passed!\n\n"

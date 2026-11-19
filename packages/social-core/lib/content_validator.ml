@@ -80,7 +80,7 @@ let validate_video ~mime_type ~file_size_bytes ~duration_seconds ~constraints =
   else if float_of_int file_size_bytes > (constraints.max_video_size_mb *. 1024.0 *. 1024.0) then
     Error (Printf.sprintf "Video exceeds maximum size of %.1f MB" constraints.max_video_size_mb)
   (* Check duration *)
-  else if int_of_float duration_seconds > constraints.max_video_duration_seconds then
+  else if duration_seconds > float_of_int constraints.max_video_duration_seconds then
     Error (Printf.sprintf "Video duration %.1fs exceeds maximum %ds" 
       duration_seconds constraints.max_video_duration_seconds)
   else

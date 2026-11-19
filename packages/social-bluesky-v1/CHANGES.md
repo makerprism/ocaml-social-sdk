@@ -1,5 +1,7 @@
 # Unreleased
 
+- `validate_post` counts post text in Unicode code points (the lexicon caps `text` at 300 graphemes and 3,000 code points) instead of UTF-8 bytes, so accented text is no longer over-counted at the 300 limit.
+
 - Add typed publish outcomes: `post_single_ref` and `reply_to_post_ref` return the new post as a `strong_ref`, `post_thread_refs` returns `thread_refs_result` with `posted_refs`. The thread chain keeps typed refs internally and no longer re-parses the `uri|cid` format. The legacy `post_single` / `reply_to_post` / `post_thread` keep their string results, now encoded through `post_id_of_strong_ref`.
 - Keep pending sessions unusable until the coordinated completion callback confirms commit. A failed acquisition cannot evict a newer waiter's cache entry.
 

@@ -1,5 +1,7 @@
 # Unreleased
 
+- Text and alt-text validation count characters the way Threads documents ("Text posts are limited to 500 characters. Emojis are counted as the number of UTF-8 bytes." / "The maximum length of alt_text is 1,000 characters.") through social-core `Social_text_counter`: accented text is no longer over-counted (200 `é` are 200 characters, not 400 bytes) and astral emoji count as their 4 UTF-8 bytes instead of raw bytes for every character.
+
 - Add the typed `thumbnail_url` field (video poster frame) to `Posts.post`, so user-post listings no longer need raw-JSON re-parsing for callers that show a video poster. Field additions are additive; existing readers and `raw` are unchanged.
 
 - Add `create_text_container_detailed`, `publish_container_detailed`, `check_container_status_detailed`, `get_conversation_page_detailed` and `get_user_posts_page_detailed`, preserving Graph error details for every HTTP error kind, clamped numeric Retry-After and trace headers. A 2xx answer the operation cannot read (no id, unreadable status, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Retained diagnostics redact whole text carrying a secret (`redact_sensitive_diagnostics`). Read retries keep their existing configuration and the envelope describes the last attempt. The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.

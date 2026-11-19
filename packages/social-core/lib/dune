@@ -10,6 +10,7 @@
   analytics_normalization
   platform_types
   social_capabilities
+  social_text_counter
   content_validator
   url_extractor
   error_types
@@ -27,6 +28,8 @@
   social_meta_debug_token)
  (libraries
   ipaddr
+  str
+  uutf
   yojson
   re
   digestif

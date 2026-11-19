@@ -1129,8 +1129,15 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
   let with_valid_credentials ~account_id on_success on_error =
     ensure_account_credentials ~account_id on_success on_error
 
+  (* Threads counts one per code point, an emoji as its UTF-8 byte count
+     (https://developers.facebook.com/docs/threads/posts:
+     "Text posts are limited to 500 characters. Emojis are counted as the
+     number of UTF-8 bytes."). *)
+  let threads_text_length text =
+    Social_text_counter.codepoints_emoji_as_bytes_length (String.trim text)
+
   let validate_text_length text =
-    let length = String.length (String.trim text) in
+    let length = threads_text_length text in
     if length > max_text_length then
       Some (Error_types.Text_too_long { length; max = max_text_length })
     else
@@ -1147,7 +1154,10 @@ module Make_internal (Config : COORDINATED_CONFIG) = struct
     match alt_text with
     | None -> None
     | Some txt ->
-        let length = String.length (String.trim txt) in
+        (* Counted like post text: characters, emoji as UTF-8 bytes
+           (https://developers.facebook.com/documentation/threads/reference/publishing:
+           "The maximum length of alt_text is 1,000 characters."). *)
+        let length = threads_text_length txt in
         if length > max_alt_text_length then
           Some (Error_types.Text_too_long { length; max = max_alt_text_length })
         else

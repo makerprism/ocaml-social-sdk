@@ -659,7 +659,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
   (** Validate a single post's content *)
   let validate_post ~text ?(media_count=0) () =
     let errors = ref [] in
-    let text_len = String.length text in
+    (* app.bsky.feed.post caps text at 300 graphemes
+       (https://github.com/bluesky-social/bsky/blob/main/lexicons/app/bsky/feed/post.json);
+       code points are the closest count without grapheme segmentation. *)
+    let text_len = Social_text_counter.utf8_codepoint_length text in
     if text_len > max_text_length then
       errors := Error_types.Text_too_long { length = text_len; max = max_text_length } :: !errors;
     if media_count > max_images then
