@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add `Error.reason_of_error`: typed reasons for the Content Posting API error codes the SDK keeps in `Api_error.raw_response` — `Client_not_audited` (`unaudited_client_can_only_post_to_private_accounts`) and `Source_url_not_verified` (`url_ownership_unverified`), each carrying the exact reported code and message; every other code stays `Unrecognized` with its text preserved, and errors without a TikTok error body return `None`. Classification is exact-code, not prefix or message matching.
 - Add `OAuth.Scopes.publish` (`user.info.basic`, `video.publish`, `video.upload`): the scopes publishing needs in either source mode, direct post and inbox/FILE_UPLOAD.
 - Add the `OAuth.user_field` enum with `user_field_name`, `user_field_scope`, `user_field_scopes` and `requestable_user_fields ~granted_scopes`, making the field-to-scope mapping of `GET /v2/user/info/` total and letting callers drop fields whose scope was not granted (asking for an ungranted field fails the whole read). The string group lists `user_fields_basic`/`user_fields_profile`/`user_fields_stats` now derive from the enum; their values are unchanged.
 

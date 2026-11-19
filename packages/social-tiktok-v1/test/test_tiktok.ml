@@ -3363,6 +3363,94 @@ let test_publish_scope_set () =
     = [ "user.info.basic"; "video.publish"; "video.upload" ]);
   print_endline "PASSED"
 
+(* Typed reasons for Content Posting API error codes (epic #1945 step 12,
+   U6): exact-code classification, unknown codes and prose messages stay
+   unclassified, and errors without a TikTok error body carry no reason. *)
+let test_error_reason_source_url_not_verified () =
+  print_string "Test: Error.reason_of_error url_ownership_unverified... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"content/init/" url then
+      { Social_core.status = 400; headers = [];
+        body = {|{"data":{},"error":{"code":"url_ownership_unverified","message":"Please review our URL ownership verification rules.","log_id":"L1"}}|} }
+    else
+      { Social_core.status = 200; headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|} });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Ownership test" ~photo_images:["https://example.com/p1.jpg"] () in
+  let done_ = ref false in
+  TikTok.init_photo_post ~account_id:"a" ~photo_post_info:photo_info
+    (function
+      | Error err ->
+          (match Social_tiktok_v1.Error.reason_of_error err with
+           | Some (Social_tiktok_v1.Error.Source_url_not_verified detail) ->
+               assert (detail.code = "url_ownership_unverified");
+               assert (detail.message = Some "Please review our URL ownership verification rules.");
+               done_ := true
+           | _ -> failwith "expected Source_url_not_verified")
+      | Ok _ -> failwith "Expected an error");
+  assert !done_;
+  print_endline "PASSED"
+
+let test_error_reason_client_not_audited () =
+  print_string "Test: Error.reason_of_error unaudited client... ";
+  reset_mock_state ();
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"content/init/" url then
+      { Social_core.status = 400; headers = [];
+        body = {|{"data":{},"error":{"code":"unaudited_client_can_only_post_to_private_accounts","message":"Please review our integration guidelines","log_id":"L2"}}|} }
+    else
+      { Social_core.status = 200; headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|} });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Unaudited test" ~photo_images:["https://example.com/p2.jpg"] () in
+  let done_ = ref false in
+  TikTok.init_photo_post ~account_id:"a" ~photo_post_info:photo_info
+    (function
+      | Error err ->
+          (match Social_tiktok_v1.Error.reason_of_error err with
+           | Some (Social_tiktok_v1.Error.Client_not_audited detail) ->
+               assert (detail.code = "unaudited_client_can_only_post_to_private_accounts");
+               assert (detail.message = Some "Please review our integration guidelines");
+               done_ := true
+           | _ -> failwith "expected Client_not_audited")
+      | Ok _ -> failwith "Expected an error");
+  assert !done_;
+  print_endline "PASSED"
+
+let test_error_reason_unrecognized_and_absent () =
+  print_string "Test: Error.reason_of_error unrecognized and absent... ";
+  reset_mock_state ();
+  (* A different code stays Unrecognized with its exact text, even when the
+     message mentions a classified code name in prose. *)
+  Mock_http.set_custom_post_handler (fun url _headers _body ->
+    if String.ends_with ~suffix:"content/init/" url then
+      { Social_core.status = 400; headers = [];
+        body = {|{"data":{},"error":{"code":"spam_risk_too_many_posts","message":"retry later, not url_ownership_unverified"}}|} }
+    else
+      { Social_core.status = 200; headers = [("content-type", "application/json")];
+        body = {|{"access_token":"new_access","refresh_token":"new_refresh","expires_in":86400}|} });
+  let photo_info = Social_tiktok_v1.make_photo_post_info
+    ~title:"Spam test" ~photo_images:["https://example.com/p3.jpg"] () in
+  let done_ = ref false in
+  TikTok.init_photo_post ~account_id:"a" ~photo_post_info:photo_info
+    (function
+      | Error err ->
+          (match Social_tiktok_v1.Error.reason_of_error err with
+           | Some (Social_tiktok_v1.Error.Unrecognized detail) ->
+               assert (detail.code = "spam_risk_too_many_posts");
+               done_ := true
+           | _ -> failwith "expected Unrecognized")
+      | Ok _ -> failwith "Expected an error");
+  assert !done_;
+  (* Errors without a TikTok error body carry no reason. *)
+  let network =
+    Error_types.Network_error (Error_types.Connection_failed "boom") in
+  assert (Social_tiktok_v1.Error.reason_of_error network = None);
+  let internal = Error_types.Internal_error "not a provider answer" in
+  assert (Social_tiktok_v1.Error.reason_of_error internal = None);
+  print_endline "PASSED"
+
 let () =
   print_endline "\n=== TikTok Provider Tests ===\n";
 
@@ -3511,6 +3599,11 @@ let () =
   test_video_source_string_roundtrip ();
   test_post_mode_string_values ();
   test_media_type_string_values ();
+
+  print_endline "\n--- Error Reasons ---";
+  test_error_reason_source_url_not_verified ();
+  test_error_reason_client_not_audited ();
+  test_error_reason_unrecognized_and_absent ();
 
   print_endline "\n--- OAuth Scopes & User Fields ---";
   test_user_field_scope_mapping ();
