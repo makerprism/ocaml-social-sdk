@@ -1249,8 +1249,14 @@ module Make_internal (Config : COORDINATED_CONFIG)
     with _ -> None, None, None
   
   (** GET an absolute Graph URL with the token as a Bearer header and, when
-      an app secret is configured, [appsecret_proof] added to the query. *)
-  let get_url ~url ~access_token ~required_permissions on_result =
+      an app secret is configured, [appsecret_proof] added to the query.
+      [http_error] builds the error of a non-2xx answer, [network_error] the
+      error of a request that got no answer; the detail-preserving
+      operations pass {!detailed_response_error} and
+      {!detailed_transport_failure}, every other GET the legacy typed
+      error. *)
+  let get_url_with_error ~http_error ~network_error ~url ~access_token
+      ~required_permissions on_result =
     let final_url =
       match compute_app_secret_proof ~access_token with
       | Some proof ->
@@ -1264,12 +1270,16 @@ module Make_internal (Config : COORDINATED_CONFIG)
         update_rate_limits response;
         if response.status >= 200 && response.status < 300 then
           on_result (Ok response)
-        else
-          on_result
-            (Error
-               (parse_api_error_with_permissions ~required_permissions
-                  ~status_code:response.status ~response_body:response.body)))
-      (fun err -> on_result (Error (transport_error err)))
+        else on_result (Error (http_error ~required_permissions response)))
+      (fun err -> on_result (Error (network_error err)))
+
+  (** GET with the legacy typed error. *)
+  let get_url ~url ~access_token ~required_permissions on_result =
+    get_url_with_error ~url ~access_token ~required_permissions
+      ~http_error:(fun ~required_permissions response ->
+        parse_api_error_with_permissions ~required_permissions
+          ~status_code:response.Social_core.status ~response_body:response.body)
+      ~network_error:transport_error on_result
 
   (** Generic GET request with pagination support.
 
@@ -3086,6 +3096,31 @@ module Make_internal (Config : COORDINATED_CONFIG)
           ~status_code:response.Social_core.status ~response_body:response.body)
       ~network_error:transport_error on_result
 
+  (* The detail-preserving counterpart of the legacy error mappers above: a
+     non-2xx answer keeps its Graph classification, status, provider codes,
+     trace and a body excerpt the redactor already saw. *)
+  let detailed_response_error ~required_permissions (response : Social_core.response) =
+    let header name =
+      List.find_map (fun (key, value) ->
+        if String.equal (String.lowercase_ascii key) name then Some value else None)
+        response.headers
+    in
+    let retry_after_seconds =
+      Option.bind (header "retry-after") (fun value ->
+        Option.bind (int_of_string_opt (String.trim value))
+          (fun seconds -> if seconds >= 0 then Some seconds else None))
+    in
+    Social_meta_graph_error.Http_failure
+      (Social_meta_graph_error.response_error
+         ~platform:Platform_types.FacebookPage ~status_code:response.status
+         ~required_permissions ?retry_after_seconds
+         ?request_id:(header "x-fb-trace-id")
+         ~redact:redact_sensitive_text_if_needed response.body)
+
+  let detailed_transport_failure message =
+    Social_meta_graph_error.Transport_failure
+      (redact_sensitive_text_if_needed message)
+
   (** Generic DELETE request to any Graph API endpoint *)
   let delete ~path ~access_token ?required_permissions on_result =
     let proof_params = match compute_app_secret_proof ~access_token with
@@ -3357,6 +3392,40 @@ module Make_internal (Config : COORDINATED_CONFIG)
                 | Ok page -> on_result (Ok page)
                 | Error msg -> on_result (Error (parse_failure "comments" msg))))
 
+  (** {!get_comments_page} retaining Graph failure diagnostics: a non-2xx
+      answer becomes a
+      [Social_meta_graph_error.Http_failure] envelope instead of the legacy
+      typed error, and a 2xx body the reader cannot parse a
+      [Malformed_response] that keeps the status. A paging URL on another
+      host or edge is a [Validation_failure] and sends no request. *)
+  let get_comments_page_detailed ~object_id ~access_token ?filter ?order
+      ?(position = Social_meta_graph_paging.First) ?limit on_result =
+    match comments_page_url ~object_id ?filter ?order ?limit position with
+    | Error err ->
+        on_result (Error (Social_meta_graph_error.Validation_failure err))
+    | Ok url ->
+        get_url_with_error ~url ~access_token
+          ~required_permissions:comment_read_permissions
+          ~http_error:detailed_response_error
+          ~network_error:detailed_transport_failure
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match
+                  Social_meta_graph_paging.of_body ~item:Comments.parse_comment response.body
+                with
+                | Ok page -> on_result (Ok page)
+                | Error msg ->
+                    on_result
+                      (Error
+                         (Social_meta_graph_error.Malformed_response
+                            {
+                              status_code = response.status;
+                              message =
+                                redact_sensitive_text_if_needed
+                                  ("Failed to parse comments response: " ^ msg);
+                            }))))
+
   (** {!get_comments_page} with the account's stored Page token. *)
   let get_comments_page_for_account ~account_id ~object_id ?filter ?order
       ?position ?limit on_result =
@@ -3455,6 +3524,37 @@ module Make_internal (Config : COORDINATED_CONFIG)
                 | Ok page -> on_result (Ok page)
                 | Error msg -> on_result (Error (parse_failure "page posts" msg))))
 
+  (** {!get_page_posts_page} retaining Graph failure diagnostics, as
+      {!get_comments_page_detailed}. *)
+  let get_page_posts_page_detailed ~page_id ~access_token ?(edge = Page_posts.Posts)
+      ?(fields = Page_posts.basic_fields) ?(position = Social_meta_graph_paging.First) ?limit
+      on_result =
+    match page_posts_page_url ~page_id ~edge ~fields ?limit position with
+    | Error err ->
+        on_result (Error (Social_meta_graph_error.Validation_failure err))
+    | Ok url ->
+        get_url_with_error ~url ~access_token
+          ~required_permissions:page_posts_read_permissions
+          ~http_error:detailed_response_error
+          ~network_error:detailed_transport_failure
+          (function
+            | Error err -> on_result (Error err)
+            | Ok response -> (
+                match
+                  Social_meta_graph_paging.of_body ~item:Page_posts.parse_page_post response.body
+                with
+                | Ok page -> on_result (Ok page)
+                | Error msg ->
+                    on_result
+                      (Error
+                         (Social_meta_graph_error.Malformed_response
+                            {
+                              status_code = response.status;
+                              message =
+                                redact_sensitive_text_if_needed
+                                  ("Failed to parse page posts response: " ^ msg);
+                            }))))
+
   (** {!get_page_posts_page} for the account's Page ([Config.get_page_id])
       with its stored Page token. *)
   let get_page_posts_page_for_account ~account_id ?edge ?fields ?position ?limit on_result =
@@ -3499,24 +3599,6 @@ module Make_internal (Config : COORDINATED_CONFIG)
     | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
         Stdlib.Error "expected a JSON object"
     | exception Yojson.Json_error message -> Stdlib.Error message
-
-  let detailed_response_error ~required_permissions (response : Social_core.response) =
-    let header name =
-      List.find_map (fun (key, value) ->
-        if String.equal (String.lowercase_ascii key) name then Some value else None)
-        response.headers
-    in
-    let retry_after_seconds =
-      Option.bind (header "retry-after") (fun value ->
-        Option.bind (int_of_string_opt (String.trim value))
-          (fun seconds -> if seconds >= 0 then Some seconds else None))
-    in
-    Social_meta_graph_error.Http_failure
-      (Social_meta_graph_error.response_error
-         ~platform:Platform_types.FacebookPage ~status_code:response.status
-         ~required_permissions ?retry_after_seconds
-         ?request_id:(header "x-fb-trace-id")
-         ~redact:redact_sensitive_text_if_needed response.body)
 
   (** Reply to a comment as the Page ([POST /{comment_id}/comments] with
       [message]); returns the new comment's id and retains Graph failure diagnostics.
@@ -3604,6 +3686,66 @@ module Make_internal (Config : COORDINATED_CONFIG)
           (function
             | Error err -> on_result (Error err)
             | Ok response -> on_result (expect_success ~what:"like the object" response)))
+
+  (** {!like_object} retaining Graph failure diagnostics: a non-2xx answer
+      becomes a [Social_meta_graph_error.Http_failure] envelope, an empty id
+      is a [Validation_failure], and a 2xx answer without
+      [success:true] (Facebook withheld or refused the like) a
+      [Malformed_response] whose message says so. *)
+  let like_object_detailed ~object_id ~access_token on_result =
+    if String.trim object_id = "" then
+      on_result
+        (Error
+           (Social_meta_graph_error.Validation_failure
+              (invalid_input "object_id must not be empty")))
+    else
+      let object_id = Uri.pct_encode (String.trim object_id) in
+      post_with_error ~path:(object_id ^ "/likes") ~access_token ~params:[]
+        ~required_permissions:comment_manage_permissions
+        ~http_error:detailed_response_error
+        ~network_error:detailed_transport_failure
+        (function
+          | Error error -> on_result (Error error)
+          | Ok response -> (
+              (* Graph answers a like with [{"success": true|false}]; anything
+                 else, including [success:false], is an answer the SDK cannot
+                 read as the like having happened. *)
+              match Yojson.Basic.from_string response.body with
+              | `Assoc fields -> (
+                  match List.assoc_opt "success" fields with
+                  | Some (`Bool true) -> on_result (Ok ())
+                  | Some (`Bool false) ->
+                      on_result
+                        (Error
+                           (Social_meta_graph_error.Malformed_response
+                              {
+                                status_code = response.status;
+                                message = "Facebook did not like the object";
+                              }))
+                  | Some _ | None ->
+                      on_result
+                        (Error
+                           (Social_meta_graph_error.Malformed_response
+                              {
+                                status_code = response.status;
+                                message = "no success flag";
+                              })))
+              | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ ->
+                  on_result
+                    (Error
+                       (Social_meta_graph_error.Malformed_response
+                          {
+                            status_code = response.status;
+                            message = "expected a JSON object";
+                          }))
+              | exception Yojson.Json_error message ->
+                  on_result
+                    (Error
+                       (Social_meta_graph_error.Malformed_response
+                          {
+                            status_code = response.status;
+                            message = redact_sensitive_text_if_needed message;
+                          }))))
 
   (** Remove the Page's like ([DELETE /{object_id}/likes]). Needs
       [pages_manage_engagement].

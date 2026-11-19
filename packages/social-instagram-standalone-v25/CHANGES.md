@@ -1,4 +1,6 @@
 # Unreleased
+
+- Add `reply_to_comment_detailed`, `get_comments_page_detailed`, `get_comment_replies_page_detailed` and `get_user_media_page_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. A 2xx answer the operation cannot read (no created id, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Retained diagnostics redact whole text carrying a secret (`redact_sensitive_diagnostics`). The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.
 - Parse typed comments and posts with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged (nonempty strings for comments, any string for post fields).
 
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
