@@ -5606,7 +5606,7 @@ let () =
 let () =
   let read = Threads.get_user_posts_page ~threads_user_id:"user/name" ~access_token:"new+token" ~fields:"id,username,owner" in
   let response body = { Social_core.status = 200; headers = []; body } in
-  let page_body = {|{"data":[{"id":"123","username":"example","owner":{"id":"456"}}],"paging":{"cursors":{"after":"cursor+1"}}}|} in
+  let page_body = {|{"data":[{"id":"123","username":"example","thumbnail_url":"https://cdn.example/123.jpg","owner":{"id":"456"}}],"paging":{"cursors":{"after":"cursor+1"}}}|} in
   Mock_config.reset ();
   Mock_http.reset ();
   Mock_http.set_responses [ response page_body ];
@@ -5617,6 +5617,7 @@ let () =
         | [ post ] ->
             assert (post.id = "123");
             assert (post.username = Some "example");
+            assert (post.thumbnail_url = Some "https://cdn.example/123.jpg");
             assert (Yojson.Basic.Util.member "owner" post.raw = `Assoc ["id", `String "456"])
         | [] | _ :: _ -> failwith "expected one post");
         assert (Social_meta_graph_paging.next_after page = Some "cursor+1"));

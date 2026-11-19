@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add the typed `thumbnail_url` field (video poster frame) to `Posts.post`, so user-post listings no longer need raw-JSON re-parsing for callers that show a video poster. Field additions are additive; existing readers and `raw` are unchanged.
+
 - Add `create_text_container_detailed`, `publish_container_detailed`, `check_container_status_detailed`, `get_conversation_page_detailed` and `get_user_posts_page_detailed`, preserving Graph error details for every HTTP error kind, clamped numeric Retry-After and trace headers. A 2xx answer the operation cannot read (no id, unreadable status, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Retained diagnostics redact whole text carrying a secret (`redact_sensitive_diagnostics`). Read retries keep their existing configuration and the envelope describes the last attempt. The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.
 - Parse typed posts and insights with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged (whole-number floats still accepted for insight counts).
 

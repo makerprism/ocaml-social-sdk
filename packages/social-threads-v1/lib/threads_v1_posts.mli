@@ -14,6 +14,10 @@ type post = {
   text : string option;
   media_type : string option;
   media_url : string option;
+  thumbnail_url : string option;
+      (** Video poster frame; returned only for videos
+          ({{:https://developers.facebook.com/documentation/threads/retrieve-and-discover-posts/retrieve-posts}Threads
+           media fields}). *)
   permalink : string option;
   timestamp : string option;
   username : string option;

@@ -15,8 +15,17 @@ type post = {
   caption : string option;
   media_type : string option;
   media_url : string option;
+  thumbnail_url : string option;
+      (** Video poster frame; returned only for videos, so clients fall back
+          to it when [media_url] is absent on a [VIDEO]
+          ({{:https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media}IG
+           media reference}). *)
   permalink : string option;
   timestamp : string option;
+  media_product_type : string option;
+      (** Where the media surfaces: [FEED], [REELS], [STORY] or [AD]
+          ({{:https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media}IG
+           media reference}). *)
   username : string option;
   raw : Yojson.Basic.t;
 }
