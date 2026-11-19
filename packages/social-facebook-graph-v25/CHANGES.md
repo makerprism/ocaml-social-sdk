@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `OAuth.Scopes.page_insights` (`pages_read_engagement`, `pages_read_user_content`, `read_insights`) and `OAuth.Scopes.page_comment_management` (`pages_read_engagement`, `pages_read_user_content`, `pages_manage_engagement`): per-operation scope requirements as scope strings. Page insights need both read permissions together; the endpoints answer permission error (#10) until `pages_read_user_content` joins `pages_read_engagement`.
+
 - Add `like_object_detailed`, `get_comments_page_detailed` and `get_page_posts_page_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. A 2xx answer the operation cannot read (`{"success":false}`, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Sensitive diagnostics use the existing redactor. The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.
 - Parse typed comments and Page posts with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged (nonempty strings, strict integers).
 

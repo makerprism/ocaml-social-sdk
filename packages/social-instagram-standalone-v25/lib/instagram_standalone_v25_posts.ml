@@ -13,6 +13,13 @@ type post = {
 
 module J = Social_json_reader
 
+(** The fields the user media listing requests, as a comma-joined string:
+    every field of [post] except [username], which no SDK listing consumes.
+    Callers that want the username on the media edge pass their own
+    [fields] selection. *)
+let list_fields =
+  "id,caption,timestamp,permalink,media_type,media_url,thumbnail_url,media_product_type"
+
 let of_json raw =
   match J.string_opt (J.member "id" raw) with
   | None | Some "" -> Error "post without a nonempty string id"

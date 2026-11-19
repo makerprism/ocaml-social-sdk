@@ -1682,14 +1682,13 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                 match granted_scope_raw with
                 | None -> required_scopes
                 | Some scope_str ->
-                    let granted_scopes =
-                      scope_str
-                      |> String.map (fun c -> if c = ',' then ' ' else c)
-                      |> String.split_on_char ' '
-                      |> List.map String.trim
-                      |> List.filter (fun s -> String.length s > 0)
-                    in
-                    List.filter (fun required -> not (List.mem required granted_scopes)) required_scopes
+                    (* Shared tokenizer (comma or any whitespace) and
+                       case-insensitive comparison, so a grant separated or
+                       spelled differently from the request is still
+                       recognized. *)
+                    Social_oauth_scope.missing
+                      ~requested:required_scopes
+                      ~granted:(Social_oauth_scope.split scope_str)
               in
               if missing_scopes <> [] then
                 on_error (Printf.sprintf

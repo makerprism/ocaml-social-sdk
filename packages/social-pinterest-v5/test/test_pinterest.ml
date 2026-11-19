@@ -226,6 +226,34 @@ let test_token_exchange_rejects_missing_scopes () =
       assert (string_contains err "pins:write");
       print_endline "✓ Token exchange rejects missing required scopes")
 
+(* The exchange reads the granted scope string with the shared tokenizer
+   (social-core): any comma/whitespace separation and any casing counts as
+   granted, instead of only comma/space-separated exact matches. *)
+let test_token_exchange_accepts_whitespace_and_case_variants () =
+  Mock_config.reset ();
+  Mock_config.set_env "PINTEREST_CLIENT_ID" "test_client";
+  Mock_config.set_env "PINTEREST_CLIENT_SECRET" "test_secret";
+
+  (* Tabs and newlines separate scopes; the casing differs from the
+     request. The old local splitter rejected this answer. *)
+  let response_body = {|{
+    "access_token": "new_access_token_123",
+    "refresh_token": "refresh_token_456",
+    "token_type": "bearer",
+    "expires_in": 2592000,
+    "scope": "boards:read\tpins:read\npins:write  USER_ACCOUNTS:READ"
+  }|} in
+
+  Mock_http.set_responses [{ status = 200; body = response_body; headers = [] }];
+
+  Pinterest.exchange_code
+    ~code:"test_code"
+    ~redirect_uri:"https://example.com/callback"
+    (fun creds ->
+      assert (creds.access_token = "new_access_token_123");
+      print_endline "Token exchange accepts whitespace and case variants")
+    (fun err -> failwith ("Token exchange should accept the granted scopes: " ^ err))
+
 let test_token_exchange_form_urlencodes_special_chars () =
   Mock_config.reset ();
   Mock_config.set_env "PINTEREST_CLIENT_ID" "test_client";
@@ -1692,6 +1720,7 @@ let () =
   test_oauth_url ();
   test_token_exchange ();
   test_token_exchange_rejects_missing_scopes ();
+  test_token_exchange_accepts_whitespace_and_case_variants ();
   test_token_exchange_form_urlencodes_special_chars ();
   test_post_single_refreshes_expired_token ();
   test_post_single_expired_token_without_refresh_fails ();

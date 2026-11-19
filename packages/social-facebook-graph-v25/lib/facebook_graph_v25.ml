@@ -164,6 +164,27 @@ module OAuth = struct
       Pages_manage_metadata; Pages_manage_engagement;
     ]
 
+    (** Scopes the Page insights endpoints ([/{page-id}/insights] and
+        [/{post-id}/insights]) need, as scope strings for comparing against
+        a granted-scope string. Meta's permission reference documents
+        [pages_read_engagement] for Page insights, but the endpoints answer
+        permission error (#10) until [pages_read_user_content] joins it, so
+        both are required together with [read_insights]
+        ({{:https://developers.facebook.com/docs/permissions/reference/pages-read-engagement}Meta
+         permission reference}). *)
+    let page_insights =
+      [ Pages_read_engagement; Pages_read_user_content; Read_insights ]
+      |> List.map scope_to_string
+
+    (** Scopes reading a Page's posts plus managing their comments and
+        replies needs, as scope strings for comparing against a
+        granted-scope string: [pages_read_engagement] and
+        [pages_read_user_content] for the post and comment reads,
+        [pages_manage_engagement] for comment and reply management. *)
+    let page_comment_management =
+      [ Pages_read_engagement; Pages_read_user_content; Pages_manage_engagement ]
+      |> List.map scope_to_string
+
     (** Operations that can be performed with Facebook API *)
     type operation =
       | Post_text

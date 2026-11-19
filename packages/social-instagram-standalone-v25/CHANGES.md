@@ -1,5 +1,8 @@
 # Unreleased
 
+- Add `Posts.list_fields`: the fields parameter the user-media listing requests (every `Posts.post` field except `username`). `get_user_media_page`, `get_user_media_page_detailed` take `~fields` optionally and default to it; `get_user_media` already requested exactly this selection. Explicit `~fields` callers are unchanged.
+- Add `OAuth.Scopes.insights` (`instagram_business_manage_insights`) and `OAuth.Scopes.comment_management` (`instagram_business_manage_comments`): per-operation scope requirements as scope strings, for comparing against a granted-scope string.
+
 - Add the typed `thumbnail_url` (video poster frame) and `media_product_type` (`FEED`/`REELS`/`STORY`/`AD` surface) fields to `Posts.post`, so user-media listings no longer need raw-JSON re-parsing for callers that classify reels/stories or fall back to a video poster. Field additions are additive; existing readers and `raw` are unchanged.
 
 - Add `reply_to_comment_detailed`, `get_comments_page_detailed`, `get_comment_replies_page_detailed` and `get_user_media_page_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. A 2xx answer the operation cannot read (no created id, a page without readable `data`) is a `Malformed_response` keeping its status; a paging URL on another host or edge is a `Validation_failure` that sends no request. Retained diagnostics redact whole text carrying a secret (`redact_sensitive_diagnostics`). The legacy APIs retain their contracts; detailed and legacy share request construction and response parsing.

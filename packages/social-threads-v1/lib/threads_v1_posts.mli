@@ -1,8 +1,9 @@
 (** Token-based user post listings, exposed as [Posts].
     {{:https://developers.facebook.com/documentation/threads/retrieve-and-discover-posts/retrieve-posts}Official
      fields and response reference}. Use [get_user_media_page] (Instagram) or
-    [get_user_posts_page] (Threads) with [~access_token], [~fields] including
-    [id], and optional [~position] ([First], [After], [Before], or checked
+    [get_user_posts_page] (Threads) with [~access_token], optional [~fields]
+    (default {!list_fields} on Threads; Instagram callers pass their own
+    selection), and optional [~position] ([First], [After], [Before], or checked
     [Page_url]). No stored account is needed. Requires [threads_basic]. [limit]
     defaults to 20 and is clamped to 1..100. Page URLs retain their query
     options and replace embedded credentials. Threads cursor-only nonempty pages
@@ -28,3 +29,9 @@ type post = {
 
 val of_json : Yojson.Basic.t -> (post, string) result
 (** Requires a nonempty string [id]; other fields are optional. *)
+
+val list_fields : string
+(** The [fields] parameter that requests every field of [post] from the
+    [/{threads-user-id}/threads] edge, as a comma-joined string. All of
+    them are readable with [threads_basic]; the listing operations use it
+    as their default selection. *)

@@ -6039,3 +6039,31 @@ let test_detailed_listing_reads () =
 
 let () = test_detailed_engage_operations ()
 let () = test_detailed_listing_reads ()
+
+(* Per-operation scope requirements are platform facts (epic #1945 step 12);
+   the sets match Meta's Threads permission documentation. *)
+let () =
+  assert (Social_threads_v1.OAuth.Scopes.insights = [ "threads_manage_insights" ]);
+  assert (
+    Social_threads_v1.OAuth.Scopes.reply_management
+    = [ "threads_read_replies"; "threads_manage_replies" ]);
+  print_endline "Threads scope requirement sets ok"
+
+(* The user post listing defaults to the typed reader's field selection, so
+   callers stop carrying their own fields literals. *)
+let () =
+  Mock_config.reset ();
+  Mock_http.reset ();
+  Mock_http.set_responses
+    [ { status = 200; headers = []; body = {|{"data":[]}|} } ];
+  Threads.get_user_posts_page ~threads_user_id:"user/name" ~access_token:"t"
+    (function
+      | Ok page -> assert (page.data = [])
+      | Error err -> failwith (Error_types.error_to_string err));
+  (match !Mock_http.requests with
+  | [ ("GET", url, _, _) ] ->
+      assert (
+        Uri.get_query_param (Uri.of_string url) "fields"
+        = Some Social_threads_v1.Posts.list_fields)
+  | [] | _ :: _ -> failwith "expected one GET");
+  print_endline "user posts listing defaults to Posts.list_fields ok"

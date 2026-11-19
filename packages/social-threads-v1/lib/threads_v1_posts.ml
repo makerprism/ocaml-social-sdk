@@ -12,6 +12,12 @@ type post = {
 
 module J = Social_json_reader
 
+(** The fields the user post listing requests so {!of_json} fills every
+    field of [post]: the common media fields of the
+    [/{threads-user-id}/threads] edge, all readable with [threads_basic]. *)
+let list_fields =
+  "id,text,media_type,media_url,thumbnail_url,permalink,timestamp,username"
+
 let of_json raw =
   match J.string_opt (J.member "id" raw) with
   | None | Some "" -> Error "post without a nonempty string id"
