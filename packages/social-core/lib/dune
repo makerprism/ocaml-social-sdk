@@ -28,7 +28,6 @@
   social_meta_debug_token)
  (libraries
   ipaddr
-  str
   uutf
   yojson
   re

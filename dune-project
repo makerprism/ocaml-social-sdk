@@ -23,7 +23,6 @@
   base64
   ptime
   uri
-  str
   uutf))
 
 (package

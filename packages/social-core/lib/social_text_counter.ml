@@ -10,8 +10,9 @@ let tco_url_length = 23
 (** Maximum tweet length *)
 let max_tweet_length = 280
 
-(** URL regex pattern - matches http://, https://, and basic domain patterns *)
-let url_regex = Str.regexp "https?://[^ \t\n\r]+"
+(** [true] for the whitespace bytes the URL scan stops at: space, tab,
+    newline, carriage return. *)
+let is_url_whitespace c = c = ' ' || c = '\t' || c = '\n' || c = '\r'
 
 (** Unicode ranges that count as 2 characters (weighted characters)
     Based on Twitter's actual counting rules *)
@@ -51,17 +52,24 @@ let is_weighted_char code_point =
 let get_char_weight code_point =
   if is_weighted_char code_point then 2 else 1
 
-(** Extract URLs from text and return their positions *)
+(** Extract URLs from text and return their positions: a run of
+    non-whitespace bytes starting with [http://] or [https://], first
+    occurrence first. *)
 let find_urls text =
-  let rec find_all acc pos =
-    try
-      let start = Str.search_forward url_regex text pos in
-      let url = Str.matched_string text in
-      let end_pos = start + String.length url in
-      find_all ((start, end_pos, url) :: acc) end_pos
-    with Not_found -> List.rev acc
+  let len = String.length text in
+  let rec scan i acc =
+    if i >= len then List.rev acc
+    else if
+      (i + 7 <= len && String.sub text i 7 = "http://")
+      || (i + 8 <= len && String.sub text i 8 = "https://")
+    then begin
+      let rec extend j = if j < len && not (is_url_whitespace text.[j]) then extend (j + 1) else j in
+      let stop = extend i in
+      scan stop ((i, stop, String.sub text i (stop - i)) :: acc)
+    end
+    else scan (i + 1) acc
   in
-  find_all [] 0
+  scan 0 []
 
 (** Replace URLs in text with placeholders of t.co length *)
 let replace_urls_with_placeholder text =
@@ -80,14 +88,29 @@ let replace_urls_with_placeholder text =
   in
   replace_from_end text (List.rev urls)
 
-(** Remove reply mentions from the beginning of text *)
+(** Remove reply mentions from the beginning of text: one or more
+    [@handle] groups, each optionally followed by spaces or tabs. *)
 let remove_reply_mentions text =
-  let mention_regex = Str.regexp "^\\(@[a-zA-Z0-9_]+[ \t]*\\)+" in
-  try
-    let _ = Str.search_forward mention_regex text 0 in
-    let matched = Str.matched_string text in
-    String.sub text (String.length matched) (String.length text - String.length matched)
-  with Not_found -> text
+  let len = String.length text in
+  let is_mention_char c =
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9') || c = '_'
+  in
+  let rec skip_padding i =
+    if i < len && (text.[i] = ' ' || text.[i] = '\t') then skip_padding (i + 1)
+    else i
+  in
+  let rec drop_leading i =
+    if i < len && text.[i] = '@' then
+      let rec handle_end j =
+        if j < len && is_mention_char text.[j] then handle_end (j + 1) else j
+      in
+      let after_handle = handle_end (i + 1) in
+      if after_handle > i + 1 then drop_leading (skip_padding after_handle) else i
+    else i
+  in
+  let cut = drop_leading 0 in
+  if cut = 0 then text else String.sub text cut (len - cut)
 
 (** Convert string to list of Unicode code points using Uutf *)
 let string_to_code_points s =
