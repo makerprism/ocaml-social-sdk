@@ -5680,6 +5680,8 @@ let test_coordinated_refresh () =
   let completed = ref 0 in
   let module Config = struct
     include Mock_config
+    let update_health_status ~account_id:_ ~status:_ ~error_message:_ _ _ =
+      failwith "credential-only refresh must not write health"
 
     let update_credentials ~account_id ~credentials on_success on_error =
       assert !locked;
@@ -5711,7 +5713,7 @@ let test_coordinated_refresh () =
       in
       if !locked then Queue.add start waiting else start ()
   end in
-  let module Provider = Social_threads_v1.Make_coordinated (Config) in
+  let module Provider = Social_threads_v1.Make_credentials_only (Config) in
   Mock_http.set_responses
     [
       {
@@ -5778,6 +5780,8 @@ let test_coordinated_explicit_refresh_without_expiry () =
   let locked = ref false in
   let module Config = struct
     include Mock_config
+    let update_health_status ~account_id:_ ~status:_ ~error_message:_ _ _ =
+      failwith "credential-only refresh must not write health"
 
     let with_refresh_lock ~account_id:_ run on_success on_error =
       locked := true;
@@ -5794,7 +5798,7 @@ let test_coordinated_explicit_refresh_without_expiry () =
       Mock_config.update_credentials ~account_id ~credentials on_success
         on_error
   end in
-  let module Provider = Social_threads_v1.Make_coordinated (Config) in
+  let module Provider = Social_threads_v1.Make_credentials_only (Config) in
   Mock_http.set_responses
     [
       {

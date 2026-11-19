@@ -3088,3 +3088,11 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
     ensure_account_credentials ~force_refresh:true ~account_id on_success
       (fun error -> on_error (Error_types.error_to_string error))
 end
+
+(** Coordinated credential operations without legacy account-health writes.
+    All typed results, credential persistence, and locking are preserved. *)
+module Make_credentials_only (Config : COORDINATED_CONFIG) =
+  Make_coordinated (struct
+    include Config
+    let update_health_status = Health_status.ignore_updates
+  end)

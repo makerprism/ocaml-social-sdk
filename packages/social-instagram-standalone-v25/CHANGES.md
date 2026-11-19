@@ -1,5 +1,7 @@
 # Changelog
 
+- Add `Make_credentials_only` for coordinated credential operations without account-health callbacks. Legacy functors retain their behavior.
+
 ## Unreleased
 
 - Add `COORDINATED_CONFIG` and `Make_coordinated` to serialize account refreshes through persistence, reload credentials under the lock, and avoid duplicate refreshes from overlapping callers. Existing functors remain compatible.

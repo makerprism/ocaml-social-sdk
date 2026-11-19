@@ -73,7 +73,8 @@ let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
     ?(on_refresh_attempt = fun ~attempt:_ -> ())
     ?(on_refresh_success = fun ~attempt:_ _credentials -> ())
     ?(on_refresh_failure = fun ~attempt:_ _error -> ()) ~account_id
-    ~load_credentials ~perform_refresh ~persist_credentials ~update_health
+    ~load_credentials ~perform_refresh ~persist_credentials
+    ?(update_health = Health_status.ignore_updates)
     on_success on_error =
   with_refresh_lock ~account_id
     (fun on_success on_error ->

@@ -230,3 +230,22 @@ let () =
     exit 1
   end;
   Printf.printf "All Bluesky account-health contract tests passed\n"
+
+(* Fixtures follow the AT Protocol refreshSession XRPC errors:
+   https://docs.bsky.app/docs/api/com-atproto-server-refresh-session *)
+let () =
+  let module Config = struct
+    include Mock_config
+    let with_refresh_lock ~account_id:_ run success failure = run success failure
+  end in
+  let module Provider = Social_bluesky_v1.Make_credentials_only (Config) in
+  List.iter (fun mode ->
+    reset mode;
+    let expected = run_ensure_valid_token ~account_id:"legacy-error" in
+    health_writes := [];
+    Provider.ensure_valid_token ~account_id:"credential-only"
+      (fun _ -> assert false)
+      (fun actual -> assert (actual = expected));
+    assert (!health_writes = []))
+    [Refresh_transport_error; Refresh_server_error; Refresh_unauthorized;
+     Refresh_expired_token; Refresh_invalid_request; Refresh_proxy_400]

@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in path to disable legacy account-health callbacks without changing credential results.
+
 ## Unreleased
 
 - **Breaking:** removed the deprecated `Secure_random`, `Oauth_pkce`, `Meta_graph_error`, `Meta_graph_paging` and `Provider_error_detail` aliases. Use their `Social_`-prefixed equivalents; their APIs are unchanged.

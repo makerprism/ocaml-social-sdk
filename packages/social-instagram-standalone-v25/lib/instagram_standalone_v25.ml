@@ -2894,3 +2894,11 @@ module Make (Config : CONFIG) = struct
 
   include Make_nonblocking (Nonblocking_config)
 end
+
+(** Coordinated credential operations without legacy account-health writes.
+    All typed results, credential persistence, and locking are preserved. *)
+module Make_credentials_only (Config : COORDINATED_CONFIG) =
+  Make_coordinated (struct
+    include Config
+    let update_health_status = Health_status.ignore_updates
+  end)

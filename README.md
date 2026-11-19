@@ -269,3 +269,13 @@ publishers. `with_refresh_lock` must hold the lock until persistence completes
 and release it before delivering success or failure. Credential loading and
 expiry checks run inside the lock. Existing `Make_nonblocking` and `Make`
 remain available for consumers managing coordination themselves.
+
+### Account-health ownership
+
+Use provider `Make_credentials_only` (or `Make_credentials_only_with_options`
+for Bluesky/LinkedIn options) when the caller owns account health. These entry
+points retain coordinated token refresh and persistence but never invoke
+`CONFIG.update_health_status`. Mastodon uses the same name without a refresh
+lock. Existing `Make`/`Make_coordinated` entry points retain legacy health
+notifications for compatibility. A successful token lookup can reuse local
+credentials without contacting the provider; it is not proof of account health.

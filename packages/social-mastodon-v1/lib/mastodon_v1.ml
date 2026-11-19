@@ -4239,3 +4239,10 @@ module Make (Config : CONFIG) = struct
           (fun err -> on_result (Error (Error_types.Auth_error (Error_types.Refresh_failed err)))))
       (fun err -> on_result (Error (Error_types.Network_error (Error_types.Connection_failed err))))
 end
+
+(** Account operations without legacy account-health writes. Mastodon tokens
+    do not use the OAuth refresh-token rotation protocol. *)
+module Make_credentials_only (Config : CONFIG) = Make (struct
+  include Config
+  let update_health_status = Health_status.ignore_updates
+end)

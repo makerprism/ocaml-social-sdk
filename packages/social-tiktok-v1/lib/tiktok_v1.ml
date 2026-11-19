@@ -2570,3 +2570,11 @@ module Make (Config : CONFIG) = Make_coordinated (struct
   let with_refresh_lock ~account_id:_ run on_success on_error =
     run on_success on_error
 end)
+
+(** Coordinated credential operations without legacy account-health writes.
+    All typed results, credential persistence, and locking are preserved. *)
+module Make_credentials_only (Config : COORDINATED_CONFIG) =
+  Make_coordinated (struct
+    include Config
+    let update_health_status = Health_status.ignore_updates
+  end)

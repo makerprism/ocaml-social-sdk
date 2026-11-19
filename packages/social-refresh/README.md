@@ -46,3 +46,19 @@ hooks to make delegation safer in production environments:
 ## License
 
 MIT
+
+## Credentials without account-health policy
+
+Omit `update_health` from `Orchestrator.ensure_valid_access_token` to disable
+legacy health notifications. The load, refresh, persist, retry and lock hooks
+are unchanged. Successful credential acquisition does not prove remote token
+validity: local expiry policy can allow reuse without a request. The existing
+`on_refresh_success` hook reports actual refresh and persistence; it runs
+inside the lock, before its commit boundary.
+
+Provider `Make_credentials_only` functors preserve coordinated locking and
+credential persistence while disabling legacy health notifications on every
+internal path. Bluesky and LinkedIn also expose
+`Make_credentials_only_with_options`. Mastodon has the same entry point without
+a refresh lock, since its tokens do not rotate. Existing `Make` and
+`Make_coordinated` APIs remain compatibility paths with health callbacks.

@@ -3489,3 +3489,19 @@ module Make (Config : CONFIG) = Make_with_options (Config) (Default_options)
 
 module Make_coordinated (Config : COORDINATED_CONFIG) =
   Make_coordinated_with_options (Config) (Default_options)
+
+(** Coordinated credential operations without legacy account-health writes.
+    All typed results, credential persistence, and locking are preserved. *)
+module Make_credentials_only (Config : COORDINATED_CONFIG) =
+  Make_coordinated (struct
+    include Config
+    let update_health_status = Health_status.ignore_updates
+  end)
+
+(** Explicit provider options without legacy account-health writes. *)
+module Make_credentials_only_with_options
+    (Config : COORDINATED_CONFIG) (Options : OPTIONS) =
+  Make_coordinated_with_options (struct
+    include Config
+    let update_health_status = Health_status.ignore_updates
+  end) (Options)

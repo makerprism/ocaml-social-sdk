@@ -1,5 +1,7 @@
 # Changelog
 
+- Add `Make_credentials_only` for coordinated credential operations without account-health callbacks. Legacy functors retain their behavior.
+
 - **Typed ordinary Page video creation (`Videos`, module `Facebook_graph_v25_videos`)**: `create_video ~page_id ~page_access_token ~file_url ~description` is one `POST /{page-id}/videos` with Facebook fetching the hosted file (token as the Bearer header, `appsecret_proof` appended to the form when `FACEBOOK_APP_SECRET` is set) and returns the created `Videos.video` (`{id}`, the only documented non-resumable return field). A 2xx without a string `id` is an `Internal_error` (Facebook reported no created video); non-2xx keeps the Graph error and its code through `parse_api_error_with_permissions` (`pages_manage_posts`). `post_video ~account_id ~text ~video_url` runs it under the Page context with caption validation and one Page-token recovery retry on an auth failure; the retry follows only a POST Facebook rejected as an auth error, so a completed write is never repeated. The edge has no `place` parameter. Additive; the generic `post` is unchanged. Source: https://developers.facebook.com/docs/graph-api/reference/page/videos/
 - Add `COORDINATED_CONFIG` and `Make_coordinated` for account credential renewal held under a caller-provided lock through durable persistence.
 - Coordinated Page recovery reports credential reload and persistence failures instead of continuing with unsaved credentials.
