@@ -91,7 +91,7 @@ module Auth = struct
         ("identifier", `String identifier);
         ("password", `String app_password);
       ]) in
-      let headers = [("Content-Type", "application/json")] in
+      let headers = Social_http_request.json_content_type in
       
       Http.post ~headers ~body url
         (fun response ->
@@ -130,9 +130,7 @@ module Auth = struct
     *)
     let refresh_session ?(pds_url=Metadata.default_pds_url) ~refresh_jwt on_result =
       let url = Printf.sprintf "%s%s" pds_url Metadata.refresh_session_path in
-      let headers = [
-        ("Authorization", Printf.sprintf "Bearer %s" refresh_jwt);
-      ] in
+      let headers = Social_http_request.bearer_header refresh_jwt in
       
       Http.post ~headers url
         (fun response ->
@@ -169,9 +167,7 @@ module Auth = struct
     *)
     let delete_session ?(pds_url=Metadata.default_pds_url) ~refresh_jwt on_result =
       let url = Printf.sprintf "%s%s" pds_url Metadata.delete_session_path in
-      let headers = [
-        ("Authorization", Printf.sprintf "Bearer %s" refresh_jwt);
-      ] in
+      let headers = Social_http_request.bearer_header refresh_jwt in
       
       Http.post ~headers url
         (fun response ->
@@ -426,18 +422,16 @@ module Reads = struct
     let len = String.length url in
     if len > 0 && url.[len - 1] = '/' then String.sub url 0 (len - 1) else url
 
-  (* XRPC array params repeat the key ([uris=a&uris=b]). Uri.with_query
-     would join a value list with commas instead. *)
+  (* XRPC array params repeat the key ([uris=a&uris=b]);
+     {!Social_http_request.repeated_query_param}. *)
   let xrpc_url ~service_url nsid params =
-    let query = List.concat_map (fun (key, values) -> List.map (fun v -> (key, [ v ])) values) params in
+    let query = Social_http_request.repeated_query_pairs params in
     Uri.with_query (Uri.of_string (trim_trailing_slash service_url ^ "/xrpc/" ^ nsid)) query
     |> Uri.to_string
 
   let opt_param key to_string = function Some value -> [ (key, [ to_string value ]) ] | None -> []
 
-  let bearer = function
-    | Some token -> [ ("Authorization", "Bearer " ^ token) ]
-    | None -> []
+  let bearer = Social_http_request.bearer_header_opt
 
   module Make (Http : HTTP_CLIENT) = struct
     (* GET [url]; on 2xx parse the body with [parse]. *)
@@ -922,7 +916,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       ("password", `String password);
     ] in
     let body_str = Yojson.Basic.to_string body in
-    let headers = [("Content-Type", "application/json")] in
+    let headers = Social_http_request.json_content_type in
     
     Http.post ~headers ~body:body_str url
       (fun response ->
@@ -960,7 +954,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
   let resolve_pds_endpoint ~access_jwt on_done =
     let fallback () = on_done (service_url ()) in
     let url = Printf.sprintf "%s/xrpc/com.atproto.server.getSession" (service_url ()) in
-    Http.get ~headers:[("Authorization", Printf.sprintf "Bearer %s" access_jwt)] url
+    Http.get ~headers:(Social_http_request.bearer_header access_jwt) url
       (fun response ->
         let did_doc =
           if response.status >= 200 && response.status < 300 then
@@ -1011,9 +1005,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     let exp_seconds = int_of_float (Unix.gettimeofday () +. 1800.0) in (* 30 minutes *)
     let url = Printf.sprintf "%s/xrpc/com.atproto.server.getServiceAuth?aud=%s&lxm=%s&exp=%d"
       endpoint (Uri.pct_encode aud) (Uri.pct_encode lxm) exp_seconds in
-    let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-    ] in
+    let headers = Social_http_request.bearer_header access_jwt in
     Http.get ~headers url
       (fun response ->
         if response.status >= 200 && response.status < 300 then
@@ -1065,7 +1057,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     let upload_via_blob () =
       let url = Printf.sprintf "%s/xrpc/com.atproto.repo.uploadBlob" (service_url ()) in
       let headers = [
-        ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
+        Social_http_request.bearer_pair access_jwt;
         ("Content-Type", mime_type);
       ] in
       Http.post ~headers ~body:blob_data url
@@ -1131,7 +1123,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       let video_url = Printf.sprintf "%s/xrpc/app.bsky.video.uploadVideo?did=%s&name=video.mp4"
         video_upload_host (Uri.pct_encode user_did) in
       let video_headers = [
-        ("Authorization", Printf.sprintf "Bearer %s" service_token);
+        Social_http_request.bearer_pair service_token;
         ("Content-Type", mime_type);
       ] in
       Http.post ~headers:video_headers ~body:blob_data video_url
@@ -1808,10 +1800,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                           ("record", post_record);
                         ] in
                         let body_str = Yojson.Basic.to_string body in
-                        let headers = [
-                          ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-                          ("Content-Type", "application/json");
-                        ] in
+                        let headers =
+                          Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
                         
                         Http.post ~headers ~body:body_str url
                           (fun response ->
@@ -2013,10 +2003,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ("rkey", `String rkey);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2050,10 +2038,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ]);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2087,10 +2073,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ("rkey", `String rkey);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2122,10 +2106,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ]);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2159,10 +2141,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ("rkey", `String rkey);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2193,10 +2173,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ]);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2230,10 +2208,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ("rkey", `String rkey);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2253,7 +2229,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       (fun access_jwt ->
         let url = Printf.sprintf "%s/xrpc/app.bsky.actor.getProfile?actor=%s" 
           (service_url ()) (Uri.pct_encode actor) in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2280,7 +2256,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
       (fun access_jwt ->
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getPostThread?uri=%s" 
           (service_url ()) (Uri.pct_encode post_uri) in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2321,11 +2297,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         let query_string =
           if params = [] then ""
           else
-            "?" ^ (String.concat "&" (List.map (fun (k, v) ->
-              Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params))
+            "?" ^ (Social_http_request.percent_encoded_query params)
         in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getTimeline%s" (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2527,10 +2502,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                           ("record", `Assoc final_record);
                         ] in
                         let body_str = Yojson.Basic.to_string body in
-                        let headers = [
-                          ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-                          ("Content-Type", "application/json");
-                        ] in
+                        let headers =
+                          Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
                         
                         Http.post ~headers ~body:body_str url
                           (fun response ->
@@ -2570,12 +2543,11 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         in
         let query_string = match params with
           | [] -> ""
-          | _ -> "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-              Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params))
+          | _ -> "?" ^ (Social_http_request.percent_encoded_query params)
         in
         let url = Printf.sprintf "%s/xrpc/app.bsky.notification.listNotifications%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2597,7 +2569,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     ensure_valid_token ~account_id
       (fun access_jwt ->
         let url = Printf.sprintf "%s/xrpc/app.bsky.notification.getUnreadCount" (service_url ()) in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2625,10 +2597,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         let url = Printf.sprintf "%s/xrpc/app.bsky.notification.updateSeen" (service_url ()) in
         let body = `Assoc [("seenAt", `String now)] in
         let body_str = Yojson.Basic.to_string body in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-          ("Content-Type", "application/json");
-        ] in
+        let headers =
+          Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
         
         Http.post ~headers ~body:body_str url
           (fun response ->
@@ -2655,11 +2625,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.actor.searchActors%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2689,11 +2658,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.searchPosts%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2719,10 +2687,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         let url = Printf.sprintf "%s/xrpc/app.bsky.graph.muteActor" (service_url ()) in
         let body = `Assoc [("actor", `String actor)] in
         let body_str = Yojson.Basic.to_string body in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-          ("Content-Type", "application/json");
-        ] in
+        let headers =
+          Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
         
         Http.post ~headers ~body:body_str url
           (fun response ->
@@ -2741,10 +2707,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
         let url = Printf.sprintf "%s/xrpc/app.bsky.graph.unmuteActor" (service_url ()) in
         let body = `Assoc [("actor", `String actor)] in
         let body_str = Yojson.Basic.to_string body in
-        let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-          ("Content-Type", "application/json");
-        ] in
+        let headers =
+          Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
         
         Http.post ~headers ~body:body_str url
           (fun response ->
@@ -2773,10 +2737,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ]);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2810,10 +2772,8 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
               ("rkey", `String rkey);
             ] in
             let body_str = Yojson.Basic.to_string body in
-            let headers = [
-              ("Authorization", Printf.sprintf "Bearer %s" access_jwt);
-              ("Content-Type", "application/json");
-            ] in
+            let headers =
+              Social_http_request.bearer_header access_jwt @ Social_http_request.json_content_type in
             
             Http.post ~headers ~body:body_str url
               (fun response ->
@@ -2840,11 +2800,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getAuthorFeed%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2874,11 +2833,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getLikes%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2908,11 +2866,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.feed.getRepostedBy%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2942,11 +2899,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.graph.getFollowers%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->
@@ -2976,11 +2932,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
           | Some c -> ("cursor", c) :: params
           | None -> params
         in
-        let query_string = "?" ^ (String.concat "&" (List.map (fun (k, v) -> 
-          Printf.sprintf "%s=%s" k (Uri.pct_encode v)) params)) in
+        let query_string = "?" ^ (Social_http_request.percent_encoded_query params) in
         let url = Printf.sprintf "%s/xrpc/app.bsky.graph.getFollows%s" 
           (service_url ()) query_string in
-        let headers = [("Authorization", Printf.sprintf "Bearer %s" access_jwt)] in
+        let headers = Social_http_request.bearer_header access_jwt in
         
         Http.get ~headers url
           (fun response ->

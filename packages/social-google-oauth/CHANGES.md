@@ -1,3 +1,7 @@
+# Unreleased
+
+- Build the authorization URL query through the new `social-core` `Social_http_request.percent_encoded_query`. No request bytes change.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

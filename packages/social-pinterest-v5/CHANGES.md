@@ -1,4 +1,5 @@
 # Unreleased
+- Parse analytics reports with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged.
 
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
 

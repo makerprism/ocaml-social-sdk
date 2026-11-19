@@ -1,4 +1,5 @@
 # Unreleased
+- Parse typed comments and Page posts with the new `social-core` `Social_json_reader` primitives instead of per-file copies. Reader leniency is unchanged (nonempty strings, strict integers).
 
 - Add `reply_to_comment_detailed`, preserving Graph error details for every HTTP error kind, numeric Retry-After and trace headers. Sensitive diagnostics use the existing redactor. The legacy reply API retains its contract; both APIs share request construction and response parsing.
 
