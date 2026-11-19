@@ -92,13 +92,7 @@ let object_opt name f json =
 
 let prefix_error context = Result.map_error (fun msg -> context ^ "." ^ msg)
 
-let header_value headers key =
-  let target = String.lowercase_ascii key in
-  List.find_map
-    (fun (name, value) ->
-      if String.equal (String.lowercase_ascii name) target then Some value
-      else None)
-    headers
+let header_value = Social_http_retry.find_header
 
 (* {1 Shared types} *)
 

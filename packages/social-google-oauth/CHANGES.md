@@ -1,5 +1,7 @@
 # Unreleased
 
+- `api_error ?headers` reads a 429/quota response's `Retry-After` into `Rate_limited.retry_after_seconds` (fractional values round up, capped at one day) via `social-core` `Social_http_retry.delay_header_seconds`. Without `~headers`, or with an unusable header, `retry_after_seconds` stays `None`; callers that passed no headers are unchanged.
+
 - Build the authorization URL query through the new `social-core` `Social_http_request.percent_encoded_query`. No request bytes change.
 
 # Changelog

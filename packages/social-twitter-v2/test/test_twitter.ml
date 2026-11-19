@@ -6094,7 +6094,154 @@ let test_user_error_injected_clock () =
     | error -> failwith (Error_types.error_to_string error))
     [ 100., 20; 130., 1 ]
 
+
+(* Remote-media download retries: every posting path (single post, thread,
+   quote, reply) shares one policy. Transport failures and 429/5xx back
+   off and retry; a permanent 4xx is final on the first answer; a 429's
+   Retry-After is waited out (bounded). The four private copies these
+   tests pin had four different behaviours: one retried transport
+   failures, two did not, and two retried every non-2xx status
+   immediately. *)
+
+let media_fetch_script : (int * (string * string) list * string option) list ref =
+  ref []
+
+let media_fetch_gets = ref 0
+let media_fetch_sleeps = ref []
+
+let media_url = "https://cdn.example.com/retry-image.png"
+
+module Mock_http_media_retry : Social_core.HTTP_CLIENT = struct
+  let get ?headers:_ url on_success on_error =
+    if String.equal url media_url then begin
+      incr media_fetch_gets;
+      match !media_fetch_script with
+      | [] -> on_success { Social_core.status = 200; headers = [("content-type", "image/png")]; body = "png" }
+      | (status, headers, _body) :: rest ->
+          media_fetch_script := rest;
+          if status = 0 then on_error "connection reset"
+          else on_success { Social_core.status = status; headers; body = "png" }
+    end
+    else
+      on_success { Social_core.status = 200; headers = [("content-type", "application/json")]; body = "{}" }
+
+  let post ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data": {"id": "tweet_retry_1"}}|} }
+
+  let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data": {"id": "media_retry_1"}}|} }
+
+  let put ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+
+  let delete ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+end
+
+module Mock_config_media_retry = struct
+  module Http = Mock_http_media_retry
+  let get_env = function
+    | "TWITTER_CLIENT_ID" -> Some "test_client_id"
+    | "TWITTER_CLIENT_SECRET" -> Some "test_client_secret"
+    | "TWITTER_LINK_REDIRECT_URI" -> Some "http://localhost/callback"
+    | _ -> None
+  let get_credentials ~account_id:_ on_success _on_error =
+    on_success {
+      Social_core.access_token = "test_access_token";
+      refresh_token = Some "test_refresh_token";
+      expires_at = Some (rfc3339_in_seconds 4000);
+      auth_type = Social_core.Bearer;
+      scope = None;
+    }
+  let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
+  let encrypt _data on_success _on_error = on_success "encrypted"
+  let decrypt _data on_success _on_error = on_success "decrypted"
+  let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds on_continue _on_error =
+    media_fetch_sleeps := seconds :: !media_fetch_sleeps;
+    on_continue ()
+end
+
+module Twitter_media_retry = Social_twitter_v2.Make(Mock_config_media_retry)
+
+let run_quote_tweet_with_media () =
+  let result = ref None in
+  Twitter_media_retry.quote_tweet
+    ~account_id:"test_account"
+    ~text:"quote with retried media"
+    ~quoted_tweet_id:"12345"
+    ~media_urls:[media_url]
+    (fun tweet_id -> result := Some (Ok tweet_id))
+    (fun err -> result := Some (Error err));
+  (!result, !media_fetch_gets, List.rev !media_fetch_sleeps)
+
+(* A 404 is permanent: one request, no sleep, no retry. Two of the four
+   former copies retried every non-2xx answer up to four times. *)
+let test_media_fetch_permanent_404_not_retried () =
+  media_fetch_script := [ (404, [], None) ];
+  media_fetch_gets := 0;
+  media_fetch_sleeps := [];
+  let result, gets, sleeps = run_quote_tweet_with_media () in
+  assert (gets = 1);
+  assert (sleeps = []);
+  (match result with
+   | Some (Error err) -> assert (String.length err > 0)
+   | Some (Ok _) -> failwith "404 media must fail the quote tweet"
+   | None -> failwith "no result");
+  print_endline "✓ Media fetch 404 is final on the first answer"
+
+(* A transport failure is retried (one of the four copies never retried
+   it) and the post still succeeds. *)
+let test_media_fetch_retries_transport_error () =
+  media_fetch_script := [ (0, [], None); (200, [ ("content-type", "image/png") ], None) ];
+  media_fetch_gets := 0;
+  media_fetch_sleeps := [];
+  let result, gets, sleeps = run_quote_tweet_with_media () in
+  assert (gets = 2);
+  assert (List.length sleeps = 1);
+  (match result with
+   | Some (Ok _) -> ()
+   | Some (Error err) -> failwith ("transport retry should succeed: " ^ err)
+   | None -> failwith "no result");
+  print_endline "✓ Media fetch retries transport failures"
+
+(* A 429's Retry-After is waited out (here 3 s beats the 0.5 s backoff);
+   the former copies retried immediately without any sleep. *)
+let test_media_fetch_honors_retry_after () =
+  media_fetch_script :=
+    [ (429, [ ("retry-after", "3") ], None); (200, [ ("content-type", "image/png") ], None) ];
+  media_fetch_gets := 0;
+  media_fetch_sleeps := [];
+  let result, gets, sleeps = run_quote_tweet_with_media () in
+  assert (gets = 2);
+  assert (sleeps = [ 3. ]);
+  (match result with
+   | Some (Ok _) -> ()
+   | Some (Error err) -> failwith ("retry-after path should succeed: " ^ err)
+   | None -> failwith "no result");
+  print_endline "✓ Media fetch waits out a 429's Retry-After"
+
+(* Persistent 429s stop at four total attempts (one try plus three
+   retries) with exponential backoff between them. *)
+let test_media_fetch_attempts_bounded () =
+  media_fetch_script :=
+    [ (429, [], None); (429, [], None); (429, [], None); (429, [], None); (429, [], None) ];
+  media_fetch_gets := 0;
+  media_fetch_sleeps := [];
+  let result, gets, sleeps = run_quote_tweet_with_media () in
+  assert (gets = 4);
+  assert (sleeps = [ 0.5; 1.; 2. ]);
+  (match result with
+   | Some (Error _) -> ()
+   | Some (Ok _) -> failwith "persistent 429 must fail the quote tweet"
+   | None -> failwith "no result");
+  print_endline "✓ Media fetch retries are bounded with backoff"
+
 let () =
+  test_media_fetch_permanent_404_not_retried ();
+  test_media_fetch_retries_transport_error ();
+  test_media_fetch_honors_retry_after ();
+  test_media_fetch_attempts_bounded ();
   test_user_error_injected_clock ();
   test_token_based_get_me ();
   print_endline "===========================================";

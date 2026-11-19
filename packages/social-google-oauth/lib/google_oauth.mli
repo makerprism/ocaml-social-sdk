@@ -74,8 +74,16 @@ val parse_userinfo : string -> (userinfo, string) result
     - other 403: [Auth_error (Insufficient_permissions {required =
       required_scopes; platform_message})];
     - 404: [Resource_not_found message];
-    - otherwise [Api_error] tagged [platform], with the body kept. *)
+    - otherwise [Api_error] tagged [platform], with the body kept.
+
+    [Rate_limited] carries the response's [Retry-After] as
+    [retry_after_seconds] when [~headers] is given and the header is a
+    usable delay ({{:https://www.rfc-editor.org/rfc/rfc9110#field.retry-after}RFC 9110};
+    Google sets it on quota rejections, see
+    {{:https://cloud.google.com/storage/docs/retry-strategy}}). Without it
+    [retry_after_seconds] stays [None]. *)
 val api_error :
+  ?headers:(string * string) list ->
   platform:Platform_types.platform ->
   required_scopes:string list ->
   status_code:int ->

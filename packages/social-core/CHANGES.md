@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `Social_http_retry`: case-insensitive header lookup (`find_header`, `header_int`), `Retry-After` delay parsing with fractional seconds rounded up and a caller-supplied safety cap (`delay_header_seconds`), and a CPS read-retry combinator (`read_with_retry` with `read_retry_policy`) covering attempt limits, retryable statuses, transport failures, per-trigger delays and a summed-delay budget. Read (idempotent GET) use only.
+
 - Add `Social_meta_graph_error.failure` and `response_error`, retaining Graph classification, HTTP status, provider code/subcode, trace, redacted diagnostics and optional retry advice. Transport, malformed-response and validation failures remain distinct. `Social_provider_error_detail.of_response` takes `?redact`, applied to the complete body before the excerpt is cut so a redactor always sees whole secrets.
 
 - Add runtime-agnostic `Social_credential_outcome` (`Reused` / `Renewed`) with projection helpers and documented persistence semantics.

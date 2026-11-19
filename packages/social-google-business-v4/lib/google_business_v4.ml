@@ -238,7 +238,8 @@ module OAuth = struct
           else
             on_result
               (Stdlib.Error
-                 (Social_google_oauth.api_error ~platform:Platform_types.GoogleBusinessProfile
+                 (Social_google_oauth.api_error ~headers:response.headers
+                    ~platform:Platform_types.GoogleBusinessProfile
                     ~required_scopes:Scopes.business_manage ~status_code:response.status response.body)))
         (fun err -> on_result (Stdlib.Error (Error_types.Network_error (Error_types.Connection_failed err))))
 
@@ -449,8 +450,11 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
     else
       Ok ()
 
-  (** Parse API error response and return structured Error_types.error *)
-  let parse_api_error ~status_code ~response_body =
+  (** Parse API error response and return structured Error_types.error. A
+      429 keeps the response's [Retry-After] as [retry_after_seconds]
+      (capped at a day); 60 s stays the fallback when the header is absent
+      or unusable. *)
+  let parse_api_error ~headers ~status_code ~response_body =
     try
       let json = Yojson.Basic.from_string response_body in
       let open Yojson.Basic.Util in
@@ -471,7 +475,12 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
         })
       else if status_code = 429 then
         Error_types.Rate_limited {
-          retry_after_seconds = Some 60;
+          retry_after_seconds =
+            (match
+               Social_http_retry.delay_header_seconds ~max_seconds:86400.0 headers "retry-after"
+             with
+            | Some seconds -> Some seconds
+            | None -> Some 60);
           limit = None;
           remaining = Some 0;
           reset_at = None;
@@ -623,7 +632,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               with e ->
                 on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse accounts response: %s" (Printexc.to_string e))))
             else
-              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+              on_result (Error (parse_api_error ~headers:response.headers ~status_code:response.status ~response_body:response.body)))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
@@ -642,7 +651,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               with e ->
                 on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse locations response: %s" (Printexc.to_string e))))
             else
-              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+              on_result (Error (parse_api_error ~headers:response.headers ~status_code:response.status ~response_body:response.body)))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
@@ -668,7 +677,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               with e ->
                 on_result (Error (Error_types.Internal_error (Printf.sprintf "Failed to parse location: %s" (Printexc.to_string e))))
             else
-              on_result (Error (parse_api_error ~status_code:response.status ~response_body:response.body)))
+              on_result (Error (parse_api_error ~headers:response.headers ~status_code:response.status ~response_body:response.body)))
           (fun err -> on_result (Error (Error_types.Internal_error err))))
       (fun err -> on_result (Error err))
 
@@ -723,7 +732,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                          with _e ->
                            on_result (Error_types.Failure (Error_types.Internal_error (Printf.sprintf "Failed to parse response: %s" response.body)))
                        else
-                         on_result (Error_types.Failure (parse_api_error ~status_code:response.status ~response_body:response.body)))
+                         on_result (Error_types.Failure (parse_api_error ~headers:response.headers ~status_code:response.status ~response_body:response.body)))
                      (fun err -> on_result (Error_types.Failure (Error_types.Internal_error err))))
                (fun err -> on_result (Error_types.Failure err)))
 

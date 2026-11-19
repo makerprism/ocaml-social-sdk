@@ -1,5 +1,7 @@
 # Unreleased
 
+- Keep Google's retry advice instead of discarding it: OAuth discovery (`list_accounts_page` / `list_locations_page` and the `list_all_*` helpers) passes response headers to `Social_google_oauth.api_error`, so a 429 carries its `Retry-After` as `Rate_limited.retry_after_seconds` (previously always `None`). The posting path's `parse_api_error` takes `~headers` (new required argument, in-package callers only) and reports the advertised `Retry-After` instead of a fixed 60 s; 60 s stays the fallback when the header is absent or unusable.
+
 - Add `ensure_valid_token_with_outcome ~with_refresh_lock` reporting reused or renewed-and-persisted tokens through an explicit completion boundary. Existing APIs remain compatible; credential-only functors never write health.
 
 # Changelog
