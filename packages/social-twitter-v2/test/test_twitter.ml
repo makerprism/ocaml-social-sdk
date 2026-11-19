@@ -6581,3 +6581,115 @@ let test_coordinated_refresh ~after_401 =
 let () =
   test_coordinated_refresh ~after_401:false;
   test_coordinated_refresh ~after_401:true
+
+(* --- Typed token-endpoint refresh classification ---
+
+   A dead refresh token must surface as [Auth_error Token_invalid] so a
+   consumer can distinguish "reconnect this account" from "the network
+   blipped". Everything that does not unambiguously mean a dead grant
+   stays a Refresh_failed, and transport failures stay Network_error. *)
+
+let dead_token_json_body =
+  {|{"error":"invalid_request","error_description":"The value passed for the token was invalid."}|}
+
+let test_dead_refresh_token_error_classifications () =
+  let classify status_code body =
+    Social_twitter_v2.OAuth.dead_refresh_token_error ~status_code body
+  in
+  (* The two documented dead-grant shapes. *)
+  assert (classify 400 dead_token_json_body
+          = Some (Error_types.Auth_error Error_types.Token_invalid));
+  assert (classify 400
+            {|{"error":"invalid_grant","error_description":"refresh token expired"}|}
+          = Some (Error_types.Auth_error Error_types.Token_invalid));
+  (* A form-encoded body carries the same fact. *)
+  assert (classify 400
+            "error=invalid_request&error_description=Value%20passed%20for%20the%20token%20was%20invalid."
+          = Some (Error_types.Auth_error Error_types.Token_invalid));
+  (* App-level rejections are not token evidence. *)
+  assert (classify 401
+            {|{"error":"invalid_client","error_description":"client authentication failed"}|}
+          = None);
+  assert (classify 400
+            {|{"error":"unauthorized_client","error_description":"not authorized for this grant type"}|}
+          = None);
+  (* Server errors and unreadable bodies stay ordinary refresh failures. *)
+  assert (classify 500 dead_token_json_body = None);
+  assert (classify 503 {|{"error":"server_error"}|} = None);
+  assert (classify 400 "not a body we can read" = None);
+  print_endline "✓ dead_refresh_token_error classifies the documented shapes"
+
+let dead_token_statuses = ref []
+
+module Mock_http_refresh_dead_token : Social_core.HTTP_CLIENT = struct
+  let get ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = {|{"data":{"id":"x"}}|} }
+  let post ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 400; headers = []; body = dead_token_json_body }
+  let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+  let put ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+  let delete ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+end
+
+module Mock_config_refresh_dead_token = struct
+  module Http = Mock_http_refresh_dead_token
+  let get_env = function
+    | "TWITTER_CLIENT_ID" -> Some "test_client_id"
+    | "TWITTER_CLIENT_SECRET" -> Some "test_client_secret"
+    | _ -> None
+  let get_credentials ~account_id:_ on_success _on_error =
+    on_success {
+      Social_core.access_token = "expired_access";
+      refresh_token = Some "dead_refresh";
+      expires_at = Some (rfc3339_in_seconds 10);
+      auth_type = Social_core.Bearer;
+      scope = None;
+    }
+  let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
+  let encrypt _data on_success _on_error = on_success "encrypted"
+  let decrypt _data on_success _on_error = on_success "decrypted"
+  let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
+    dead_token_statuses := status :: !dead_token_statuses;
+    on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
+end
+
+module Twitter_refresh_dead_token =
+  Social_twitter_v2.Make(Mock_config_refresh_dead_token)
+
+let test_refresh_access_token_typed_reports_dead_grant () =
+  let result = ref None in
+  Twitter_refresh_dead_token.refresh_access_token_typed
+    ~client_id:"test_client_id" ~client_secret:"test_client_secret"
+    ~refresh_token:"dead_refresh"
+    (fun _ -> failwith "refresh must not succeed with a dead grant")
+    (fun error -> result := Some error);
+  (match !result with
+   | Some (Error_types.Auth_error Error_types.Token_invalid) -> ()
+   | Some other ->
+       failwith ("dead grant must be Token_invalid, got: "
+                 ^ Error_types.error_to_string other)
+   | None -> failwith "refresh with a dead grant must fail");
+  print_endline "✓ refresh_access_token_typed reports a dead grant as Token_invalid"
+
+let test_refresh_access_string_wrapper_keeps_message () =
+  let result = ref None in
+  Twitter_refresh_dead_token.refresh_access_token
+    ~client_id:"test_client_id" ~client_secret:"test_client_secret"
+    ~refresh_token:"dead_refresh"
+    (fun _ -> failwith "refresh must not succeed with a dead grant")
+    (fun message -> result := Some message);
+  (match !result with
+   | Some message ->
+       (* The compatibility continuation renders the same rejection text. *)
+       assert (String.length message > 0)
+   | None -> failwith "string refresh must fail");
+  print_endline "✓ refresh_access_token keeps its message contract"
+
+let () =
+  test_dead_refresh_token_error_classifications ();
+  test_refresh_access_token_typed_reports_dead_grant ();
+  test_refresh_access_string_wrapper_keeps_message ()

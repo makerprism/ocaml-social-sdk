@@ -39,6 +39,21 @@ let cps_error_types_to_lwt f =
    with e -> resolve_once (Error (Printexc.to_string e)));
   promise
 
+(** Like {!cps_error_types_to_lwt} but preserves the typed
+    [Error_types.error] instead of converting it to a string, so consumers
+    can classify the failure (auth vs transient vs permanent) on its
+    constructor rather than by parsing the rendered message. An exception
+    raised before either continuation runs is reported as
+    [Internal_error], the constructor for caller-side bugs. *)
+let cps_error_types_to_lwt_typed f =
+  let promise, resolve_once = make_safe_promise () in
+  (try f
+    (fun result -> resolve_once (Ok result))
+    (fun error -> resolve_once (Error error))
+   with e ->
+     resolve_once (Error (Error_types.Internal_error (Printexc.to_string e))));
+  promise
+
 (** Convert a single-callback result-style function to Lwt.
     For SDK functions that call [on_result] with [Social_core.result].
     Note: SDK uses its own result type ([Social_core.Ok] / [Social_core.Error]),

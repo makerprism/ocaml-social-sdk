@@ -27,6 +27,106 @@ module OAuth = struct
     ] in
     List.fold_left (fun acc (re, repl) -> Str.global_replace re repl acc) text rules
 
+  (** What a failed token-endpoint request says about the refresh grant.
+
+      RFC 6749 section 5.2 defines the [error] codes; the endpoint answers
+      with a JSON body ([{"error": ..., "error_description": ...}]) or a
+      form-encoded one. Only the shapes that unambiguously mean "this
+      refresh token will never work again" map to [Token_invalid]:
+      [invalid_grant], and Twitter's [invalid_request] phrasing "value
+      passed for the token was invalid", which is how an expired or
+      revoked refresh token surfaces on
+      https://docs.x.com/x-api/posts/2-oauth2/token. Client-level codes
+      ([invalid_client], [unauthorized_client]) are deliberately not
+      token evidence: they say the {i app} cannot use the grant, not that
+      the user's stored credentials are dead, and a consumer that revoked
+      every account on them would disconnect its whole user base during
+      an app misconfiguration. Everything else returns [None] and stays
+      an ordinary refresh failure. *)
+  let dead_refresh_token_error ~status_code body =
+    let lowered text = String.lowercase_ascii text in
+    let contains needle haystack =
+      let n = String.length needle and h = String.length haystack in
+      let rec loop i =
+        if i + n > h then false
+        else if String.sub haystack i n = needle then true
+        else loop (i + 1)
+      in
+      if n = 0 then true else loop 0
+    in
+    (* Percent-decode a form value: the description arrives URL-encoded
+       when the endpoint answers form-encoded. *)
+    let form_decode value =
+      let length = String.length value in
+      let digit c =
+        match c with
+        | '0' .. '9' -> Some (Char.code c - Char.code '0')
+        | 'a' .. 'f' -> Some (Char.code c - Char.code 'a' + 10)
+        | 'A' .. 'F' -> Some (Char.code c - Char.code 'A' + 10)
+        | _ -> None
+      in
+      let buffer = Buffer.create length in
+      let rec loop index =
+        if index >= length then ()
+        else if index + 2 < length && value.[index] = '%' then
+          match digit value.[index + 1], digit value.[index + 2] with
+          | Some high, Some low ->
+              Buffer.add_char buffer (Char.chr ((high * 16) + low));
+              loop (index + 3)
+          | _ ->
+              Buffer.add_char buffer value.[index];
+              loop (index + 1)
+        else
+          (Buffer.add_char buffer value.[index]; loop (index + 1))
+      in
+      loop 0;
+      Buffer.contents buffer
+    in
+    let form_member key pairs =
+      let prefix = key ^ "=" in
+      List.find_map
+        (fun pair ->
+          if contains prefix (lowered (String.trim pair)) then
+            let trimmed = String.trim pair in
+            let encoded =
+              String.sub trimmed (String.length prefix)
+                (String.length trimmed - String.length prefix)
+            in
+            Some (form_decode encoded)
+          else None)
+        pairs
+    in
+    let error_code =
+      match Yojson.Basic.from_string body with
+      | exception Yojson.Json_error _ ->
+          let pairs = String.split_on_char '&' body in
+          form_member "error" pairs
+      | json -> (
+          match (Yojson.Basic.Util.member "error" json) with
+          | `String code -> Some code
+          | _ -> form_member "error" (String.split_on_char '&' body))
+    in
+    let description =
+      match Yojson.Basic.from_string body with
+      | exception Yojson.Json_error _ ->
+          form_member "error_description" (String.split_on_char '&' body)
+      | json -> (
+          match (Yojson.Basic.Util.member "error_description" json) with
+          | `String text -> Some text
+          | _ ->
+              form_member "error_description" (String.split_on_char '&' body))
+    in
+    if status_code <> 400 && status_code <> 401 && status_code <> 403 then None
+    else
+      match Option.map lowered error_code with
+      | Some "invalid_grant" -> Some (Error_types.Auth_error Error_types.Token_invalid)
+      | Some "invalid_request" -> (
+          match description with
+          | Some text when contains "value passed for the token was invalid" (lowered text) ->
+              Some (Error_types.Auth_error Error_types.Token_invalid)
+          | _ -> None)
+      | _ -> None
+
   (** Scope definitions for Twitter API v2 *)
   module Scopes = struct
     (** Scopes required for read-only operations *)
@@ -208,7 +308,7 @@ module OAuth = struct
         on_error
 
     (** Refresh access token using refresh token
-        
+
         @param client_id OAuth 2.0 Client ID
         @param client_secret OAuth 2.0 Client Secret
         @param refresh_token The refresh token from previous exchange
@@ -930,8 +1030,16 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
          | Ok refresh_needed -> refresh_needed
          | Error _ -> true)
   
-  (** Refresh OAuth 2.0 access token *)
-  let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
+  (** Refresh OAuth 2.0 access token, preserving the failure's kind.
+
+      [on_error] receives [Auth_error Token_invalid] when the token
+      endpoint's answer means the stored refresh token is dead (see
+      {!OAuth.dead_refresh_token_error}), [Network_error] when the request
+      never completed, and [Auth_error (Refresh_failed _)] for every other
+      rejection, with the same message the string continuation of
+      {!refresh_access_token} has always produced. *)
+  let refresh_access_token_typed ~client_id ~client_secret ~refresh_token
+      on_success on_error =
     let url = "https://api.twitter.com/2/oauth2/token" in
     
     let body = Social_core.form_urlencode_kvs [
@@ -964,11 +1072,33 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
               | None -> Ptime.to_rfc3339 now in
             on_success (new_access, new_refresh, expires_at)
           with e ->
-            on_error (Printf.sprintf "Failed to parse token response: %s" (Printexc.to_string e))
+            on_error
+              (Error_types.Internal_error
+                 (Printf.sprintf "Failed to parse token response: %s"
+                    (Printexc.to_string e)))
         else
-          on_error (Printf.sprintf "Token refresh failed (%d): %s" response.status (OAuth.redact_sensitive_text response.body)))
-      on_error
+          match OAuth.dead_refresh_token_error ~status_code:response.status response.body with
+          | Some dead_token -> on_error dead_token
+          | None ->
+              on_error
+                (Error_types.Auth_error
+                   (Error_types.Refresh_failed
+                      (Printf.sprintf "Token refresh failed (%d): %s" response.status
+                         (OAuth.redact_sensitive_text response.body)))))
+      (fun message ->
+        on_error (Error_types.Network_error (Error_types.Connection_failed message)))
   
+  (** Refresh OAuth 2.0 access token, reporting failures as messages.
+
+      Compatibility wrapper over {!refresh_access_token_typed}: the error
+      continuation receives [Error_types.error_to_string] of the typed
+      failure, which renders the same "Token refresh failed (400): ..."
+      text this function has always produced for refresh rejections. *)
+  let refresh_access_token ~client_id ~client_secret ~refresh_token on_success on_error =
+    refresh_access_token_typed ~client_id ~client_secret ~refresh_token
+      on_success
+      (fun error -> on_error (Error_types.error_to_string error))
+
   (** Auth context provides auth headers appropriate for the account's auth type.
       For Bearer tokens, returns a static Authorization header.
       For OAuth 1.0a, captures signing credentials in a closure that signs each
@@ -1014,7 +1144,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
             let err = "TWITTER_CLIENT_ID or TWITTER_CLIENT_SECRET is missing" in
             on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err))
           else
-            refresh_access_token ~client_id ~client_secret ~refresh_token
+            refresh_access_token_typed ~client_id ~client_secret ~refresh_token
               (fun (new_access, new_refresh, expires_at) ->
                  on_refresh_success {
                    Social_core.access_token = new_access;
@@ -1023,7 +1153,7 @@ module Make_coordinated (Config : COORDINATED_CONFIG) = struct
                    auth_type = credentials.auth_type;
                    scope = credentials.scope;
                  })
-              (fun err -> on_refresh_error (Error_types.Auth_error (Error_types.Refresh_failed err)))
+              on_refresh_error
     in
     Social_refresh.Orchestrator.ensure_with_result ~reused ~renewed
       ~with_refresh_lock ~force_refresh

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.1] - Unreleased
 
+### Added
+
+- `Lwt_adapter.cps_error_types_to_lwt_typed`: like `cps_error_types_to_lwt` but hands the typed `Error_types.error` through untouched (exceptions become `Internal_error`), so consumers classify failures on the constructor instead of parsing the rendered message.
+
 ### Fixed
 
 - Route exceptions raised by sleep continuations to `on_error`, avoiding Lwt’s default process-exiting async exception hook.
