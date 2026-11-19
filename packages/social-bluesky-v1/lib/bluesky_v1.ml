@@ -713,12 +713,10 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     | Ok () -> Ok ()
     | Error errs -> Error (String.concat "; " (List.map Error_types.validation_error_to_string errs))
   
-  type session_commit = Pending | Committed
-
   (* Each acquisition owns its commit marker. A lock implementation may start
      the next waiter before delivering completion, so a cached pending session
      must remain unusable even after the lock has been released. *)
-  let session_cache : (string, string * string * float * session_commit ref) Hashtbl.t = Hashtbl.create 16
+  let session_cache : (string, string * string * float * [ `Pending | `Committed ] ref) Hashtbl.t = Hashtbl.create 16
 
   (** Session lifetime in seconds (matches Auth.Metadata.access_jwt_lifetime_seconds minus margin) *)
   let session_max_age_seconds = 240.0  (* 4 minutes, conservative vs 5-min expiry *)
@@ -1428,7 +1426,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     let now = Unix.gettimeofday () in
     match Hashtbl.find_opt session_cache account_id with
     | Some (_did, access_jwt, created_at, commit)
-      when !commit = Committed && now -. created_at < session_max_age_seconds ->
+      when !commit = `Committed && now -. created_at < session_max_age_seconds ->
         on_success (reused access_jwt)
     | _ ->
         Config.get_credentials ~account_id
@@ -1507,7 +1505,7 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
     | Some _ | None -> ()
 
   let ensure_valid_token ~account_id on_success on_error =
-    let cache_commit = ref (if Persistence.required then Pending else Committed) in
+    let cache_commit = ref (if Persistence.required then `Pending else `Committed) in
     if not Persistence.required then
       ensure_valid_token_unlocked ~cache_commit ~require_persistence:false ~reused:Fun.id ~renewed:Fun.id ~account_id on_success on_error
     else
@@ -1524,21 +1522,21 @@ module Make_internal (Config : COORDINATED_CONFIG) (Options : OPTIONS)
                 (Error_types.Connection_failed error))))
           on_locked_error)
       (fun credentials ->
-        cache_commit := Committed;
+        cache_commit := `Committed;
         on_success credentials.Social_core.access_token)
       (fun error ->
         discard_acquisition ~account_id ~cache_commit;
         on_error error)
 
   let ensure_valid_token_with_outcome ~with_refresh_lock ~account_id on_success on_error =
-    let cache_commit = ref Pending in
+    let cache_commit = ref `Pending in
     with_refresh_lock ~account_id
       (fun success failure ->
         ensure_valid_token_unlocked ~cache_commit ~require_persistence:true
           ~reused:(fun token -> Social_credential_outcome.Reused token)
           ~renewed:(fun token -> Social_credential_outcome.Renewed token)
           ~account_id success failure)
-      (fun outcome -> cache_commit := Committed; on_success outcome)
+      (fun outcome -> cache_commit := `Committed; on_success outcome)
       (fun error -> discard_acquisition ~account_id ~cache_commit; on_error error)
 
   end : sig
