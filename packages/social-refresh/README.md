@@ -49,7 +49,7 @@ MIT
 
 ## Credentials without account-health policy
 
-Omit `update_health` from `Orchestrator.ensure_valid_access_token` to disable
+Use `Orchestrator.ensure_credentials` to acquire credentials without
 legacy health notifications. The load, refresh, persist, retry and lock hooks
 are unchanged. Successful credential acquisition does not prove remote token
 validity: local expiry policy can allow reuse without a request. The existing

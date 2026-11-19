@@ -1,6 +1,6 @@
 # Unreleased
 
-- Make the orchestrator health callback optional (disabled when omitted). Explicit callbacks retain legacy behavior.
+- Add `Orchestrator.ensure_credentials` without health callbacks, preserving the legacy function signature and behavior.
 
 - Add a completion-aware with_refresh_lock hook spanning load, reload, refresh, persistence and health callbacks, plus force_refresh for explicit refresh operations.
 

@@ -510,7 +510,7 @@ let () = test_scoped_lock_reloads_rotating_credentials ()
 
 let () =
   let credentials = make_credentials ~expires_at:(rfc3339_in_seconds 4000) "fresh" in
-  Social_refresh.Orchestrator.ensure_valid_access_token
+  Social_refresh.Orchestrator.ensure_credentials
     ~account_id:"unchanged"
     ~load_credentials:(fun ~account_id:_ success _ -> success credentials)
     ~perform_refresh:(fun ~credentials:_ _ _ -> assert false)
