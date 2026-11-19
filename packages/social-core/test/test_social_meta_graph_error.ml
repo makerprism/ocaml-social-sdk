@@ -201,6 +201,19 @@ let test_to_error () =
        (graph_body ~subcode:1390008 ~error_type:oauth ~message:"temporarily blocked" (Some 368))
      = Error_types.Rate_limited
          { retry_after_seconds = Some 300; limit = None; remaining = Some 0; reset_at = None });
+  (* Graph wraps permission denials in HTTP 500 (Threads/Facebook answer
+     "Application does not have permission for this action" that way when
+     app review lapses). The Graph code, not the status, decides; otherwise
+     the 5xx reads as a transient upstream failure and the account is never
+     asked to reconnect. *)
+  check "10 with HTTP 500 -> Insufficient_permissions, not a transient 5xx"
+    (to_error ~status_code:500
+       (graph_body ~error_type:oauth
+          ~message:"Application does not have permission for this action" (Some 10))
+     = Error_types.Auth_error
+         (Error_types.Insufficient_permissions
+            { required = [ "pages_manage_posts" ];
+              platform_message = Some "Application does not have permission for this action" }));
   check "HTTP 429 with a non-Graph body -> Rate_limited"
     (to_error ~status_code:429 ~retry_after_seconds:7 "Too Many Requests"
      = Error_types.Rate_limited

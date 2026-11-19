@@ -884,6 +884,22 @@ let test_parse_api_error_403_nonforbidden_maps_api_error () =
    | _ -> failwith "Expected non-forbidden 403 to map to Api_error");
   print_endline "✓ API error 403 non-forbidden mapping test passed"
 
+(* X documents the duplicate-content rejection as HTTP 403 with the
+   problem+json detail "You are not allowed to create a Tweet with duplicate
+   content." — a content refusal, not a statement about the grant. See the
+   comment in Twitter.parse_api_error. *)
+let test_parse_api_error_403_duplicate_content_maps_duplicate () =
+  let err =
+    Twitter.parse_api_error
+      ~status_code:403
+      ~body:{|{"title":"Forbidden","detail":"You are not allowed to create a Tweet with duplicate content.","type":"about:blank","status":403}|}
+      ~headers:[]
+  in
+  (match err with
+   | Error_types.Duplicate_content -> ()
+   | _ -> failwith "Expected duplicate-content 403 to map to Duplicate_content");
+  print_endline "✓ API error 403 duplicate-content mapping test passed"
+
 let test_parse_api_error_429_maps_rate_limited () =
   let err = Twitter.parse_api_error ~status_code:429 ~body:{|{"detail":"too many requests"}|} ~headers:[] in
   (match err with
@@ -1961,6 +1977,72 @@ let test_post_invalid_media_id_end_to_end_mapping () =
    | None -> failwith "No result in invalid media ID e2e test");
   assert (!invalid_media_post_calls = 1);
   print_endline "✓ Post invalid media ID end-to-end mapping test passed"
+
+(* X's duplicate-content 403 end to end: the same body the API sends when a
+   post repeats recently posted text must surface as Duplicate_content from
+   the posting path, so consumers treat it as a content refusal instead of
+   an auth problem that flags the account for reconnect. *)
+let duplicate_content_post_calls = ref 0
+
+module Mock_http_duplicate_content_post : Social_core.HTTP_CLIENT = struct
+  let get ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+
+  let post ?headers:_ ?body:_ url on_success _on_error =
+    if string_contains url "/tweets" then incr duplicate_content_post_calls;
+    on_success {
+      Social_core.status = 403;
+      headers = [("content-type", "application/json")];
+      body = {|{"title":"Forbidden","detail":"You are not allowed to create a Tweet with duplicate content.","type":"about:blank","status":403}|};
+    }
+
+  let post_multipart ?headers:_ ~parts:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+  let put ?headers:_ ?body:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+  let delete ?headers:_ _url on_success _on_error =
+    on_success { Social_core.status = 200; headers = []; body = "{}" }
+end
+
+module Mock_config_duplicate_content_post = struct
+  module Http = Mock_http_duplicate_content_post
+  let get_env = function
+    | "TWITTER_CLIENT_ID" -> Some "test_client_id"
+    | "TWITTER_CLIENT_SECRET" -> Some "test_client_secret"
+    | "TWITTER_LINK_REDIRECT_URI" -> Some "http://localhost/callback"
+    | _ -> None
+  let get_credentials ~account_id:_ on_success _on_error =
+    on_success {
+      Social_core.access_token = "test_access_token";
+      refresh_token = Some "test_refresh_token";
+      expires_at = Some (rfc3339_in_seconds 4000);
+      auth_type = Social_core.Bearer;
+      scope = None;
+    }
+  let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
+  let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _on_error = on_success ()
+  let sleep ~seconds:_ on_continue _on_error = on_continue ()
+end
+
+module Twitter_duplicate_content_post = Social_twitter_v2.Make(Mock_config_duplicate_content_post)
+
+let test_post_duplicate_content_403_end_to_end_mapping () =
+  duplicate_content_post_calls := 0;
+  let result = ref None in
+  Twitter_duplicate_content_post.post_single
+    ~account_id:"test_account"
+    ~text:"exactly what was posted before"
+    ~media_urls:[]
+    (fun outcome -> result := Some outcome);
+
+  (match !result with
+   | Some (Error_types.Failure Error_types.Duplicate_content) -> ()
+   | Some (Error_types.Failure (Error_types.Auth_error (Error_types.Insufficient_permissions _))) ->
+       failwith "Duplicate-content 403 must not map to Insufficient_permissions"
+   | Some _ -> failwith "Expected Duplicate_content outcome for duplicate 403"
+   | None -> failwith "No result in duplicate-content e2e test");
+  assert (!duplicate_content_post_calls = 1);
+  print_endline "✓ Post duplicate-content 403 end-to-end mapping test passed"
 
 let no_retry_post_calls = ref 0
 
@@ -6207,6 +6289,7 @@ let () =
   test_parse_api_error_401_maps_token_invalid ();
   test_parse_api_error_403_forbidden_maps_insufficient_permissions ();
   test_parse_api_error_403_nonforbidden_maps_api_error ();
+  test_parse_api_error_403_duplicate_content_maps_duplicate ();
   test_parse_api_error_429_maps_rate_limited ();
   test_parse_api_error_429_uses_reset_header_retry_after ();
   test_parse_api_error_500_prefers_detail_then_errors_then_default ();
@@ -6241,6 +6324,7 @@ let () =
   test_post_single_payload_contract ();
   test_post_single_payload_contract_includes_reply_settings_and_community_id ();
   test_post_invalid_media_id_end_to_end_mapping ();
+  test_post_duplicate_content_403_end_to_end_mapping ();
   test_post_network_failure_does_not_retry_tweet_creation ();
   test_post_too_long_validates_before_api_call ();
   test_post_response_id_parse_failure_maps_internal_error ();
