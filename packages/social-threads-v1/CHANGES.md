@@ -1,4 +1,6 @@
 # Unreleased
+- **Breaking:** removed the unused `is_token_expired` helper from `Make` results (the refresh orchestrator checks expiry itself; nothing in this SDK or its consumers called it). `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members.
+
 
 - Add `Posts.list_fields`: the fields parameter that fills every field of the typed `Posts.post` from the `/{threads-user-id}/threads` edge. `get_user_posts_page` and `get_user_posts_page_detailed` take `~fields` optionally and default to it. Explicit `~fields` callers are unchanged.
 - Add `OAuth.Scopes.insights` (`threads_manage_insights`) and `OAuth.Scopes.reply_management` (`threads_read_replies`, `threads_manage_replies`): per-operation scope requirements as scope strings, for comparing against a granted-scope string.

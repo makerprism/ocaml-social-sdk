@@ -214,33 +214,11 @@ module type CONFIG = sig
       @param on_success Success continuation
       @param on_error Error continuation receiving error message
   *)
-  val update_credentials : 
-    account_id:string -> 
+  val update_credentials :
+    account_id:string ->
     credentials:credentials ->
-    (unit -> unit) -> 
-    (string -> unit) -> 
-    unit
-
-  (** Encrypt sensitive data
-      @param plaintext The data to encrypt
-      @param on_success Success continuation receiving encrypted data
-      @param on_error Error continuation receiving error message
-  *)
-  val encrypt : 
-    string -> 
-    (string -> unit) -> 
-    (string -> unit) -> 
-    unit
-
-  (** Decrypt sensitive data
-      @param ciphertext The encrypted data
-      @param on_success Success continuation receiving decrypted data
-      @param on_error Error continuation receiving error message
-  *)
-  val decrypt : 
-    string -> 
-    (string -> unit) -> 
-    (string -> unit) -> 
+    (unit -> unit) ->
+    (string -> unit) ->
     unit
 
   (** Update account health status.

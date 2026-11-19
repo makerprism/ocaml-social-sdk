@@ -38,12 +38,6 @@ module MyConfig = struct
     stored_credentials := credentials;
     on_success ()
   
-  let encrypt value on_success on_error =
-    on_success ("encrypted:" ^ value)
-  
-  let decrypt value on_success on_error =
-    on_success (String.sub value 10 (String.length value - 10))
-  
   let update_health_status ~account_id ~status ~error_message on_success on_error =
     Printf.printf "[Health] Account %s: %s%s\n" 
       account_id 

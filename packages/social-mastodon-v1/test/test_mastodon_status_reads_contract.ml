@@ -598,8 +598,6 @@ module Config = struct
       }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _ = on_success ()
-  let encrypt data on_success _ = on_success data
-  let decrypt data on_success _ = on_success data
   let sleep ~seconds:_ on_success _ = on_success ()
   let update_health_status ~account_id:_ ~status:_ ~error_message:_ on_success _ = on_success ()
 end

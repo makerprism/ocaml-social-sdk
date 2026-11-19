@@ -32,16 +32,6 @@ module Cps_config = struct
     Hashtbl.replace credentials_store account_id credentials;
     on_success ()
   
-  let encrypt data on_success _on_error =
-    (* In real app, use proper encryption *)
-    on_success (Base64.encode_exn data)
-  
-  let decrypt data on_success on_error =
-    try
-      on_success (Base64.decode_exn data)
-    with e ->
-      on_error (Printexc.to_string e)
-  
   let update_health_status ~account_id:_ ~status ~error_message on_success _on_error =
     (match error_message with
     | Some msg -> Printf.printf "Health status: %s - %s\n%!" status msg

@@ -102,9 +102,6 @@ module Mock_config = struct
       }
 
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error = on_success ()
-  let encrypt data on_success _on_error = on_success data
-  let decrypt data on_success _on_error = on_success data
-
   let update_health_status ~account_id:_ ~status ~error_message:_ on_success _on_error =
     health_writes := !health_writes @ [ status ];
     on_success ()

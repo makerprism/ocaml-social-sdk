@@ -529,8 +529,6 @@ module type CONFIG = sig
   val get_env : string -> string option
   val get_credentials : account_id:string -> (credentials -> unit) -> (string -> unit) -> unit
   val update_credentials : account_id:string -> credentials:credentials -> (unit -> unit) -> (string -> unit) -> unit
-  val encrypt : string -> (string -> unit) -> (string -> unit) -> unit
-  val decrypt : string -> (string -> unit) -> (string -> unit) -> unit
   val update_health_status : account_id:string -> status:string -> error_message:string option -> (unit -> unit) -> (string -> unit) -> unit
 end
 

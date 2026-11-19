@@ -66,12 +66,6 @@ module Demo_config = struct
   let update_credentials ~account_id:_ ~credentials:_ on_success _on_error =
     on_success ()
 
-  let encrypt _data on_success _on_error =
-    on_success "encrypted"
-
-  let decrypt _data on_success _on_error =
-    on_success {|{"access_token":"demo","refresh_token":"demo_refresh"}|}
-
   let update_health_status ~account_id:_ ~status ~error_message on_success _on_error =
     Printf.printf "Health: %s%s\n%!" status
       (match error_message with Some m -> " - " ^ m | None -> "");

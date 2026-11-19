@@ -169,14 +169,6 @@ module Config_to_lwt (Config : Social_core.CONFIG) = struct
     cps_to_lwt (fun on_success on_error ->
       Config.update_credentials ~account_id ~credentials on_success on_error)
 
-  let encrypt plaintext =
-    cps_to_lwt (fun on_success on_error ->
-      Config.encrypt plaintext on_success on_error)
-
-  let decrypt ciphertext =
-    cps_to_lwt (fun on_success on_error ->
-      Config.decrypt ciphertext on_success on_error)
-
   let update_health_status ~account_id ~status ~error_message =
     cps_to_lwt (fun on_success on_error ->
       Config.update_health_status ~account_id ~status ~error_message on_success on_error)

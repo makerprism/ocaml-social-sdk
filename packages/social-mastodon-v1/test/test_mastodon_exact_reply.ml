@@ -62,8 +62,6 @@ module Test (Scenario : Scenario) = struct
         }
 
     let update_credentials ~account_id:_ ~credentials:_ callback _ = callback ()
-    let encrypt value callback _ = callback value
-    let decrypt value callback _ = callback value
     let sleep ~seconds:_ callback _ = callback ()
 
     let update_health_status ~account_id:_ ~status:_ ~error_message:_ callback _

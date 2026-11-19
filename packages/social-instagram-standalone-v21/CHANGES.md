@@ -1,3 +1,7 @@
+# Unreleased
+
+- `CONFIG` inherits the social-core change: `encrypt` / `decrypt` are no longer required members (no SDK operation called them). Configurations that still define them keep compiling.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

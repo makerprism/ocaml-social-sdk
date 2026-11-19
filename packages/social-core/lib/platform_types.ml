@@ -80,15 +80,6 @@ type platform_capability = {
   supports_polls: bool;
 }
 
-(** Account information *)
-type account = {
-  id: string;
-  platform: platform;
-  platform_user_id: string;
-  platform_username: string;
-  credentials_encrypted: string;
-}
-
 (** Post media *)
 type post_media = {
   media_type: media_type;

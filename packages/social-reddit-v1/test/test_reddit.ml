@@ -41,8 +41,6 @@ let past_expiry () =
   | Some t -> Ptime.to_rfc3339 t
   | None -> ""
 
-
-
 (** {1 Mock HTTP Client} *)
 
 module Mock_http = struct
@@ -136,15 +134,6 @@ module Mock_config = struct
     credentials_store := (account_id, credentials) :: 
       (List.remove_assoc account_id !credentials_store);
     on_success ()
-  
-  let encrypt data on_success _on_error =
-    on_success ("encrypted:" ^ data)
-  
-  let decrypt data on_success on_error =
-    if String.length data > 10 && String.sub data 0 10 = "encrypted:" then
-      on_success (String.sub data 10 (String.length data - 10))
-    else
-      on_error "Invalid encrypted data"
   
   let update_health_status ~account_id ~status ~error_message on_success _on_error =
     health_statuses := (account_id, status, error_message) :: !health_statuses;
