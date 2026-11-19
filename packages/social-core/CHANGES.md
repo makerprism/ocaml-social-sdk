@@ -3,6 +3,8 @@
 - Add `Social_meta_graph_error.failure` and `response_error`, retaining Graph classification, HTTP status, provider code/subcode, trace, redacted diagnostics and optional retry advice. Transport, malformed-response and validation failures remain distinct. `Social_provider_error_detail.of_response` takes `?redact`, applied to the complete body before the excerpt is cut so a redactor always sees whole secrets.
 
 - Add runtime-agnostic `Social_credential_outcome` (`Reused` / `Renewed`) with projection helpers and documented persistence semantics.
+- Add `Social_json_reader`: the shared JSON field readers (`member`/`field`/`path` lookup, strict and lenient string/bool/int projections, whole-float `int_value`, paging `data_list`, `map_result` traversal). The coercion variants stay separately named so a migrating parser keeps the exact leniency it had.
+- Add `Social_http_request`: repeated-key and Rails-array query expansion (`repeated_query_param` / `repeated_query_pairs`), `percent_encoded_query` (the `Uri.pct_encode` encoding the OAuth and XRPC query strings use, distinct from `form_urlencode_kvs`), and `bearer_pair` / `bearer_header` / `bearer_header_opt` / `json_content_type` header constructors.
 
 # Changelog
 

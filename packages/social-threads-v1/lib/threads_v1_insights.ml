@@ -37,33 +37,18 @@ type value =
 
 type insight = { metric : metric; period : string option; value : value }
 
-let field key = function
-  | `Assoc fields -> List.assoc_opt key fields
-  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> None
-
-let string_field key json =
-  match field key json with
-  | Some (`String s) -> Some s
-  | Some (`Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _) | None -> None
-
-(* Meta sends counts as JSON integers; a float that is a whole number is
-   accepted too because some JSON encoders emit [12.0]. *)
-let int_value ~what = function
-  | Some (`Int n) -> Ok n
-  | Some (`Float f) when Float.is_integer f -> Ok (int_of_float f)
-  | Some (`Float _ | `Null | `Bool _ | `String _ | `List _ | `Assoc _) | None ->
-      Error (what ^ " is not an integer")
+module J = Social_json_reader
 
 (* A bucket or link total without an integer value carries no figure:
    Threads leaves the day still being computed empty, and one such entry
    must not cost the caller every other metric of the response. *)
 let parse_point json =
-  match int_value ~what:"values[].value" (field "value" json) with
-  | Ok value -> Some { value; end_time = string_field "end_time" json }
+  match J.int_value ~what:"values[].value" (J.field "value" json) with
+  | Ok value -> Some { value; end_time = J.string_opt (J.member "end_time" json) }
   | Error _ -> None
 
 let parse_link_total json =
-  match (string_field "link_url" json, int_value ~what:"value" (field "value" json)) with
+  match (J.string_opt (J.member "link_url" json), J.int_value ~what:"value" (J.field "value" json)) with
   | Some link_url, Ok link_clicks -> Some { link_url; link_clicks }
   | None, (Ok _ | Error _) | Some _, Error _ -> None
 
@@ -72,29 +57,29 @@ let parse_link_total json =
    [None] when the entry carries none of them, or a [total_value] without
    an integer. *)
 let parse_value json =
-  match (field "values" json, field "link_total_values" json, field "total_value" json) with
+  match (J.field "values" json, J.field "link_total_values" json, J.field "total_value" json) with
   | Some (`List (_ :: _ as items)), _, _ -> Some (Time_series (List.filter_map parse_point items))
   | _, Some (`List items), _ -> Some (Link_totals (List.filter_map parse_link_total items))
   | _, _, Some (`Assoc _ as total) -> (
-      match int_value ~what:"total_value.value" (field "value" total) with
+      match J.int_value ~what:"total_value.value" (J.field "value" total) with
       | Ok n -> Some (Total n)
       | Error _ -> None)
   | Some (`List []), _, _ -> Some (Time_series [])
   | _, _, _ -> None
 
 let parse_entry json =
-  match Option.bind (string_field "name" json) metric_of_string with
+  match Option.bind (J.string_opt (J.member "name" json)) metric_of_string with
   | None -> None
   | Some metric ->
       Option.map
-        (fun value -> { metric; period = string_field "period" json; value })
+        (fun value -> { metric; period = J.string_opt (J.member "period" json); value })
         (parse_value json)
 
 let parse_insights body =
   match Yojson.Basic.from_string body with
   | exception Yojson.Json_error msg -> Error ("insights response is not JSON: " ^ msg)
   | json -> (
-      match field "data" json with
+      match J.field "data" json with
       | Some (`List entries) -> Ok (List.filter_map parse_entry entries)
       | Some (`Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _) | None ->
           Error "insights response has no data array")

@@ -40,7 +40,7 @@ let header_value_case_insensitive headers key =
 (** Query pairs for a Rails array parameter: one [name[]=value] pair per
     value. [Uri.with_query] joins a value list with commas
     ([types[]=a,b]), which Mastodon reads as the single value ["a,b"]. *)
-let array_query_param name values = List.map (fun value -> (name, [ value ])) values
+let array_query_param = Social_http_request.repeated_query_param
 
 let parse_positive_int value =
   try
@@ -575,9 +575,7 @@ module Reads = struct
         parse_api_error_response ~required_scopes ~headers:response.headers
           ~status_code ~response_body:response.body
 
-  let bearer = function
-    | Some token -> [ ("Authorization", "Bearer " ^ token) ]
-    | None -> []
+  let bearer = Social_http_request.bearer_header_opt
 
   let query_flag name = function
     | Some true -> [ (name, [ "true" ]) ]
@@ -1003,7 +1001,7 @@ module Make (Config : CONFIG) = struct
   let verify_credentials_result ~mastodon_creds on_result =
     let url = Printf.sprintf "%s/api/v1/accounts/verify_credentials" mastodon_creds.instance_url in
     let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+      Social_http_request.bearer_pair mastodon_creds.access_token;
     ] in
 
     Config.Http.get ~headers url
@@ -1102,7 +1100,7 @@ module Make (Config : CONFIG) = struct
     in
     
     let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+      Social_http_request.bearer_pair mastodon_creds.access_token;
     ] in
     
     Config.Http.post_multipart ~headers ~parts url
@@ -1126,7 +1124,7 @@ module Make (Config : CONFIG) = struct
   let get_media_processing_state ~mastodon_creds ~media_id on_success on_error =
     let url = Printf.sprintf "%s/api/v1/media/%s" mastodon_creds.instance_url media_id in
     let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+      Social_http_request.bearer_pair mastodon_creds.access_token;
     ] in
     Config.Http.get ~headers url
       (fun response ->
@@ -1208,7 +1206,7 @@ module Make (Config : CONFIG) = struct
     let body = Yojson.Basic.to_string body_json in
     
     let headers = [
-      ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+      Social_http_request.bearer_pair mastodon_creds.access_token;
       ("Content-Type", "application/json");
     ] in
     
@@ -1495,7 +1493,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -1530,7 +1528,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -1590,7 +1588,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -1629,7 +1627,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -1667,7 +1665,7 @@ module Make (Config : CONFIG) = struct
           |> Uri.to_string
         in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -1710,7 +1708,7 @@ module Make (Config : CONFIG) = struct
           |> Uri.to_string
         in
         let headers =
-          [ ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token) ]
+          [ Social_http_request.bearer_pair mastodon_creds.access_token ]
         in
         Config.Http.get ~headers url
           (fun response ->
@@ -1774,7 +1772,7 @@ module Make (Config : CONFIG) = struct
           |> Uri.to_string
         in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -1817,7 +1815,7 @@ module Make (Config : CONFIG) = struct
           |> Uri.to_string
         in
         let headers =
-          [ ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token) ]
+          [ Social_http_request.bearer_pair mastodon_creds.access_token ]
         in
         Config.Http.get ~headers url
           (fun response ->
@@ -1860,7 +1858,7 @@ module Make (Config : CONFIG) = struct
         let uri = Uri.of_string base_url in
         let url = Uri.with_query' uri [ ("acct", acct) ] |> Uri.to_string in
         let headers =
-          [ ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token) ]
+          [ Social_http_request.bearer_pair mastodon_creds.access_token ]
         in
         Config.Http.get ~headers url
           (fun response ->
@@ -1909,7 +1907,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2018,7 +2016,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers =
-          [ ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token) ]
+          [ Social_http_request.bearer_pair mastodon_creds.access_token ]
         in
         Config.Http.get ~headers url
           (fun response ->
@@ -2061,7 +2059,7 @@ module Make (Config : CONFIG) = struct
             conversation_id
         in
         let headers =
-          [ ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token) ]
+          [ Social_http_request.bearer_pair mastodon_creds.access_token ]
         in
         Config.Http.post ~headers ~body:"" url
           (fun response ->
@@ -2090,7 +2088,7 @@ module Make (Config : CONFIG) = struct
             mastodon_creds.instance_url conversation_id
         in
         let headers =
-          [ ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token) ]
+          [ Social_http_request.bearer_pair mastodon_creds.access_token ]
         in
         Config.Http.post ~headers ~body:"" url
           (fun response ->
@@ -2127,7 +2125,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2168,7 +2166,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2197,7 +2195,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/lists" mastodon_creds.instance_url in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2239,7 +2237,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2281,7 +2279,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2311,7 +2309,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s/lists" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2355,7 +2353,7 @@ module Make (Config : CONFIG) = struct
         in
         let body = Yojson.Basic.to_string (`Assoc fields) in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.post ~headers ~body url
@@ -2400,7 +2398,7 @@ module Make (Config : CONFIG) = struct
         in
         let body = Yojson.Basic.to_string (`Assoc fields) in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.put ~headers ~body url
@@ -2425,7 +2423,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/lists/%s" mastodon_creds.instance_url list_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.delete ~headers url
           (fun response ->
@@ -2447,7 +2445,7 @@ module Make (Config : CONFIG) = struct
         let url = Printf.sprintf "%s/api/v1/lists/%s/accounts" mastodon_creds.instance_url list_id in
         let body = Yojson.Basic.to_string (`Assoc [ ("account_ids", `List (List.map (fun id -> `String id) target_account_ids)) ]) in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.post ~headers ~body url
@@ -2472,7 +2470,7 @@ module Make (Config : CONFIG) = struct
         let query = array_query_param "account_ids[]" target_account_ids in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.delete ~headers url
           (fun response ->
@@ -2491,7 +2489,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v2/filters" mastodon_creds.instance_url in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2559,7 +2557,7 @@ module Make (Config : CONFIG) = struct
         in
         let body = Yojson.Basic.to_string (`Assoc fields) in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.post ~headers ~body url
@@ -2622,7 +2620,7 @@ module Make (Config : CONFIG) = struct
         in
         let body = Yojson.Basic.to_string (`Assoc fields) in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.put ~headers ~body url
@@ -2647,7 +2645,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v2/filters/%s" mastodon_creds.instance_url filter_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.delete ~headers url
           (fun response ->
@@ -2668,7 +2666,7 @@ module Make (Config : CONFIG) = struct
         let base_url = Printf.sprintf "%s/api/v1/trends/tags" mastodon_creds.instance_url in
         let url = Uri.of_string base_url |> fun u -> Uri.with_query' u [ ("limit", string_of_int limit) ] |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2699,7 +2697,7 @@ module Make (Config : CONFIG) = struct
         let base_url = Printf.sprintf "%s/api/v1/trends/statuses" mastodon_creds.instance_url in
         let url = Uri.of_string base_url |> fun u -> Uri.with_query' u [ ("limit", string_of_int limit) ] |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2730,7 +2728,7 @@ module Make (Config : CONFIG) = struct
         let base_url = Printf.sprintf "%s/api/v1/trends/links" mastodon_creds.instance_url in
         let url = Uri.of_string base_url |> fun u -> Uri.with_query' u [ ("limit", string_of_int limit) ] |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2760,7 +2758,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2784,7 +2782,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s/featured_tags" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2832,7 +2830,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2870,7 +2868,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2912,7 +2910,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -2945,7 +2943,7 @@ module Make (Config : CONFIG) = struct
         let query = array_query_param "id[]" target_account_ids in
         let url = Uri.with_query uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -3127,7 +3125,7 @@ module Make (Config : CONFIG) = struct
                | None -> generate_uuid ()
              in
              let headers = [
-               ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+               Social_http_request.bearer_pair mastodon_creds.access_token;
                ("Content-Type", "application/json");
                ("Idempotency-Key", idem_key);
              ] in
@@ -3351,7 +3349,7 @@ module Make (Config : CONFIG) = struct
                     let body = Yojson.Basic.to_string (`Assoc fields) in
                     
                     let headers = [
-                      ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+                      Social_http_request.bearer_pair mastodon_creds.access_token;
                       ("Content-Type", "application/json");
                       ("Idempotency-Key", generate_uuid ());
                     ] in
@@ -3469,7 +3467,7 @@ module Make (Config : CONFIG) = struct
           in
           let headers =
             [
-              ("Authorization", "Bearer " ^ creds.access_token);
+              Social_http_request.bearer_pair creds.access_token;
               ("Content-Type", "application/json");
               ("Idempotency-Key", key);
             ]
@@ -3579,7 +3577,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         
         Config.Http.delete ~headers url
@@ -3652,7 +3650,7 @@ module Make (Config : CONFIG) = struct
         let body = Yojson.Basic.to_string (`Assoc fields) in
         
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         
@@ -3676,7 +3674,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s/favourite" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         
         Config.Http.post ~headers url
@@ -3695,7 +3693,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s/unfavourite" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         
         Config.Http.post ~headers url
@@ -3721,7 +3719,7 @@ module Make (Config : CONFIG) = struct
         in
         
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         
@@ -3741,7 +3739,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s/unreblog" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         
         Config.Http.post ~headers url
@@ -3760,7 +3758,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s/bookmark" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         
         Config.Http.post ~headers url
@@ -3779,7 +3777,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/statuses/%s/unbookmark" mastodon_creds.instance_url status_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         
         Config.Http.post ~headers url
@@ -3810,7 +3808,7 @@ module Make (Config : CONFIG) = struct
         ] in
         let body = Yojson.Basic.to_string body_json in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.post ~headers ~body url
@@ -3835,7 +3833,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s/unfollow" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -3859,7 +3857,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s/block" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -3883,7 +3881,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s/unblock" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -3916,7 +3914,7 @@ module Make (Config : CONFIG) = struct
         in
         let body = Yojson.Basic.to_string (`Assoc body_fields) in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
           ("Content-Type", "application/json");
         ] in
         Config.Http.post ~headers ~body url
@@ -3941,7 +3939,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/accounts/%s/unmute" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -3965,7 +3963,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/notifications/%s/dismiss" mastodon_creds.instance_url notification_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -3984,7 +3982,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/notifications/clear" mastodon_creds.instance_url in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -4015,7 +4013,7 @@ module Make (Config : CONFIG) = struct
         in
         let url = Uri.with_query' uri query |> Uri.to_string in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.get ~headers url
           (fun response ->
@@ -4045,7 +4043,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/follow_requests/%s/authorize" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->
@@ -4065,7 +4063,7 @@ module Make (Config : CONFIG) = struct
       (fun mastodon_creds ->
         let url = Printf.sprintf "%s/api/v1/follow_requests/%s/reject" mastodon_creds.instance_url target_account_id in
         let headers = [
-          ("Authorization", Printf.sprintf "Bearer %s" mastodon_creds.access_token);
+          Social_http_request.bearer_pair mastodon_creds.access_token;
         ] in
         Config.Http.post ~headers url
           (fun response ->

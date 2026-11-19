@@ -30,28 +30,22 @@ type comment = {
 
 let fields = "id,message,created_time,from{id,name},permalink_url,parent{id}"
 
-let member key = function
-  | `Assoc pairs -> Option.value ~default:`Null (List.assoc_opt key pairs)
-  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> `Null
-
-let string_opt = function
-  | `String s when s <> "" -> Some s
-  | `String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _ -> None
+module J = Social_json_reader
 
 let parse_author json =
   Option.map
-    (fun author_id -> { author_id; author_name = string_opt (member "name" json) })
-    (string_opt (member "id" json))
+    (fun author_id -> { author_id; author_name = J.nonempty_string_opt (J.member "name" json) })
+    (J.nonempty_string_opt (J.member "id" json))
 
 let parse_comment json =
-  match string_opt (member "id" json) with
+  match J.nonempty_string_opt (J.member "id" json) with
   | None -> failwith "comment without an id"
   | Some id ->
       {
         id;
-        message = string_opt (member "message" json);
-        created_time = string_opt (member "created_time" json);
-        from = parse_author (member "from" json);
-        permalink_url = string_opt (member "permalink_url" json);
-        parent_id = string_opt (member "id" (member "parent" json));
+        message = J.nonempty_string_opt (J.member "message" json);
+        created_time = J.nonempty_string_opt (J.member "created_time" json);
+        from = parse_author (J.member "from" json);
+        permalink_url = J.nonempty_string_opt (J.member "permalink_url" json);
+        parent_id = J.nonempty_string_opt (J.member "id" (J.member "parent" json));
       }

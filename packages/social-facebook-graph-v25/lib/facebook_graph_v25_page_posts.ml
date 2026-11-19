@@ -41,43 +41,26 @@ let analytics_fields =
      comments.summary(true).limit(0).as(comments_summary),\
      reactions.summary(true).limit(0).as(reactions_summary),shares"
 
-let member key = function
-  | `Assoc pairs -> Option.value ~default:`Null (List.assoc_opt key pairs)
-  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `List _ -> `Null
-
-let path keys json = List.fold_left (fun json key -> member key json) json keys
-
-let string_opt = function
-  | `String s when s <> "" -> Some s
-  | `String _ | `Null | `Bool _ | `Int _ | `Float _ | `List _ | `Assoc _ -> None
-
-let int_opt = function
-  | `Int i -> Some i
-  | `String _ | `Null | `Bool _ | `Float _ | `List _ | `Assoc _ -> None
-
-let data_list json =
-  match member "data" json with
-  | `List items -> items
-  | `Null | `Bool _ | `Int _ | `Float _ | `String _ | `Assoc _ -> []
+module J = Social_json_reader
 
 (* Albums nest one level (subattachments of an attachment); the recursion
    follows the response, which Meta bounds. *)
 let rec parse_attachment json =
   {
-    attachment_type = string_opt (member "type" json);
-    media_type = string_opt (member "media_type" json);
-    url = string_opt (member "url" json);
-    image_src = string_opt (path [ "media"; "image"; "src" ] json);
-    target_id = string_opt (path [ "target"; "id" ] json);
-    subattachments = List.map parse_attachment (data_list (member "subattachments" json));
+    attachment_type = J.nonempty_string_opt (J.member "type" json);
+    media_type = J.nonempty_string_opt (J.member "media_type" json);
+    url = J.nonempty_string_opt (J.member "url" json);
+    image_src = J.nonempty_string_opt (J.path [ "media"; "image"; "src" ] json);
+    target_id = J.nonempty_string_opt (J.path [ "target"; "id" ] json);
+    subattachments = List.map parse_attachment (J.data_list (J.member "subattachments" json));
   }
 
 let parse_page_post json =
-  match string_opt (member "id" json) with
+  match J.nonempty_string_opt (J.member "id" json) with
   | None -> failwith "page post without an id"
   | Some id ->
       let insights =
-        match member "insights" json with
+        match J.member "insights" json with
         | `Null -> []
         | expansion -> (
             match Facebook_graph_v25_insights.metrics_of_json expansion with
@@ -86,15 +69,15 @@ let parse_page_post json =
       in
       {
         id;
-        message = string_opt (member "message" json);
-        created_time = string_opt (member "created_time" json);
-        full_picture = string_opt (member "full_picture" json);
-        permalink_url = string_opt (member "permalink_url" json);
-        attachments = List.map parse_attachment (data_list (member "attachments" json));
+        message = J.nonempty_string_opt (J.member "message" json);
+        created_time = J.nonempty_string_opt (J.member "created_time" json);
+        full_picture = J.nonempty_string_opt (J.member "full_picture" json);
+        permalink_url = J.nonempty_string_opt (J.member "permalink_url" json);
+        attachments = List.map parse_attachment (J.data_list (J.member "attachments" json));
         insights;
-        comment_count = int_opt (path [ "comments_summary"; "summary"; "total_count" ] json);
-        reaction_count = int_opt (path [ "reactions_summary"; "summary"; "total_count" ] json);
-        share_count = int_opt (path [ "shares"; "count" ] json);
+        comment_count = J.int_opt (J.path [ "comments_summary"; "summary"; "total_count" ] json);
+        reaction_count = J.int_opt (J.path [ "reactions_summary"; "summary"; "total_count" ] json);
+        share_count = J.int_opt (J.path [ "shares"; "count" ] json);
       }
 
 let first_attachment post =

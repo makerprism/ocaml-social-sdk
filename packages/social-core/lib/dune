@@ -21,6 +21,8 @@
   social_oauth_pkce
   social_oauth_scope
   social_token_expiry
+  social_json_reader
+  social_http_request
   social_meta_debug_token)
  (libraries
   ipaddr

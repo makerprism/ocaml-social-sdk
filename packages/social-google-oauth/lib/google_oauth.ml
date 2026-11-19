@@ -31,9 +31,7 @@ let get_authorization_url ~client_id ~redirect_uri ~state ~code_verifier ~scopes
     ("code_challenge", code_challenge);
     ("code_challenge_method", Pkce.challenge_method);
   ] in
-  let query = List.map (fun (k, v) ->
-    Printf.sprintf "%s=%s" k (Uri.pct_encode v)
-  ) params |> String.concat "&" in
+  let query = Social_http_request.percent_encoded_query params in
   Printf.sprintf "%s?%s" Endpoints.authorization query
 
 (** Parse expires_in from token response into RFC 3339 timestamp *)
