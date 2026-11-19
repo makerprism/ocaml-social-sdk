@@ -82,3 +82,9 @@ let of_error : Error_types.error -> t option = function
   | Error_types.Resource_not_found _
   | Error_types.Internal_error _ ->
       None
+
+(** Disable legacy account-health notifications. Credential operations still
+    return their original results; applications own health policy. This is also
+    suitable for CONFIG.update_health_status in existing provider functors. *)
+let ignore_updates ~account_id:_ ~status:_ ~error_message:_ on_success _on_error =
+  on_success ()

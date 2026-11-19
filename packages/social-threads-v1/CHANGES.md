@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add `Make_credentials_only` for coordinated credential operations without account-health callbacks. Legacy functors retain their behavior.
+
 - Add Make_coordinated with a completion-aware account lock for worker, read and publish refresh. Reload and recheck expiry under the lock; preserve Make compatibility.
 
 # Changelog

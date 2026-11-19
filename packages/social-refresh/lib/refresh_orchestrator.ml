@@ -158,3 +158,19 @@ let ensure_valid_access_token ?(policy = Refresh_types.default_policy)
           load_credentials ~account_id run_with_loaded_credentials (fun err ->
               on_error (map_load_error err))))
     on_success on_error
+
+(** Acquire credentials without account-health notifications. Existing
+    credentials can be reused without a remote request; [on_refresh_success]
+    reports actual refresh/persistence inside the caller's transaction. *)
+let ensure_credentials ?policy ?map_load_error ?map_persist_error
+    ?with_refresh_lock ?force_refresh ?reload_credentials ?with_account_lock
+    ?max_refresh_attempts ?should_retry_refresh_error ?sleep_before_retry
+    ?on_refresh_attempt ?on_refresh_success ?on_refresh_failure
+    ~account_id ~load_credentials ~perform_refresh ~persist_credentials
+    on_success on_error =
+  ensure_valid_access_token ?policy ?map_load_error ?map_persist_error
+    ?with_refresh_lock ?force_refresh ?reload_credentials ?with_account_lock
+    ?max_refresh_attempts ?should_retry_refresh_error ?sleep_before_retry
+    ?on_refresh_attempt ?on_refresh_success ?on_refresh_failure
+    ~account_id ~load_credentials ~perform_refresh ~persist_credentials
+    ~update_health:Health_status.ignore_updates on_success on_error

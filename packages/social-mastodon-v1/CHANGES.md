@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in path to disable legacy account-health callbacks without changing credential results.
+
 ## Unreleased
 
 - Added `Make.reply_to_status_exact`: posts the exact supplied text with `in_reply_to_id`, visibility and Idempotency-Key, returning a typed `Entities.status` result. The existing mention-prefixed `reply_to_status` is unchanged.
