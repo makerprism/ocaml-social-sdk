@@ -23,7 +23,7 @@ let test_eligible_video_formats () =
      feed ratio there. *)
   check_formats ~context:"Instagram 9:16 30s" ~platform:Instagram
     ~width:1080 ~height:1920 ~duration:30.0
-    [ Social_capabilities.ReelFormat; Social_capabilities.StoryFormat ];
+    [ ReelFormat; StoryFormat ];
   (* 4:5 is Instagram's feed portrait ratio. *)
   check_formats ~context:"Instagram 4:5 30s" ~platform:Instagram
     ~width:1080 ~height:1350 ~duration:30.0
@@ -36,13 +36,13 @@ let test_eligible_video_formats () =
   (* Past the 60s story cap but within the 90s reel cap. *)
   check_formats ~context:"Instagram 9:16 61s" ~platform:Instagram
     ~width:1080 ~height:1920 ~duration:61.0
-    [ Social_capabilities.ReelFormat ];
+    [ ReelFormat ];
   (* Facebook's feed table lists 9:16 as well, so a vertical video is
      eligible everywhere on Facebook. *)
   check_formats ~context:"Facebook 9:16 30s" ~platform:FacebookPage
     ~width:1080 ~height:1920 ~duration:30.0
-    [ Social_capabilities.PostFormat; Social_capabilities.ReelFormat;
-      Social_capabilities.StoryFormat ];
+    [ Social_capabilities.PostFormat; ReelFormat;
+      StoryFormat ];
   (* Landscape video exceeds no reel/story duration but is the wrong
      ratio for them. *)
   check_formats ~context:"Facebook 16:9 120s" ~platform:FacebookPage
@@ -51,7 +51,7 @@ let test_eligible_video_formats () =
   (* TikTok's only video mode is its ReelFormat variant. *)
   check_formats ~context:"TikTok 9:16 500s" ~platform:TikTok
     ~width:1080 ~height:1920 ~duration:500.0
-    [ Social_capabilities.ReelFormat ];
+    [ ReelFormat ];
   (* Platforms without format variants report their single video mode. *)
   check_formats ~context:"Twitter 9:16 30s" ~platform:Twitter
     ~width:1080 ~height:1920 ~duration:30.0
@@ -71,7 +71,7 @@ let test_eligible_video_formats () =
   (* A duration of 0.0 means unknown and excludes nothing. *)
   check_formats ~context:"Instagram 9:16 unknown duration" ~platform:Instagram
     ~width:1080 ~height:1920 ~duration:0.0
-    [ Social_capabilities.ReelFormat; Social_capabilities.StoryFormat ];
+    [ ReelFormat; StoryFormat ];
   (* A platform with no video support has no eligible video format. *)
   check_formats ~context:"Google Business Profile" ~platform:GoogleBusinessProfile
     ~width:1080 ~height:1920 ~duration:30.0
@@ -206,13 +206,48 @@ let test_instagram_aspect_range () =
   expect_bool ~context:"reels keep 9:16 only" false
     (Social_capabilities.aspect_ratio_satisfied
        (Social_capabilities.get_capability_with_format Instagram
-          (Some Social_capabilities.ReelFormat))
+          (Some ReelFormat))
        ~aspect_ratio:1.5);
   (* A 3:2 video is now eligible for the Instagram feed format. *)
   check_formats ~context:"Instagram 3:2 30s" ~platform:Instagram
     ~width:1500 ~height:1000 ~duration:30.0
     [ Social_capabilities.PostFormat ];
   print_endline "PASS Instagram feed aspect ratio is a documented range"
+
+let test_image_aspect_ratio_range () =
+  (* The image range is its own fact, so an image-only consumer (a crop
+     validator, for instance) never has to borrow the video field. *)
+  let feed =
+    Social_capabilities.get_capability Instagram in
+  expect_bool ~context:"instagram feed documents 4:5..1.91:1"
+    (feed.image_aspect_ratio_range = Some (0.8, 1.91)) true;
+  expect_bool ~context:"instagram reels reset the image range"
+    ((Social_capabilities.get_capability_with_format Instagram
+        (Some ReelFormat))
+       .image_aspect_ratio_range = None) true;
+  expect_bool ~context:"instagram stories reset the image range"
+    ((Social_capabilities.get_capability_with_format Instagram
+        (Some StoryFormat))
+       .image_aspect_ratio_range = None) true;
+  expect_bool ~context:"facebook feed has no documented image range"
+    ((Social_capabilities.get_capability FacebookPage)
+       .image_aspect_ratio_range = None) true;
+  expect_bool ~context:"threads has no documented image range"
+    ((Social_capabilities.get_capability Threads)
+       .image_aspect_ratio_range = None) true;
+  (* Every other platform keeps [None]: an image range is only recorded
+     when the platform documents one. *)
+  let others =
+    List.filter
+      (fun c ->
+         c.Social_capabilities.platform <> Instagram)
+      Social_capabilities.all_capabilities
+  in
+  expect_bool ~context:"only instagram documents an image range"
+    (List.for_all
+       (fun c -> c.Social_capabilities.image_aspect_ratio_range = None)
+       others) true;
+  print_endline "PASS image aspect ratio range is its own capability fact"
 
 let test_video_size_limits () =
   let mb n = n * 1024 * 1024 in
@@ -238,4 +273,5 @@ let () =
   test_validate_text_length ();
   test_alt_text_limit ();
   test_instagram_aspect_range ();
+  test_image_aspect_ratio_range ();
   test_video_size_limits ()

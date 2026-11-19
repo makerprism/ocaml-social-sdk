@@ -55,6 +55,15 @@ type capability = {
   image_max_height : int option;
   image_formats : string list;
   image_max_size_mb : int option;
+  (* Documented accepted aspect-ratio range for images (inclusive min/max
+     of width/height), when the platform publishes one instead of discrete
+     exemplars. E.g. the Instagram feed: "Aspect ratio: Must be within a
+     4:5 to 1.91:1 range"
+     (https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media).
+     [None] when no image range is documented; format-specific variants
+     (Instagram Reels/Stories) reset it because their image constraints
+     are not the feed's. *)
+  image_aspect_ratio_range : (float * float) option;
   (* Video constraints *)
   video_max_duration_seconds : int option;
   video_formats : string list;
@@ -101,6 +110,7 @@ let twitter = {
   image_max_height = Some 4096;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"; "webp"];
   image_max_size_mb = Some 5;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 140;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 512;
@@ -127,6 +137,7 @@ let linkedin = {
   image_max_height = Some 4320;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
   image_max_size_mb = Some 10;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 600;
   video_formats = ["mp4"];
   video_max_size_mb = Some 200;
@@ -157,6 +168,7 @@ let bluesky = {
   image_max_height = Some 2000;
   image_formats = ["jpg"; "jpeg"; "png"];
   image_max_size_mb = Some 1;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "mpeg"; "webm"; "mov"];
   video_max_size_mb = Some 50;
@@ -183,6 +195,7 @@ let pinterest = {
   image_max_height = Some 10000;
   image_formats = ["jpg"; "jpeg"; "png"];
   image_max_size_mb = Some 32;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 900;
   video_formats = ["mp4"; "mov"; "m4v"];
   video_max_size_mb = Some 2048;
@@ -211,6 +224,7 @@ let youtube_shorts = {
   image_max_height = None;
   image_formats = [];
   image_max_size_mb = None;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "mov"];
   (* https://developers.google.com/youtube/v3/docs/videos/insert:
@@ -242,6 +256,7 @@ let mastodon = {
   image_max_height = Some 2160;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"; "webp"];
   image_max_size_mb = Some 10;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "webm"; "mov"];
   video_max_size_mb = Some 40;
@@ -268,6 +283,7 @@ let facebook_page = {
   image_max_height = Some 2048;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
   image_max_size_mb = Some 10;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 7200;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 1024;
@@ -296,6 +312,7 @@ let instagram = {
   image_max_height = Some 1800;
   image_formats = ["jpg"; "jpeg"; "png"];
   image_max_size_mb = Some 8;
+  image_aspect_ratio_range = Some (0.8, 1.91);
   video_max_duration_seconds = Some 60;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 100;
@@ -322,6 +339,7 @@ let tiktok = {
   image_max_height = None;
   image_formats = ["webp"; "jpeg"];
   image_max_size_mb = Some 20;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 600;
   video_formats = ["mp4"; "webm"; "mov"];
   video_max_size_mb = Some 50;
@@ -348,6 +366,7 @@ let reddit = {
   image_max_height = None;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
   image_max_size_mb = Some 20;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 900;
   video_formats = ["mp4"];
   video_max_size_mb = Some 1000;
@@ -379,6 +398,7 @@ let threads = {
   image_max_height = Some 1920;
   image_formats = ["jpg"; "jpeg"; "png"];
   image_max_size_mb = Some 8;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = Some 300;
   video_formats = ["mp4"; "mov"];
   video_max_size_mb = Some 100;
@@ -405,6 +425,7 @@ let google_business_profile = {
   image_max_height = None;
   image_formats = ["jpg"; "jpeg"; "png"; "gif"];
   image_max_size_mb = Some 5;
+  image_aspect_ratio_range = None;
   video_max_duration_seconds = None;
   video_formats = [];
   video_max_size_mb = None;
@@ -447,7 +468,8 @@ let get_capability_with_format platform format =
         video_max_duration_seconds = Some 90;
         max_carousel_items = None;
         video_aspect_ratios = ["9:16"];
-        video_aspect_ratio_range = None }
+        video_aspect_ratio_range = None;
+        image_aspect_ratio_range = None }
   | Instagram, Some StoryFormat ->
       { instagram with
         display_name = "Instagram Stories";
@@ -456,7 +478,8 @@ let get_capability_with_format platform format =
         video_max_duration_seconds = Some 60;
         max_carousel_items = None;
         video_aspect_ratios = ["9:16"];
-        video_aspect_ratio_range = None }
+        video_aspect_ratio_range = None;
+        image_aspect_ratio_range = None }
   | FacebookPage, Some ReelFormat ->
       { facebook_page with
         display_name = "Facebook Reels";
