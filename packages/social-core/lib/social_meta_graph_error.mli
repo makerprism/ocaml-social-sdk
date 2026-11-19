@@ -148,7 +148,8 @@ val response_error :
   required_permissions:string list -> ?retry_after_seconds:int ->
   ?request_id:string -> ?redact:(string -> string) -> string -> response_error
 (** Parses the documented Graph error envelope (error-handling guide above).
-    [redact] is applied to message prose and body excerpts before retention;
-    structured codes and trace identifiers remain available. Callers control
-    diagnostic disclosure. The default preserves the supplied body. *)
+    [redact] is applied to message prose and to the complete body before its
+    excerpt is cut, so it always sees whole secrets; structured codes and
+    trace identifiers remain available. Callers control diagnostic disclosure.
+    The default preserves the supplied body. *)
 

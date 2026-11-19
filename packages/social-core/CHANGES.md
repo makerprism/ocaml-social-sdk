@@ -1,6 +1,6 @@
 # Unreleased
 
-- Add `Social_meta_graph_error.failure` and `response_error`, retaining Graph classification, HTTP status, provider code/subcode, trace, redacted diagnostics and optional retry advice. Transport, malformed-response and validation failures remain distinct.
+- Add `Social_meta_graph_error.failure` and `response_error`, retaining Graph classification, HTTP status, provider code/subcode, trace, redacted diagnostics and optional retry advice. Transport, malformed-response and validation failures remain distinct. `Social_provider_error_detail.of_response` takes `?redact`, applied to the complete body before the excerpt is cut so a redactor always sees whole secrets.
 
 - Add runtime-agnostic `Social_credential_outcome` (`Reused` / `Renewed`) with projection helpers and documented persistence semantics.
 

@@ -187,14 +187,16 @@ type failure =
 
 let response_error ~platform ~status_code ~required_permissions
     ?retry_after_seconds ?request_id ?(redact = Fun.id) body =
-  let detail = Social_provider_error_detail.of_response ~status_code ?request_id body in
+  (* The excerpt redactor sees the complete body before the cut; the message
+     is prose and is redacted after parsing. *)
+  let detail =
+    Social_provider_error_detail.of_response ~status_code ?request_id ~redact body in
   let graph = Option.map (fun graph ->
     { graph with message = Option.map redact graph.message;
       user_title = Option.map redact graph.user_title;
       user_message = Option.map redact graph.user_message }) (of_body body) in
   { kind = to_error ~platform ~status_code ~required_permissions
         ?retry_after_seconds ?request_id ~redact_body:redact ~redact_message:redact body;
-    detail = { detail with message = Option.map redact detail.message;
-      body_excerpt = Option.map redact detail.body_excerpt };
+    detail = { detail with message = Option.map redact detail.message };
     graph; retry_after_seconds }
 

@@ -46,10 +46,15 @@ type t = {
 val excerpt_max_bytes : int
 (** 1024. *)
 
-val of_response : status_code:int -> ?request_id:string -> string -> t
-(** [of_response ~status_code ?request_id body] parses a provider error body.
-    A body that is not JSON, or JSON in no recognised envelope, still yields
-    the status and the excerpt. Recognised envelopes:
+val of_response :
+  status_code:int -> ?request_id:string -> ?redact:(string -> string) -> string -> t
+(** [of_response ~status_code ?request_id ?redact body] parses a provider error
+    body. A body that is not JSON, or JSON in no recognised envelope, still
+    yields the status and the excerpt. [redact] is applied to the complete
+    body before the excerpt is cut, so a redactor that replaces whole secrets
+    still matches one that crosses the cut; it never touches the parsed
+    structured fields (codes and trace ids are not prose). Recognised
+    envelopes:
     - [{"error": {"code", "error_subcode", "type", "message", "fbtrace_id"}}]
       (Meta Graph), [{"error": {"code", "message", "log_id"}}] (TikTok),
       [{"error": {"code", "status", "message", "errors": [{"reason"}]}}]
