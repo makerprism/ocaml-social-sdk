@@ -44,6 +44,11 @@ module Places = Facebook_graph_v25_places
     is [Make.get_page_posts_page]. *)
 module Page_posts = Facebook_graph_v25_page_posts
 
+(** Typed ordinary Page video creation response ([POST /{page-id}/videos]);
+    see {!Facebook_graph_v25_videos}. The requests are [Make.create_video]
+    and [Make.post_video]. *)
+module Videos = Facebook_graph_v25_videos
+
 (** Hosts a [paging.next] / [paging.previous] URL may point at before a
     reader sends the caller's token to it
     ({!Social_meta_graph_paging.resolve_page_url}). *)
@@ -1882,7 +1887,95 @@ module Make_internal (Config : COORDINATED_CONFIG)
             in
             attempt_post ~can_recover:true page_access_token)
           (fun err -> on_result (Error_types.Failure err))
-  
+
+  (** {1 Ordinary Page videos (/{page-id}/videos)} *)
+
+  (** Create and publish an ordinary Page video from a hosted file.
+
+      One [POST /{page_id}/videos] with [description] and [file_url]:
+      Facebook fetches the video from the URL itself. The token travels as
+      the Bearer header, and [appsecret_proof] is appended to the form when
+      [FACEBOOK_APP_SECRET] is set.
+
+      A 2xx body without a string [id] is an [Internal_error]
+      ({!Videos.parse}): Facebook reported no created video, so the call
+      must not look published. Any non-2xx status is mapped through
+      [parse_api_error_with_permissions], because publishing a video needs
+      [pages_manage_posts].
+
+      @param file_url Publicly accessible URL of the video file. Cannot be
+             combined with [upload_phase]; the resumable chunked flow is
+             separate.
+      @param description The video's description text.
+      @param on_success Receives the created {!Videos.video}.
+      @see <https://developers.facebook.com/docs/graph-api/reference/page/videos/>
+  *)
+  let create_video ~page_id ~page_access_token ~file_url ~description on_success on_error =
+    let url = Printf.sprintf "%s/%s/videos" graph_api_base page_id in
+    let params =
+      [ ("description", description);
+        ("file_url", file_url) ]
+      @ (match compute_app_secret_proof ~access_token:page_access_token with
+         | Some proof -> [("appsecret_proof", proof)]
+         | None -> [])
+    in
+    let body = Social_core.form_urlencode_kvs params in
+    let headers = [
+      ("Content-Type", "application/x-www-form-urlencoded");
+      ("Authorization", Printf.sprintf "Bearer %s" page_access_token);
+    ] in
+    Config.Http.post ~headers ~body url
+      (fun response ->
+        update_rate_limits response;
+        if response.status >= 200 && response.status < 300 then
+          (match Videos.parse response.body with
+           | Ok video -> on_success video
+           | Error message -> on_error (Error_types.Internal_error message))
+        else
+          on_error (parse_api_error_with_permissions
+            ~required_permissions:["pages_manage_posts"]
+            ~status_code:response.status
+            ~response_body:response.body))
+      (fun err -> on_error (transport_error err))
+
+  (** Post an ordinary (non-Reel, non-Story) video to a Facebook Page.
+
+      Runs {!create_video} under the account's Page context. An auth
+      failure triggers one Page-token recovery and one retry of the single
+      POST: the retry happens only when Facebook rejected the first POST
+      as an auth error, so a completed write is never repeated.
+
+      [text] is validated like every publish text; Facebook itself
+      enforces the description limit, which the reference does not
+      document, so it is not checked here.
+
+      @param text The video's description.
+      @param on_result Receives [Success] with the created {!Videos.video},
+             or [Failure] with the classified error.
+      @see <https://developers.facebook.com/docs/graph-api/reference/page/videos/>
+  *)
+  let post_video ~account_id ~text ~video_url on_result =
+    match validate_post ~text ~media_count:1 () with
+    | Error errs -> on_result (Error_types.Failure (Error_types.Validation_error errs))
+    | Ok () ->
+        with_posting_page_context ~account_id
+          (fun page_id page_access_token ->
+            let rec attempt_post ~can_recover token =
+              create_video ~page_id ~page_access_token:token
+                ~file_url:video_url ~description:text
+                (fun video -> on_result (Error_types.Success video))
+                (fun parsed ->
+                  if can_recover && is_recoverable_posting_auth_error parsed then
+                    recover_page_access_token ~account_id ~current_access_token:token
+                      (fun _resolved_page_id resolved_page_token ->
+                        attempt_post ~can_recover:false resolved_page_token)
+                      (fun _ -> on_result (Error_types.Failure parsed))
+                  else
+                    on_result (Error_types.Failure parsed))
+            in
+            attempt_post ~can_recover:true page_access_token)
+          (fun err -> on_result (Error_types.Failure err))
+
   (** {1 Facebook Page Stories} *)
   
   (** Post photo story to Facebook Page

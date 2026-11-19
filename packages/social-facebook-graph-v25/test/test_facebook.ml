@@ -2820,6 +2820,202 @@ let test_post_reel_recovers_on_auth_error () =
         print_endline "✓ Post reel recovers on auth errors")
       (fun err -> failwith ("Expected reel recovery success, got: " ^ err)))
 
+(** ===== Ordinary Page videos ([/{page-id}/videos]) ===== *)
+
+let future_credentials token =
+  let future_time =
+    let now = Ptime_clock.now () in
+    match Ptime.add_span now (Ptime.Span.of_int_s (30 * 86400)) with
+    | Some t -> Ptime.to_rfc3339 t
+    | None -> failwith "Failed to calculate future time"
+  in
+  { access_token = token; refresh_token = None;
+    expires_at = Some future_time; auth_type = Bearer; scope = None }
+
+(** Test: Videos.parse accepts only a body with a string id *)
+let test_videos_parse () =
+  (match Videos.parse {|{"id":"987654"}|} with
+   | Ok { Videos.id } -> assert (id = "987654")
+   | Error message -> failwith ("expected id to parse: " ^ message));
+  let expect_error name body =
+    match Videos.parse body with
+    | Ok _ -> failwith (name ^ ": must not parse")
+    | Error _ -> ()
+  in
+  expect_error "success without id" {|{"success":true}|};
+  expect_error "non-string id" {|{"id":123}|};
+  expect_error "not an object" {|["987654"]|};
+  expect_error "not JSON" "not json at all";
+  print_endline "✓ Videos.parse accepts only a string id"
+
+(** Test: create_video posts description and file_url to the videos edge *)
+let test_create_video () =
+  Mock_config.reset ();
+
+  Mock_http.set_responses [ { status = 200; body = {|{"id":"video_123"}|}; headers = [] } ];
+
+  Facebook.create_video
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~file_url:"https://example.com/video.mp4"
+    ~description:"An ordinary video"
+    (fun video ->
+      assert (video.Videos.id = "video_123");
+      (match List.rev !Mock_http.requests with
+       | [ ("POST", url, headers, body) ] ->
+           assert (url = "https://graph.facebook.com/v25.0/page_123/videos");
+           assert (List.assoc_opt "Authorization" headers = Some "Bearer test_token");
+           assert (string_contains body "description=An");
+           assert (string_contains body "file_url=https");
+           assert (not (string_contains body "access_token="));
+           assert (not (string_contains body "appsecret_proof"))
+       | _ -> failwith "Expected exactly one videos POST");
+      print_endline "✓ Create video (hosted file)")
+    (fun err -> failwith ("Create video failed: " ^ Error_types.error_to_string err))
+
+(** Test: create_video appends appsecret_proof when configured *)
+let test_create_video_with_app_secret () =
+  Mock_config.reset ();
+  Mock_config.set_env "FACEBOOK_APP_SECRET" "test_app_secret";
+
+  Mock_http.set_responses [ { status = 200; body = {|{"id":"video_secret"}|}; headers = [] } ];
+
+  Facebook.create_video
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~file_url:"https://example.com/video.mp4"
+    ~description:"With proof"
+    (fun video ->
+      assert (video.Videos.id = "video_secret");
+      (match List.rev !Mock_http.requests with
+       | [ (_, _, _, body) ] -> assert (string_contains body "appsecret_proof=")
+       | _ -> failwith "Expected one videos POST");
+      print_endline "✓ Create video sends appsecret_proof")
+    (fun err -> failwith ("Create video with app secret failed: " ^ Error_types.error_to_string err))
+
+(** Run one create_video against [body] at [status] and expect a failure
+    with exactly one request (no retry at the Page-token level). *)
+let expect_create_video_failure ~name ~status ~body =
+  Mock_config.reset ();
+  Mock_http.set_responses [ { status; body; headers = [] } ];
+  Facebook.create_video
+    ~page_id:"page_123"
+    ~page_access_token:"test_token"
+    ~file_url:"https://example.com/video.mp4"
+    ~description:"Should fail"
+    (fun video -> failwith (Printf.sprintf "%s: expected failure, got video %s" name video.Videos.id))
+    (fun _err ->
+      assert (List.length !Mock_http.requests = 1);
+      Printf.printf "✓ Create video fails: %s\n" name)
+
+(** Test: non-2xx and id-less 2xx bodies fail the creation *)
+let test_create_video_failures () =
+  expect_create_video_failure ~name:"non-2xx" ~status:400
+    ~body:{|{"error":{"message":"(#100) Invalid parameter","type":"OAuthException","code":100}}|};
+  expect_create_video_failure ~name:"2xx without id" ~status:200 ~body:{|{"success":true}|};
+  expect_create_video_failure ~name:"2xx with non-string id" ~status:200 ~body:{|{"id":123}|};
+  expect_create_video_failure ~name:"2xx not an object" ~status:200 ~body:{|["987654"]|}
+
+(** Test: post_video (high-level) publishes through the Page context *)
+let test_post_video () =
+  Mock_config.reset ();
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:(future_credentials "valid_token");
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+
+  Mock_http.set_responses [ { status = 200; body = {|{"id":"vid_post_1"}|}; headers = [] } ];
+
+  Facebook.post_video
+    ~account_id:"test_account"
+    ~text:"Ordinary video caption"
+    ~video_url:"https://example.com/video.mp4"
+    (handle_outcome
+      (fun video ->
+        assert (video.Videos.id = "vid_post_1");
+        (match List.rev !Mock_http.requests with
+         | [ ("POST", url, headers, _) ] ->
+             assert (url = "https://graph.facebook.com/v25.0/page_123/videos");
+             assert (List.assoc_opt "Authorization" headers = Some "Bearer valid_token")
+         | _ -> failwith "Expected exactly one videos POST");
+        print_endline "✓ Post video (high-level)")
+      (fun err -> failwith ("Post video failed: " ^ err)))
+
+(** Test: post_video recovers the Page token once and retries the POST *)
+let test_post_video_recovers_on_auth_error () =
+  Mock_config.reset ();
+
+  Mock_config.set_credentials ~account_id:"test_account"
+    ~credentials:(future_credentials "stale_page_token");
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+
+  Mock_http.set_responses [
+    (* First POST: the stored token is rejected *)
+    { status = 400;
+      body = {|{"error":{"message":"Invalid OAuth access token","type":"OAuthException","code":190}}|};
+      headers = [] };
+    (* Recovery: /me/accounts hands out a fresh Page token *)
+    { status = 200;
+      body = {|{"data":[{"id":"page_123","name":"My Page","access_token":"resolved_video_page_token","category":"Brand"}]}|};
+      headers = [] };
+    (* Retried POST with the resolved token *)
+    { status = 200; body = {|{"id":"vid_recovered"}|}; headers = [] };
+  ];
+
+  Facebook.post_video
+    ~account_id:"test_account"
+    ~text:"Recovers after auth failure"
+    ~video_url:"https://example.com/video.mp4"
+    (handle_outcome
+      (fun video ->
+        assert (video.Videos.id = "vid_recovered");
+        (match List.rev !Mock_http.requests with
+         | [ ("POST", _, first_headers, _); ("GET", _, _, _); ("POST", _, retry_headers, _) ] ->
+             assert (List.assoc_opt "Authorization" first_headers = Some "Bearer stale_page_token");
+             assert (List.assoc_opt "Authorization" retry_headers = Some "Bearer resolved_video_page_token")
+         | _ -> failwith "Expected POST, recovery GET and retried POST");
+        print_endline "✓ Post video recovers on auth error")
+      (fun err -> failwith ("Post video recovery failed: " ^ err)))
+
+(** Test: post_video does not attempt token recovery on non-auth errors *)
+let test_post_video_no_recovery_on_non_auth_error () =
+  Mock_config.reset ();
+
+  Mock_config.set_credentials ~account_id:"test_account" ~credentials:(future_credentials "valid_token");
+  Mock_config._set_page_id ~account_id:"test_account" ~page_id:"page_123";
+
+  (* Rate limit is not an auth failure: no /me/accounts read, no retry. *)
+  Mock_http.set_responses [
+    { status = 429; body = {|{"error":{"message":"Too many requests","code":4}}|}; headers = [] };
+  ];
+
+  Facebook.post_video
+    ~account_id:"test_account"
+    ~text:"Fails without recovery"
+    ~video_url:"https://example.com/video.mp4"
+    (fun outcome ->
+      match outcome with
+      | Error_types.Failure _ ->
+          assert (List.length !Mock_http.requests = 1);
+          assert (not (List.exists (fun (m, _, _, _) -> m = "GET") !Mock_http.requests));
+          print_endline "✓ Post video skips recovery on non-auth errors"
+      | _ -> failwith "Expected video failure")
+
+(** Test: post_video rejects an over-limit caption before any request *)
+let test_post_video_caption_validation () =
+  Mock_config.reset ();
+
+  let long_caption = String.make 63207 'a' in
+  Facebook.post_video
+    ~account_id:"test_account"
+    ~text:long_caption
+    ~video_url:"https://example.com/video.mp4"
+    (fun outcome ->
+      match outcome with
+      | Error_types.Failure (Error_types.Validation_error _) ->
+          assert (!Mock_http.requests = []);
+          print_endline "✓ Post video validates caption length"
+      | _ -> failwith "Expected caption validation failure")
+
 (** Test: Post reel recovers on auth error and persists updated credentials *)
 let test_post_reel_recovers_on_upload_auth_error () =
   Mock_config.reset ();
@@ -4230,6 +4426,16 @@ let () =
   test_reel_caption_validation ();
   test_video_media_validation ();
   test_rate_limit_error_code_80001 ();
+
+  print_endline "\n--- Ordinary Page Video Tests ---";
+  test_videos_parse ();
+  test_create_video ();
+  test_create_video_with_app_secret ();
+  test_create_video_failures ();
+  test_post_video ();
+  test_post_video_recovers_on_auth_error ();
+  test_post_video_no_recovery_on_non_auth_error ();
+  test_post_video_caption_validation ();
 
   print_endline "\n--- Comment Management Tests ---";
   test_post_comment ();
